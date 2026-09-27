@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FFXI Launcher",
+  "version": "0.1.0",
+  "identifier": "com.tagban.ffxi-native",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "FFXI Launcher",
+        "width": 920,
+        "height": 660,
+        "minWidth": 760,
+        "minHeight": 540
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../playonline.reg": "playonline.reg",
+      "../../meta/*.json": "engine/meta/",
+      "../../runtime/guest.h": "engine/runtime/guest.h",
+      "../../runtime/runtime.h": "engine/runtime/runtime.h",
+      "../../runtime/xi_game.h": "engine/runtime/xi_game.h",
+      "../../runtime/xi_module.c": "engine/runtime/xi_module.c"
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}

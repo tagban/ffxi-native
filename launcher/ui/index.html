@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FFXI Launcher</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav>
+    <button class="tab active" data-tab="play">Play</button>
+    <button class="tab" data-tab="game">Game settings</button>
+    <button class="tab" data-tab="launcher">Launcher</button>
+    <span class="grow"></span>
+    <button id="game-chip" class="chip" title="The game folder and the game made for it">Setup</button>
+  </nav>
+
+  <!-- First run: the game folder, making the game for it, the first server -->
+  <div id="setup" hidden>
+    <div class="setup-card">
+      <header>
+        <h1>FINAL FANTASY XI</h1>
+        <ol class="stepper">
+          <li data-step="1"><b>1</b> Game folder</li>
+          <li data-step="2"><b>2</b> Make the game</li>
+          <li data-step="3"><b>3</b> Server</li>
+        </ol>
+      </header>
+
+      <section class="step" data-step="1">
+        <h2>Where is your game?</h2>
+        <p class="lead">Choose the <strong>FINAL FANTASY XI</strong> folder from a Windows install (the one with FFXiMain.dll). The folder above it, PlayOnline or SquareEnix, works too. Nothing in it is changed.</p>
+        <div id="found-installs"></div>
+        <div class="actions">
+          <button type="button" id="pick-game" class="secondary">Choose folder…</button>
+        </div>
+        <div id="game-status" class="status-box" hidden></div>
+        <div class="actions">
+          <button type="button" class="link" data-close-setup>Close</button>
+          <span class="grow"></span>
+          <button type="button" id="step1-next" disabled>Continue</button>
+        </div>
+      </section>
+
+      <section class="step" data-step="2" hidden>
+        <h2>Make the game for this computer</h2>
+        <p class="lead">The launcher translates your copy of the game into a program for this computer. That happens here, once for each version of the game, and takes a minute or two. The translation never leaves this computer.</p>
+        <ul id="prereqs"></ul>
+        <div class="actions" id="prereq-actions">
+          <button type="button" id="check-prereqs" class="secondary">Check again</button>
+          <button type="button" id="install-prereqs" class="secondary" hidden>Install what's missing</button>
+        </div>
+        <div id="build-box" hidden>
+          <div class="progress"><div id="build-bar"></div></div>
+          <div id="build-step" class="muted"></div>
+        </div>
+        <div id="build-status"></div>
+        <details id="build-details">
+          <summary>Details</summary>
+          <pre id="build-log"></pre>
+        </details>
+        <div class="actions">
+          <button type="button" class="link" data-step-to="1">Back</button>
+          <span class="grow"></span>
+          <button type="button" id="cancel-build" class="secondary" hidden>Cancel</button>
+          <button type="button" id="make-game">Make the game</button>
+        </div>
+      </section>
+
+      <section class="step" data-step="3" hidden>
+        <h2>Which server do you play on?</h2>
+        <p class="lead">Add the server and your account. You can add more later on the Play page.</p>
+        <form id="first-account">
+          <label>Server name <input name="name" placeholder="My server" required></label>
+          <label>Server address <input name="server" placeholder="play.example.com or 1.2.3.4" spellcheck="false" required></label>
+          <label>Connection
+            <select name="kind">
+              <option value="lsb">LandSandBoat server (most private servers)</option>
+              <option value="pol">PlayOnline server</option>
+            </select>
+          </label>
+          <label><span data-kind="lsb">Account name</span><span data-kind="pol" hidden>PlayOnline ID</span>
+            <input name="login" autocomplete="username" spellcheck="false" required>
+          </label>
+          <p class="hint" id="viewer-hint" hidden>PlayOnline servers also need the PlayOnlineViewer folder beside FINAL FANTASY XI.</p>
+          <div class="actions">
+            <button type="button" class="link" data-close-setup>Skip</button>
+            <span class="grow"></span>
+            <button type="submit">Finish</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  </div>
+
+  <main>
+    <!-- Accounts and connections -->
+    <section id="play" class="page active">
+      <aside>
+        <ul id="accounts"></ul>
+        <button id="add-account" class="secondary">+ Add account</button>
+      </aside>
+      <div class="detail">
+        <div id="no-account" class="empty">Add an account to play.</div>
+        <form id="account" hidden>
+          <label>Name <input name="name" placeholder="My character"></label>
+          <label>Connection
+            <select name="kind">
+              <option value="lsb">LandSandBoat server</option>
+              <option value="pol">PlayOnline server</option>
+            </select>
+          </label>
+          <label><span data-kind="pol">PlayOnline ID</span><span data-kind="lsb">Account name</span>
+            <input name="login" autocomplete="username" spellcheck="false">
+          </label>
+          <label>Server <input name="server" placeholder="127.0.0.1" spellcheck="false"></label>
+          <details>
+            <summary>Advanced</summary>
+            <label>Game updates address <input name="update_url" placeholder="http://server:54080 (if the server publishes its game versions)" spellcheck="false"></label>
+            <label data-kind="pol">PlayOnline sign-in server <input name="pol_server" placeholder="same as Server" spellcheck="false"></label>
+            <div class="row" data-kind="lsb">
+              <label>Sign-in port <input name="auth_port" type="number" min="0" max="65535" placeholder="54231"></label>
+              <label>Data port <input name="data_port" type="number" min="0" max="65535" placeholder="54230"></label>
+              <label>Lobby port <input name="view_port" type="number" min="0" max="65535" placeholder="54001"></label>
+            </div>
+          </details>
+          <label>Password <input name="password" type="password" autocomplete="current-password" placeholder=""></label>
+          <label data-kind="lsb">One-time code <input name="otp" inputmode="numeric" autocomplete="one-time-code" placeholder="only if the account has two-factor sign-in"></label>
+          <label class="check"><input name="save_password" type="checkbox"> Remember the password (in the system keychain)</label>
+          <div class="actions">
+            <button type="button" id="delete-account" class="danger secondary">Delete</button>
+            <span class="grow"></span>
+            <button type="button" id="stop" class="secondary" hidden>Stop</button>
+            <button type="submit" id="play-button">Play</button>
+          </div>
+        </form>
+        <div id="status"></div>
+        <div class="progress" id="play-progress" hidden><div class="bar"></div></div>
+        <pre id="log"></pre>
+      </div>
+    </section>
+
+    <!-- The game's own settings (what FINAL FANTASY XI's config tool sets) -->
+    <section id="game" class="page">
+      <form id="game-settings" class="settings">
+        <h2>While playing</h2>
+        <p class="hint">These change the game as it runs, within a second.</p>
+        <label>Settings key
+          <select name="hotkey">
+            <option value="f12">F12</option>
+            <option value="f11">F11</option>
+            <option value="f10">F10</option>
+            <option value="f9">F9</option>
+            <option value="pause">Pause</option>
+            <option value="scrolllock">Scroll Lock</option>
+            <option value="none">None</option>
+          </select>
+        </label>
+        <p class="hint">Pressed alone in the game, it brings up this page over it<span class="mac-only"> (so does <kbd>⌘ ,</kbd>; on a Mac keyboard, hold <kbd>fn</kbd> for F-keys)</span>. Pick one your key bindings don't use: the game never sees it.</p>
+        <div class="row">
+          <label>Frame rate
+            <select name="fps_divisor" data-num>
+              <option value="1">60 fps</option>
+              <option value="2">30 fps (as shipped)</option>
+            </select>
+          </label>
+          <label>Scene shape
+            <select name="aspect">
+              <option value="auto">Follow the window</option>
+              <option value="off">As the game draws it (4:3, stretched)</option>
+              <option value="16:9">16:9</option>
+              <option value="21:9">21:9</option>
+            </select>
+          </label>
+        </div>
+        <label>Interface shape
+          <select name="ui_aspect">
+            <option value="off">Stretch to the window (as shipped)</option>
+            <option value="16:9">16:9, centered</option>
+            <option value="4:3">4:3, centered</option>
+          </select>
+        </label>
+        <p class="hint">On a wider window (21:9), keeps the menus and text at this shape in the middle while the world fills the screen. Use a menu resolution of the same shape (960 × 540 for 16:9).</p>
+        <div class="row">
+          <label>Names over heads
+            <select name="nameplates">
+              <option value="fix">Keep their shape</option>
+              <option value="off">Widen with the window (as shipped)</option>
+            </select>
+          </label>
+          <label>Name size
+            <select name="nameplate_scale">
+              <option value="1">Normal</option>
+              <option value="1.15">Larger</option>
+              <option value="1.3">Large</option>
+              <option value="1.5">Largest</option>
+            </select>
+          </label>
+        </div>
+        <label>Window mode
+          <select name="window_mode" data-num>
+            <option value="0">Full screen</option>
+            <option value="1">Window</option>
+            <option value="2">Borderless window</option>
+            <option value="3">Borderless full screen</option>
+          </select>
+        </label>
+        <p class="hint">In the game, <kbd>Alt+Enter</kbd><span class="mac-only"> or <kbd>⌃⌘F</kbd></span> switches between a window and full screen. The game keeps its resolution and is scaled to fit.</p>
+        <label class="check"><input name="fps_overlay" type="checkbox"> Frame-rate counter</label>
+
+        <div id="fx-section">
+          <h2>Scene effects</h2>
+          <p class="hint">Lighting and image effects drawn on top of the game's own. Off is the game as it shipped.</p>
+          <div class="presets">
+            <button type="button" class="secondary" data-preset="off">Off</button>
+            <button type="button" class="secondary" data-preset="subtle">Subtle</button>
+            <button type="button" class="secondary" data-preset="enhanced">Enhanced</button>
+            <button type="button" class="secondary" data-preset="cinematic">Cinematic</button>
+          </div>
+          <div id="fx-sliders"></div>
+        </div>
+
+        <h2>Display</h2>
+        <p class="hint running-note" hidden>The settings below take effect the next time the game starts.</p>
+        <div class="row">
+          <label>Resolution <input name="window_width" type="number" min="640" max="7680" data-num></label>
+          <span class="x">×</span>
+          <label>&nbsp;<input name="window_height" type="number" min="480" max="4320" data-num></label>
+        </div>
+        <div class="row">
+          <label>Menu resolution <input name="menu_width" type="number" min="0" max="7680" data-num></label>
+          <span class="x">×</span>
+          <label>&nbsp;<input name="menu_height" type="number" min="0" max="4320" data-num></label>
+        </div>
+        <p class="hint">0 × 0 draws the menus at the window's resolution.</p>
+        <div class="row">
+          <label>Background resolution <input name="background_width" type="number" min="512" max="8192" data-num></label>
+          <span class="x">×</span>
+          <label>&nbsp;<input name="background_height" type="number" min="512" max="8192" data-num></label>
+        </div>
+
+        <h2>Graphics</h2>
+        <label>Mip mapping
+          <select name="mip_mapping" data-num>
+            <option value="0">Off</option><option value="1">1</option><option value="2">2</option>
+            <option value="3">3</option><option value="4">4</option><option value="5">5</option>
+            <option value="6">6 (best)</option>
+          </select>
+        </label>
+        <label>Texture compression
+          <select name="texture_compression" data-num>
+            <option value="0">High</option><option value="1">Low</option><option value="2">Uncompressed</option>
+          </select>
+        </label>
+        <label>Map compression
+          <select name="map_compression" data-num>
+            <option value="0">Compressed</option><option value="1">Uncompressed</option>
+          </select>
+        </label>
+        <label>Fonts
+          <select name="font" data-num>
+            <option value="0">Compressed</option><option value="1">Uncompressed</option><option value="2">High quality</option>
+          </select>
+        </label>
+        <label>Environment animation
+          <select name="environment_animation" data-num>
+            <option value="0">Off</option><option value="1">Normal</option><option value="2">Smooth</option>
+          </select>
+        </label>
+        <label class="check"><input name="bump_mapping" type="checkbox"> Bump mapping</label>
+        <label class="check"><input name="graphics_stabilization" type="checkbox"> Graphics stabilization</label>
+        <label class="check"><input name="gpu_probe" type="checkbox"> Exact occlusion tests (hides the lens flare behind walls; slower)</label>
+
+        <h2>Sound</h2>
+        <label class="check"><input name="sound" type="checkbox"> Sound</label>
+        <label class="check"><input name="sound_in_background" type="checkbox"> Keep playing sound in the background</label>
+        <label>Simultaneous sounds <input name="max_sounds" type="number" min="12" max="20" data-num></label>
+
+        <h2>Other</h2>
+        <label class="check"><input name="hardware_mouse" type="checkbox"> Hardware mouse cursor</label>
+        <label class="check"><input name="opening_movie" type="checkbox"> Play the opening movie</label>
+        <label class="check"><input name="simplified_ccs" type="checkbox"> Simplified character creation visuals</label>
+
+        <div class="actions">
+          <button type="button" id="game-defaults" class="secondary">Defaults</button>
+          <span class="grow"></span>
+          <span class="saved" hidden>Saved</span>
+        </div>
+      </form>
+    </section>
+
+    <!-- Where things are -->
+    <section id="launcher" class="page">
+      <form id="launcher-settings" class="settings">
+        <h2>Game</h2>
+        <label>FINAL FANTASY XI folder
+          <span class="pick"><input name="game_path" spellcheck="false"><button type="button" class="secondary" data-pick="folder" data-for="game_path">Choose…</button></span>
+        </label>
+        <p class="hint">The folder with FFXiMain.dll. <button type="button" class="link" id="reopen-setup">Open setup…</button></p>
+        <label>DAT overlays
+          <textarea name="dats" rows="3" spellcheck="false" placeholder="one folder per line; the first wins"></textarea>
+        </label>
+        <button type="button" class="secondary" data-pick="folder" data-append="dats">Add folder…</button>
+
+        <h2>Game files</h2>
+        <p class="hint">A backup of each version of the game's files, so a missing or damaged file can be put back, and a server's version can be brought without touching your install.</p>
+        <label>Backups folder
+          <span class="pick"><input name="vault_dir" spellcheck="false"><button type="button" class="secondary" data-pick="folder" data-for="vault_dir">Choose…</button></span>
+        </label>
+        <p class="hint">On the same drive as the game, a backup takes no extra space.</p>
+        <div id="files-status" class="muted"></div>
+        <div class="actions">
+          <button type="button" id="backup" class="secondary">Back up this install</button>
+          <button type="button" id="check-files" class="secondary">Check files</button>
+          <button type="button" id="repair-files" class="secondary" hidden>Repair</button>
+        </div>
+        <div class="progress" id="task-progress" hidden><div class="bar"></div></div>
+        <div id="task-status"></div>
+        <ul id="versions"></ul>
+
+        <h2>Advanced</h2>
+        <label>Game host (host64)
+          <span class="pick"><input name="host_program" spellcheck="false"><button type="button" class="secondary" data-pick="file" data-for="host_program">Choose…</button></span>
+        </label>
+        <label>Base registry file
+          <span class="pick"><input name="base_registry" spellcheck="false"><button type="button" class="secondary" data-pick="file" data-for="base_registry">Choose…</button></span>
+        </label>
+        <p class="hint" id="paths"></p>
+        <div class="actions"><span class="grow"></span><span class="saved" hidden>Saved</span></div>
+      </form>
+    </section>
+  </main>
+  <script src="main.js"></script>
+</body>
+</html>

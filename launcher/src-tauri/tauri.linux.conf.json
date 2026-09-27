@@ -1,0 +1,13 @@
+{
+  "bundle": {
+    "linux": {
+      "deb": {
+        "files": { "/usr/bin/xi-host": "../../build/linux-xi-host" },
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      },
+      "appimage": {
+        "files": { "/usr/bin/xi-host": "../../build/linux-xi-host" }
+      }
+    }
+  }
+}

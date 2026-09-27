@@ -1,0 +1,30 @@
+# Never commit anything derived from Square Enix binaries (README, "Rules").
+generated/
+build/
+out/
+*.dll
+*.exe
+*.dat
+*.DAT
+*.unpacked.*
+
+# Tooling noise
+__pycache__/
+*.pyc
+*.obj
+*.pdb
+*.ilk
+*.lib
+*.exp
+.vs/
+
+# Jython compiles the discovery scripts next to themselves
+*$py.class
+# The launcher (Tauri): generated schemas, and cargo output outside build/
+launcher/src-tauri/gen/
+launcher/src-tauri/target/
+# The Rust translator (recomp-rs/): cargo output
+recomp-rs/target/
+.venv/
+vault/target/
+dist/

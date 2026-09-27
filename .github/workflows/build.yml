@@ -1,0 +1,85 @@
+# The launcher for players: Linux (x86_64, aarch64) and macOS (arm64), built from this repository alone.
+# Nothing here reads the game: the launcher and its game host hold no Square Enix code (README,
+# "Rules"); each player's launcher makes the game from their own install. The build steps are
+# tools/ci/*.sh, which run the same on a developer's machine.
+#
+# Every push and pull request: the packages as workflow artifacts. A v* tag: a release with them.
+name: Build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # the release, on a tag
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04: the launcher runs on its glibc (2.35) and later; the game host on 2.28 and later
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher/src-tauri -> ../../build/launcher-target
+          cache-bin: true # cargo-tauri
+      - uses: actions/cache@v4
+        with:
+          path: build/linux-dist/src # SDL3 and mbedtls releases (checked by SHA-256 either way)
+          key: linux-dist-src-${{ hashFiles('tools/linux_dist.py') }}
+      - run: tools/ci/linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS arm64
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher/src-tauri -> ../../build/launcher-target
+          cache-bin: true
+      - run: tools/ci/macos.sh
+        env: # Developer ID signing and notarization, when the repository has them (tools/ci/macos.sh)
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
