@@ -79,6 +79,8 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # an unsigned Mac build stays a workflow artifact: players get the notarized one
+      - run: rm -f dist/*-unsigned.zip
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
