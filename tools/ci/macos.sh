@@ -40,6 +40,7 @@ if [ -n "${MACOS_CERTIFICATE:-}" ]; then
 else
   echo "no MACOS_CERTIFICATE secret: an ad hoc signature (Gatekeeper warns players)"
   codesign --verify --deep --strict "$app"
-  ditto -c -k --keepParent "$app" "$out"
+  # named apart, so it never replaces a notarized build in a release
+  ditto -c -k --keepParent "$app" "${out%.zip}-unsigned.zip"
 fi
 ls -la dist
