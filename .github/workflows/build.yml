@@ -5,7 +5,9 @@
 # "Rules"); each player's launcher makes the game from their own install. The build steps are
 # tools/ci/*.sh, which run the same on a developer's machine.
 #
-# Every push and pull request: the packages as workflow artifacts. A v* tag: a release with them.
+# Every push and pull request: Linux only (a quick check that it builds; private repositories have
+# a monthly allowance of minutes, and a macOS minute counts ten). A v* tag, or a run started by hand
+# (Actions, Build, Run workflow): every platform, and on a tag a release with them.
 name: Build
 
 on:
@@ -51,6 +53,7 @@ jobs:
 
   macos:
     name: macOS arm64
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +77,7 @@ jobs:
 
   windows:
     name: Windows x86_64
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     defaults:
       run:
@@ -98,6 +102,7 @@ jobs:
 
   flatpak:
     name: Flatpak ${{ matrix.arch }}
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: linux
     strategy:
       fail-fast: false
