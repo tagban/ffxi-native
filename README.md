@@ -17,21 +17,26 @@ install, keeps it on the client version your server needs, and plays it. It is m
 
 ## Getting it
 
-From the [releases](https://github.com/tagban/ffxi-native/releases/latest):
+Download it from the [releases](https://github.com/tagban/ffxi-native/releases/latest), for your
+computer:
 
-| Platform | Download |
-| --- | --- |
-| Windows 10 or 11 (64-bit) | `FFXI.Launcher_<version>_x64-setup.exe` |
-| macOS on Apple silicon | `FFXI-Launcher-macos-arm64.zip`: signed and notarized, unzip into Applications |
-| Linux, any distribution | `FFXI-Launcher-x86_64.flatpak` (or `-aarch64`): `flatpak install FFXI-Launcher-x86_64.flatpak` |
-| Linux, Debian and Ubuntu | `.deb`, or the AppImage (x86_64 and aarch64) |
+- **Windows 10 or 11**: `FFXI.Launcher_<version>_x64-setup.exe`. Double-click it and follow the
+  installer, then open **FFXI Launcher** from the Start menu. (Windows may warn that the installer
+  is not signed yet: **More info**, then **Run anyway**.)
+- **macOS** (Apple silicon): `FFXI-Launcher-macos-arm64.zip`. Double-click it to unzip, drag
+  **FFXI Launcher** into **Applications**, and double-click it there. It is signed and notarized, so
+  it opens like any other app.
+- **Linux**: `FFXI-Launcher-x86_64.flatpak` (`-aarch64` on ARM). Double-click it: your software
+  center (GNOME Software, KDE Discover) installs it; then open **FFXI Launcher** from your apps. On
+  Debian or Ubuntu, the `.deb` installs the same way. Or the AppImage: in its Properties, allow it
+  to run as a program, then double-click it.
 
-You need your own FINAL FANTASY XI install (the official installer, updated or not: the launcher
+You also need FINAL FANTASY XI installed (the official installer, updated or not: the launcher
 brings it to the version your server needs).
 
 ## Playing on MogHouse
 
-1. Open the launcher. It finds your `FINAL FANTASY XI` folder, or asks for it.
+1. Open **FFXI Launcher**. It finds your `FINAL FANTASY XI` folder by itself, or asks you to pick it.
 2. Add an account: server `ffxi.cc`, **LandSandBoat**, your account name and password (kept in your
    system's keychain).
 3. Press **Play**. The first time, it makes the game for your install (a minute or two; it downloads
@@ -83,6 +88,11 @@ settings while the game runs, window and full screen in the game, game versions 
 ([ffxi-update-server](https://github.com/tagban/ffxi-update-server), public), signing in to
 xiloader 2.1 and 2.2 servers, the OpenGL back end, the Linux and Windows builds and packages
 (Flatpak, installer), and CI.
+
+## For developers
+
+Everything below is about building and working on the project: the recompiler, the runtime, running
+the game host directly. Players need none of it.
 
 ## Rules
 
