@@ -1,6 +1,6 @@
 [package]
 name = "ffxi-launcher"
-version = "0.1.0"
+version = "0.1.1"
 description = "Signs in and runs the recompiled FINAL FANTASY XI (host64)"
 edition = "2021"
 publish = false
