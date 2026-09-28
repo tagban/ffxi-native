@@ -5617,6 +5617,7 @@ dependencies = [
 [[package]]
 name = "xi-vault"
 version = "0.1.0"
+source = "git+https://github.com/tagban/ffxi-update-server?branch=main#3dd00bdf6f8373941a2f5dbe1169bb5e20c3558b"
 dependencies = [
  "clap",
  "rayon",

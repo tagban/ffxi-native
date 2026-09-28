@@ -12,11 +12,7 @@ python tools/windows_dist.py --zig "$zig/zig.exe"
 # the launcher's PlayOnline C (tested here), then the installer
 (cd launcher/src-tauri && CARGO_TARGET_DIR=../../build/launcher-target cargo tauri build --bundles nsis)
 
-# a server operator's double-click tool: publish a PlayOnline update to their players (vault/src/release.rs)
-(cd vault && CARGO_TARGET_DIR=../build/vault-target cargo build --release)
-
 mkdir -p dist
 cp build/launcher-target/release/bundle/nsis/*.exe dist/
 cp build/windows-x86_64/xi-host.exe dist/xi-host-windows-x86_64.exe
-cp build/vault-target/release/xi-vault.exe dist/ffxi-update-publisher.exe
 ls -la dist

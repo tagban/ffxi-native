@@ -650,6 +650,15 @@ int main(int argc, char** argv)
             }
             *(argv[i][2] == 'a' ? &lsb.auth_port : argv[i][2] == 'd' ? &lsb.data_port : &lsb.view_port) = (uint16_t)port;
         }
+        else if (!strcmp(argv[i], "--loader"))
+        {
+            /* the xiloader protocol the server named (2.2.0); else negotiated */
+            if (sscanf(argv[i + 1], "%d.%d.%d", &lsb.loader[0], &lsb.loader[1], &lsb.loader[2]) < 2)
+            {
+                fprintf(stderr, "--loader: a version like 2.2.0\n");
+                return 2;
+            }
+        }
     }
     if (!game && app_default("FFXIGameFolder", app_game, sizeof app_game))
         game = app_game;

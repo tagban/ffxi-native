@@ -112,6 +112,9 @@ fn host_args(cfg: &LauncherConfig, paths: &Paths, account: &Account, session: Op
                     a.extend([flag.into(), port.to_string()]);
                 }
             }
+            if !account.loader.is_empty() {
+                a.extend(["--loader".into(), account.loader.clone()]);
+            }
         }
     }
     a

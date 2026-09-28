@@ -15,6 +15,10 @@ typedef struct LsbLogin
     /* A single-use launch token from a server's own launcher (e.g. minted after a Discord
      * login), sent in place of the password and OTP; NULL for none. */
     const char* login_token;
+    /* The xiloader protocol to speak (major, minor, patch): the one the server named (its
+     * LOGIN_VERSION_INFO loader_version); zeros to try the newest this knows, then the one the
+     * server's "update to version 'X.Y.x'" asks for. */
+    int loader[3];
 } LsbLogin;
 
 /* Signs in on the auth port (TLS, xi_connect's JSON), opens the login data connection and

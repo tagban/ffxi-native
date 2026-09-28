@@ -238,6 +238,17 @@ struct Site {
     want: String,
 }
 
+impl Site {
+    /// The name `want` goes by in this vault: another server's version of the same name is kept
+    /// apart (xi_vault::local_name).
+    fn local(&self, vault: &Vault) -> String {
+        match self.index.versions.iter().find(|v| v.version == self.want) {
+            Some(iv) => xi_vault::local_name(vault, iv, &self.url),
+            None => self.want.clone(),
+        }
+    }
+}
+
 /// Asks the game server first (a LandSandBoat that answers LOGIN_VERSION_INFO): the version it
 /// wants (its CLIENT_VER, up or down from what the player has) and where it publishes it (its
 /// UPDATE_URL). Else the site found by update_url, and the version that site hands out.
@@ -252,6 +263,15 @@ fn server_site(app: &AppHandle, account_id: &str) -> Result<Site, String> {
         }
         _ => None,
     };
+    // the loader protocol it speaks, for signing in (game.rs)
+    if let Some(i) = info.as_ref().filter(|i| i.loader_version.len() >= 2) {
+        let v = i.loader_version.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(".");
+        if account.loader != v {
+            account.loader = v;
+            config::save(&cdir, &cfg)?;
+        }
+    }
+    let account = cfg.accounts.iter_mut().find(|a| a.id == account_id).ok_or("No such account.")?;
     let named = info.as_ref().map(|i| i.update_url.trim().to_string()).filter(|u| !u.is_empty());
     let (url, index) = match named {
         Some(u) => {
@@ -274,11 +294,13 @@ fn server_site(app: &AppHandle, account_id: &str) -> Result<Site, String> {
 
 /// What version the account's server wants, and whether the player has it.
 pub fn check_server(app: &AppHandle, account_id: &str) -> Result<ServerVersion, String> {
-    let Site { index, want, .. } = server_site(app, account_id)?;
+    let site = server_site(app, account_id)?;
     let cfg = config::load(&config_dir(app)?);
-    let info = index.versions.iter().find(|v| v.version == want).ok_or("The server's index names no current version.")?;
+    let info = site.index.versions.iter().find(|v| v.version == site.want).ok_or("The server's index names no current version.")?;
     let dir = vault_dir(app, &cfg)?;
     let vault = Vault::open(&dir)?;
+    // as this vault knows it: another server's version of that name is kept apart
+    let want = site.local(&vault);
     // the player's own install, if it is that version; else one put together from the vault
     let own = Path::new(&cfg.game_path);
     let (have, game_path) = if xi_vault::is_version(&vault, own, &want) {
@@ -309,7 +331,7 @@ pub fn check_server(app: &AppHandle, account_id: &str) -> Result<ServerVersion, 
     Ok(ServerVersion {
         supported: !info.build.is_empty(),
         build: info.build.clone(),
-        current: want,
+        current: site.want.clone(),
         have,
         game_path,
     })

@@ -42,6 +42,9 @@ pub struct Account {
     /// The FINAL FANTASY XI folder this account plays from, when not the launcher's (a version
     /// put together for its server, versions.rs). Empty: the launcher's.
     pub game_path: String,
+    /// Lsb: the xiloader protocol its login server speaks ("2.2.0"), as it last said (versions.rs);
+    /// empty: the host finds out when signing in.
+    pub loader: String,
 }
 
 impl Default for Account {
@@ -59,6 +62,7 @@ impl Default for Account {
             data_port: 0,
             view_port: 0,
             update_url: String::new(),
+            loader: String::new(),
             game_path: String::new(),
         }
     }
@@ -225,6 +229,9 @@ impl GameSettings {
 pub struct LauncherConfig {
     /// The FINAL FANTASY XI folder (PlayOnlineViewer beside it).
     pub game_path: String,
+    /// Lsb: the xiloader protocol its login server speaks ("2.2.0"), as it last said (versions.rs);
+    /// empty: the host finds out when signing in.
+    pub loader: String,
     /// host64; empty: the one bundled with the launcher.
     pub host_program: String,
     /// The base registry export; empty: the bundled playonline.reg.

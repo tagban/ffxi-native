@@ -30,7 +30,7 @@ What this project adds: the launcher's first run (finding the install and making
 the game as a module and a host that ships prebuilt (`runtime/xi_game.h`), the Rust translator
 (`recomp-rs`), making the module with no developer tools (clang or a downloaded zig), graphics
 settings while the game runs, window and full screen in the game, game versions for private servers
-(`vault/`), the OpenGL back end and the Linux build, and CI.
+(now [ffxi-update-server](https://github.com/tagban/ffxi-update-server), public), the OpenGL back end and the Linux build, and CI.
 
 ## Rules
 
@@ -223,14 +223,16 @@ It ships the game host (`xi-host`: the runtime, graphics, sound, input and the s
   over the PlayOnline protocol, `launcher/pol/`, hands the host the session value with `--session`,
   and keeps the PlayOnline session up while the game runs). Passwords are kept in the system keychain
   (macOS Keychain, Windows Credential Manager, the Secret Service on Linux), never in the settings file.
-- **Running a server?** [docs/SERVER-OPERATORS.md](docs/SERVER-OPERATORS.md): set up an update
-  server (Windows or Linux), publish each new client version, tell players which version to use,
-  roll back, and hand non-launcher players an updater.
+- **Running a server?** [ffxi-update-server](https://github.com/tagban/ffxi-update-server) (public):
+  set up an update server (Windows or Linux), publish each new client version, tell players which
+  version to use, roll back, custom DATs, and an updater for players without the launcher. Its
+  [protocol](https://github.com/tagban/ffxi-update-server/blob/main/docs/PROTOCOL.md) is what this
+  launcher does on Play.
 - **Game versions.** An account can name its server's game updates address (else the launcher looks
   on the server itself, port 54080, then at `update.<server>`, which an operator can point anywhere
   with a DNS record): on Play it brings the version the server wants, downloading only
   what the player lacks, and plays it from beside their install, which is never changed. Game files
-  (Launcher page) backs up the install, checks it and repairs it. See `vault/README.md`.
+  (Launcher page) backs up the install, checks it and repairs it. See [ffxi-update-server](https://github.com/tagban/ffxi-update-server).
 - **Game settings.** Window mode and resolution, menu and background resolution, the graphics
   options, sound, frame rate. They are written as `settings.reg` and given to the host with
   `--reg-final`. Those under *While playing* (frame rate, scene and interface shape, nameplates, the

@@ -1,4 +1,4 @@
-/* The xiloader path (https://github.com/LandSandBoat/xiloader, v2.1.2): signing in to a
+/* The xiloader path (https://github.com/LandSandBoat/xiloader, v2.1 and v2.2): signing in to a
  * LandSandBoat server that has no PlayOnline behind it.
  *
  * xiloader runs the retail polcore and patches around it; here polcore is our own and Winsock is
@@ -66,8 +66,31 @@ typedef int sock_t;
 #include "polcore_config.h"
 #include "ws2.h"
 
-/* the xiloader release whose protocol this is; xi_connect refuses versions it does not know */
-static const int LOADER_VERSION[3] = { 2, 1, 2 };
+/* The xiloader releases whose protocol this speaks, newest first. xi_connect refuses a loader whose
+ * major.minor is not its own: 2.2 is current LandSandBoat's (TLS 1.3 on the auth port; polcore's
+ * PlayOnline connections relayed to xi_profile, which our polcore does not make), 2.1 the one
+ * before. Signing in and the login data connection are the same in both. */
+static const int LOADER_VERSIONS[][3] = { { 2, 2, 0 }, { 2, 1, 2 } };
+#define LOADER_COUNT ((int)(sizeof LOADER_VERSIONS / sizeof LOADER_VERSIONS[0]))
+
+/* The variant for a major.minor, or -1. */
+static int loader_variant(int major, int minor)
+{
+    for (int i = 0; i < LOADER_COUNT; i++)
+        if (LOADER_VERSIONS[i][0] == major && LOADER_VERSIONS[i][1] == minor)
+            return i;
+    return -1;
+}
+
+/* xi_connect's refusal names the version it wants: "... update to version '2.2.x' ..." */
+static int wanted_variant(const char* message)
+{
+    const char* p = strstr(message, "version '");
+    int major, minor;
+    if (p && sscanf(p + 9, "%d.%d", &major, &minor) == 2)
+        return loader_variant(major, minor);
+    return -1;
+}
 
 #define TIMEOUT_MS 15000
 
@@ -547,23 +570,38 @@ int lsb_login(const LsbLogin* l, char* err, size_t errn)
         json_string(t, sizeof t, l->login_token);
         snprintf(token, sizeof token, "\"login_token\":%s,", t);
     }
-    snprintf(req, sizeof req,
-        "{\"command\":16,%s\"new_password\":\"\",\"otp\":%s,\"password\":%s,\"trust_this_computer\":false,"
-        "\"trust_token\":\"\",\"username\":%s,\"version\":[%d,%d,%d]}",
-        token, otp, pass, user, LOADER_VERSION[0], LOADER_VERSION[1], LOADER_VERSION[2]);
-    memset(pass, 0, sizeof pass);
-    char reply[8192];
-    int ok = tls_exchange(l->server, l->auth_port, req, reply, sizeof reply, err, errn);
-    memset(req, 0, sizeof req);
-    if (!ok)
-        return 0;
-
-    char message[512];
-    if (json_str(reply, "error_message", message, sizeof message) && message[0])
+    /* the variant the server named, else the newest; once more with the one its refusal names */
+    int variant = l->loader[0] ? loader_variant(l->loader[0], l->loader[1]) : 0;
+    const int* named = l->loader;
+    char reply[8192], message[512];
+    for (int attempt = 0;; attempt++)
     {
+        const int* v = variant >= 0 ? LOADER_VERSIONS[variant] : named; /* a newer one than we know: say it */
+        snprintf(req, sizeof req,
+            "{\"command\":16,%s\"new_password\":\"\",\"otp\":%s,\"password\":%s,\"trust_this_computer\":false,"
+            "\"trust_token\":\"\",\"username\":%s,\"version\":[%d,%d,%d]}",
+            token, otp, pass, user, v[0], v[1], v[2]);
+        int ok = tls_exchange(l->server, l->auth_port, req, reply, sizeof reply, err, errn);
+        memset(req, 0, sizeof req);
+        if (!ok)
+        {
+            memset(pass, 0, sizeof pass);
+            return 0;
+        }
+        if (!(json_str(reply, "error_message", message, sizeof message) && message[0]))
+            break;
+        int want = wanted_variant(message);
+        if (attempt == 0 && want >= 0 && want != variant)
+        {
+            fprintf(stderr, "[lsb] the server speaks xiloader %d.%d: signing in that way\n", LOADER_VERSIONS[want][0], LOADER_VERSIONS[want][1]);
+            variant = want;
+            continue;
+        }
+        memset(pass, 0, sizeof pass);
         snprintf(err, errn, "the server says: %s", message);
         return 0;
     }
+    memset(pass, 0, sizeof pass);
     long long result = 0, account = 0;
     if (!json_int(reply, "result", &result))
     {
