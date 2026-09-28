@@ -46,6 +46,17 @@ extern "C" void overlay_set_ini(const char* path)
     snprintf(g_ini, sizeof g_ini, "%s", path ? path : "");
 }
 
+/* The SDL back end stops the window's text input when an overlay text box lets go of it, but the
+ * game's own typing (user32.c) needs it on all the time: it is turned straight back on. */
+static void (*g_ime_backend)(ImGuiContext*, ImGuiViewport*, ImGuiPlatformImeData*);
+static SDL_Window* g_window;
+static void ime_keep_text_input(ImGuiContext* ctx, ImGuiViewport* vp, ImGuiPlatformImeData* data)
+{
+    g_ime_backend(ctx, vp, data);
+    if (!data->WantVisible && !data->WantTextInput && !SDL_TextInputActive(g_window))
+        SDL_StartTextInput(g_window);
+}
+
 extern "C" void overlay_init(SDL_Window* window)
 {
     if (g_ready || !window)
@@ -57,6 +68,9 @@ extern "C" void overlay_init(SDL_Window* window)
     io.IniFilename = g_ini[0] ? g_ini : NULL; /* where its windows were, kept between sessions */
     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange; /* the game's cursor stays the game's */
     ImGui_ImplSDL3_InitForMetal(window);
+    g_window = window;
+    g_ime_backend = ImGui::GetPlatformIO().Platform_SetImeDataFn;
+    ImGui::GetPlatformIO().Platform_SetImeDataFn = ime_keep_text_input;
     /* Roboto, at a size for the screen: ImGui 1.92 renders it at the framebuffer's scale itself */
     ImFontConfig cfg;
     cfg.FontDataOwnedByAtlas = false;

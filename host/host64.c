@@ -1053,7 +1053,7 @@ int main(int argc, char** argv)
     {
         /* the auto-translate phrases, for the overlay's chat */
         char at[1024];
-        snprintf(at, sizeof at, "%s/ROM/76/23.DAT", game);
+        snprintf(at, sizeof at, "%s%cROM%c76%c23.DAT", host_game, plat_path_sep, plat_path_sep, plat_path_sep);
         int n = gamestate_load_autotranslate(at);
         rt_log("[recomp] auto-translate: %d phrases\n", n);
     }
