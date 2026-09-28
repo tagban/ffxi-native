@@ -423,6 +423,71 @@ static void chat_window(void)
     colour_editor();
 }
 
+/* --- the party ----------------------------------------------------------------------------------- */
+static const char* job_name(int j)
+{
+    static const char* const JOBS[] = { "", "WAR", "MNK", "WHM", "BLM", "RDM", "THF", "PLD", "DRK", "BST", "BRD", "RNG",
+                                        "SAM", "NIN", "DRG", "SMN", "BLU", "COR", "PUP", "DNC", "SCH", "GEO", "RUN" };
+    return j > 0 && j < (int)(sizeof JOBS / sizeof *JOBS) ? JOBS[j] : "";
+}
+
+/* a bar with its number on it */
+static void bar(float fraction, ImU32 colour, const char* label, float width)
+{
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, colour);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(40, 40, 48, 220));
+    ImGui::ProgressBar(fraction < 0 ? 0 : fraction > 1 ? 1 : fraction, ImVec2(width, 0), label);
+    ImGui::PopStyleColor(2);
+}
+
+static void party_window(void)
+{
+    GameMember m[18];
+    int n = gamestate_members(m, 18);
+    ImGui::SetNextWindowPos(ImVec2(24, 520), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Party"))
+    {
+        if (!n)
+            ImGui::TextDisabled("Nobody yet: the party appears as the server tells it");
+        uint16_t here = gamestate_zone();
+        for (int i = 0; i < n; ++i)
+        {
+            const GameMember& p = m[i];
+            if (i && p.party != m[i - 1].party)
+                ImGui::Separator(); /* the alliance's other parties */
+            bool away = here && p.zone && p.zone != here;
+            ImGui::PushStyleColor(ImGuiCol_Text, away ? IM_COL32(150, 150, 150, 255) : IM_COL32(255, 255, 255, 255));
+            ImGui::Text("%s%s", p.leader ? "* " : "", p.name[0] ? p.name : "(you)");
+            ImGui::PopStyleColor();
+            if (p.mjob)
+            {
+                ImGui::SameLine();
+                if (p.sjob)
+                    ImGui::TextDisabled("%s %d / %s %d", job_name(p.mjob), p.mjob_lv, job_name(p.sjob), p.sjob_lv);
+                else
+                    ImGui::TextDisabled("%s %d", job_name(p.mjob), p.mjob_lv);
+            }
+            if (away)
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(elsewhere)");
+            }
+            float w = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3.0f;
+            char hp[16], mp[16], tp[16];
+            snprintf(hp, sizeof hp, "%u", p.hp);
+            snprintf(mp, sizeof mp, "%u", p.mp);
+            snprintf(tp, sizeof tp, "%u", p.tp);
+            bar(p.hpp / 100.0f, IM_COL32(80, 200, 110, 255), hp, w);
+            ImGui::SameLine();
+            bar(p.mpp / 100.0f, IM_COL32(215, 110, 190, 255), mp, w);
+            ImGui::SameLine();
+            bar(p.tp / 3000.0f, IM_COL32(110, 170, 255, 255), tp, w);
+        }
+    }
+    ImGui::End();
+}
+
 extern "C" void overlay_build_frame(void)
 {
     ImGui_ImplSDL3_NewFrame();
@@ -431,6 +496,7 @@ extern "C" void overlay_build_frame(void)
     {
         status_window();
         chat_window();
+        party_window();
     }
     ImGui::Render();
 }

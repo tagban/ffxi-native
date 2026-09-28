@@ -40,6 +40,11 @@ static void chat(const uint8_t* p, uint32_t size)
         ++g_chat_count;
 }
 
+static void zone_in(const uint8_t* p, uint32_t size);
+static void group_attr(const uint8_t* p, uint32_t size);
+static void group_list(const uint8_t* p, uint32_t size);
+static void group_table(const uint8_t* p, uint32_t size);
+
 /* every so often, to the log: what has come (the ids seen most) */
 static void summary(void)
 {
@@ -72,9 +77,144 @@ void gamestate_feed(const uint8_t* buf, uint32_t len)
             break;
         ++g_by_id[id];
         (void)chat; /* the game's log (gamestate_chat_line) has every line, these too */
+        switch (id)
+        {
+        case 0x00A: zone_in(buf + at, size); break;
+        case 0x0DF: group_attr(buf + at, size); break;
+        case 0x0DD: group_list(buf + at, size); break;
+        case 0x0C8: group_table(buf + at, size); break;
+        default: break;
+        }
         at += size;
     }
 }
+
+/* --- the party --------------------------------------------------------------------------------- */
+enum { MEMBERS = 20 };
+static GameMember g_members[MEMBERS]; /* id 0: free */
+static uint32_t g_self;
+static uint16_t g_zone;
+static int g_table; /* whether a party table (0x0C8) has come: until then, whoever has been seen */
+static uint32_t g_listed[MEMBERS];
+
+static uint32_t u32(const uint8_t* p) { return (uint32_t)(p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24); }
+static uint16_t u16(const uint8_t* p) { return (uint16_t)(p[0] | p[1] << 8); }
+
+static GameMember* member(uint32_t id)
+{
+    GameMember* free_one = NULL;
+    for (int i = 0; i < MEMBERS; ++i)
+    {
+        if (g_members[i].id == id)
+            return &g_members[i];
+        if (!g_members[i].id && !free_one)
+            free_one = &g_members[i];
+    }
+    if (free_one)
+    {
+        memset(free_one, 0, sizeof *free_one);
+        free_one->id = id;
+    }
+    return free_one;
+}
+
+static void name_of(char* out, const uint8_t* in)
+{
+    int i = 0;
+    for (; i < 15 && in[i] >= 0x20 && in[i] < 0x7F; ++i)
+        out[i] = (char)in[i];
+    out[i] = 0;
+}
+
+/* 0x00A, zoning in: the player's id (and name, at 0x84), the zone */
+static void zone_in(const uint8_t* p, uint32_t size)
+{
+    if (size < 0x94)
+        return;
+    g_self = u32(p + 0x04);
+    g_zone = u16(p + 0x30);
+    GameMember* m = member(g_self);
+    if (m)
+    {
+        name_of(m->name, p + 0x84);
+        m->zone = g_zone;
+        extern void rt_log(const char* fmt, ...);
+        rt_log("[recomp] zone in: zone %u, player %u \"%s\"\n", g_zone, g_self, m->name);
+    }
+}
+
+/* 0x0DF: a member's (or the player's) HP, MP, TP, jobs */
+static void group_attr(const uint8_t* p, uint32_t size)
+{
+    if (size < 0x24)
+        return;
+    GameMember* m = member(u32(p + 0x04));
+    if (!m)
+        return;
+    m->hp = u32(p + 0x08), m->mp = u32(p + 0x0C), m->tp = u32(p + 0x10);
+    m->hpp = p[0x16], m->mpp = p[0x17];
+    m->zone = u16(p + 0x1A);
+    m->mjob = p[0x20], m->mjob_lv = p[0x21], m->sjob = p[0x22], m->sjob_lv = p[0x23];
+}
+
+/* 0x0DD: a member, with their name and party */
+static void group_list(const uint8_t* p, uint32_t size)
+{
+    if (size < 0x38)
+        return;
+    GameMember* m = member(u32(p + 0x04));
+    if (!m)
+        return;
+    m->hp = u32(p + 0x08), m->mp = u32(p + 0x0C), m->tp = u32(p + 0x10);
+    uint32_t attr = u32(p + 0x14);
+    m->party = (uint8_t)(attr & 3), m->leader = (uint8_t)(attr >> 2 & 1);
+    m->hpp = p[0x1D], m->mpp = p[0x1E];
+    m->zone = u16(p + 0x20);
+    m->mjob = p[0x22], m->mjob_lv = p[0x23], m->sjob = p[0x24], m->sjob_lv = p[0x25];
+    name_of(m->name, p + 0x28);
+}
+
+/* 0x0C8: who is in the party and alliance now */
+static void group_table(const uint8_t* p, uint32_t size)
+{
+    g_table = 1;
+    memset(g_listed, 0, sizeof g_listed);
+    for (int i = 0; i < MEMBERS && 0x08 + 12u * (uint32_t)(i + 1) <= size; ++i)
+    {
+        const uint8_t* e = p + 0x08 + 12 * i;
+        uint32_t id = u32(e);
+        g_listed[i] = id;
+        GameMember* m = id ? member(id) : NULL;
+        if (m)
+        {
+            m->party = (uint8_t)(e[6] & 3), m->leader = (uint8_t)(e[6] >> 2 & 1);
+            m->zone = u16(e + 8);
+        }
+    }
+}
+
+int gamestate_members(GameMember* out, int max)
+{
+    int n = 0;
+    /* the player first */
+    for (int i = 0; i < MEMBERS && n < max; ++i)
+        if (g_members[i].id && g_members[i].id == g_self)
+            out[n++] = g_members[i];
+    for (int i = 0; i < MEMBERS && n < max; ++i)
+    {
+        const GameMember* m = &g_members[i];
+        if (!m->id || m->id == g_self || !m->name[0])
+            continue;
+        int listed = !g_table;
+        for (int k = 0; k < MEMBERS && !listed; ++k)
+            listed = g_listed[k] == m->id;
+        if (listed)
+            out[n++] = *m;
+    }
+    return n;
+}
+
+uint16_t gamestate_zone(void) { return g_zone; }
 
 uint32_t gamestate_udp_packets(void) { return g_udp; }
 uint32_t gamestate_packets(uint16_t id) { return g_by_id[id & 0x1FF]; }

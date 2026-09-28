@@ -28,6 +28,22 @@ uint32_t gamestate_packets(uint16_t id); /* how many of this id have come */
  * text; 0 when there is none */
 int gamestate_chat(int n, int* kind, const char** sender, const char** text);
 
+/* The party (and alliance): the player first, then who the party table lists. */
+typedef struct
+{
+    uint32_t id;
+    char name[16];
+    uint32_t hp, mp, tp;
+    uint8_t hpp, mpp;
+    uint8_t mjob, mjob_lv, sjob, sjob_lv;
+    uint16_t zone;
+    uint8_t party; /* 0 the player's party, 1 and 2 the alliance's others */
+    uint8_t leader;
+} GameMember;
+int gamestate_members(GameMember* out, int max);
+/* the player's zone (0 before the first) */
+uint16_t gamestate_zone(void);
+
 #ifdef __cplusplus
 }
 #endif
