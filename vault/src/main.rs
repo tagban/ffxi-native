@@ -10,7 +10,7 @@
 //!   xi-vault publish <out site> --current <v> <version>... [--packs] [--since v] static files
 //!   xi-vault serve <site> [--listen 0.0.0.0:54080]                   serve them over HTTP
 //!   xi-vault fetch <url> [--version v]                               a version from a site into the vault
-//!   xi-vault release [--game <folder>] [--server <url>] [--upload <ssh login>] [--current]
+//!   xi-vault release [--game <folder>] [--site <folder> | --server <url> [--upload <ssh login>]] [--current]
 //!                                                                    an updated install to a server (release.rs)
 //!   xi-vault apply <site> <bundle.tar> [--current]                   take a release's bundle into a site
 //!   xi-vault                                                         (no arguments: release, asking)
@@ -77,6 +77,9 @@ enum Cmd {
         /// the SSH login to upload with ("root@ffxi.cc"; "" not to)
         #[arg(long)]
         upload: Option<String>,
+        /// the server's site folder, here or on a share: published into directly
+        #[arg(long)]
+        site: Option<PathBuf>,
         /// hand it out to players once it is on the server
         #[arg(long)]
         current: bool,
@@ -146,7 +149,7 @@ fn run(cli: Cli) -> Result<()> {
     let p = progress();
     let t = Instant::now();
     let Some(cmd) = cli.cmd else {
-        let a = release::Args { game: None, server: None, out: None, upload: None, current: false };
+        let a = release::Args { game: None, server: None, out: None, upload: None, site: None, current: false };
         return release::release(a, true, &p);
     };
     match cmd {
@@ -243,8 +246,8 @@ fn run(cli: Cli) -> Result<()> {
             let m = fetch(&vault()?, &url, version.as_deref(), &p)?;
             println!("version {}: in the vault ({} files)", m.version, m.files.len());
         }
-        Cmd::Release { game, server, out, upload, current } => {
-            release::release(release::Args { game, server, out, upload, current }, false, &p)?;
+        Cmd::Release { game, server, out, upload, site, current } => {
+            release::release(release::Args { game, server, out, upload, site, current }, false, &p)?;
         }
         Cmd::Apply { site, bundle, current } => {
             let f = std::fs::File::open(&bundle).map_err(|e| format!("{}: {e}", bundle.display()))?;

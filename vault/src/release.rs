@@ -2,10 +2,12 @@
 //!
 //! After PlayOnline updates the game on the operator's PC, it reads the install, asks the update
 //! server what it hands out now, and when the install is newer, writes an update bundle of only the
-//! files the server lacks. With an SSH login set up, it uploads the bundle and has the server's
-//! xi-vault take it in (`xi-vault apply`); else it says how.
+//! files the server lacks. It publishes that into the server's site folder when it can reach it (on
+//! this PC, or a Windows share such as \\\\VM\\xi-vault-site); or uploads it over SSH and has a
+//! Linux server's xi-vault take it in (`xi-vault apply`); else it says how.
 //!
-//! Its settings are xi-release.json beside it: the game folder, the server, the SSH login.
+//! Its settings are xi-release.json beside it: the game folder, the site folder or the server and
+//! its SSH login.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -20,6 +22,9 @@ struct Settings {
     game: String,
     #[serde(default)]
     server: String,
+    /// the server's site folder, here or on a share: published into directly (then `server` is not needed)
+    #[serde(default)]
+    site: String,
     /// the SSH login for the server ("root@ffxi.cc"); "" to upload by hand; absent: not asked yet
     #[serde(default)]
     upload: Option<String>,
@@ -42,7 +47,40 @@ pub struct Args {
     pub server: Option<String>,
     pub out: Option<PathBuf>,
     pub upload: Option<String>,
+    pub site: Option<PathBuf>,
     pub current: bool,
+}
+
+/// Where the site is read from: its folder, or its address.
+enum Source {
+    Dir(PathBuf),
+    Url(String),
+}
+
+impl Source {
+    fn index(&self) -> Result<Index> {
+        match self {
+            Source::Url(u) => fetch_index(u).map_err(|e| format!("could not reach the update server: {e}")),
+            Source::Dir(d) => {
+                let p = d.join("index.json");
+                let i: Index = serde_json::from_str(&std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?)
+                    .map_err(|e| format!("{}: {e}", p.display()))?;
+                if i.format != FORMAT {
+                    return Err(format!("{}: not an xi-vault site", d.display()));
+                }
+                Ok(i)
+            }
+        }
+    }
+    fn manifest(&self, version: &str) -> Result<Manifest> {
+        match self {
+            Source::Url(u) => fetch_manifest(u, version),
+            Source::Dir(d) => {
+                let p = d.join("versions").join(format!("{version}.json"));
+                serde_json::from_str(&std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?).map_err(|e| format!("{}: {e}", p.display()))
+            }
+        }
+    }
 }
 
 /// Beside the program (where a double-clicked tool keeps its things), else here.
@@ -136,9 +174,36 @@ pub fn release(a: Args, interactive: bool, p: Progress) -> Result<()> {
     let game = game.unwrap();
     s.game = game.to_string_lossy().into_owned();
 
-    // the server
+    // where updates go
+    if let Some(d) = &a.site {
+        s.site = d.to_string_lossy().into_owned();
+    }
+    if let Some(u) = &a.upload {
+        s.upload = Some(u.clone());
+    }
+    if interactive && s.site.is_empty() && s.upload.is_none() {
+        println!("Where does your update server keep its files?");
+        println!("  - its site folder: on this PC, or a share like \\\\VM\\xi-vault-site");
+        println!("  - or the SSH login of a Linux server (like root@ffxi.cc)");
+        let w = ask("Type or drag it here, or press Enter to copy updates there yourself:\n>");
+        if w.contains('@') && !w.contains('\\') {
+            s.upload = Some(w);
+        } else if !w.is_empty() {
+            s.site = w;
+        } else {
+            s.upload = Some(String::new());
+        }
+    }
+    let site = Some(PathBuf::from(&s.site)).filter(|_| !s.site.is_empty());
+    if let Some(d) = &site {
+        if !d.join("index.json").is_file() {
+            return Err(format!("{} is not an update server's site folder (no index.json); set it up with install-server.ps1 or install-server.sh", d.display()));
+        }
+    }
+
+    // the server, when the site is not a folder here
     let mut server = a.server.clone().unwrap_or_else(|| s.server.clone());
-    if server.is_empty() {
+    if server.is_empty() && site.is_none() {
         if !interactive {
             return Err("give the update server (--server)".into());
         }
@@ -147,27 +212,32 @@ pub fn release(a: Args, interactive: bool, p: Progress) -> Result<()> {
             return Err("no server".into());
         }
     }
-    let url = server_url(&server);
     s.server = server;
-    if let Some(u) = &a.upload {
-        s.upload = Some(u.clone());
-    }
-    if s.upload.is_none() && interactive {
-        println!("\nThis can upload the update to your server over SSH (the server needs xi-vault on it).");
-        s.upload = Some(ask("Your SSH login for it (like root@ffxi.cc), or Enter to copy updates there yourself:\n>"));
-    }
-    if interactive || a.game.is_some() || a.server.is_some() {
+    if interactive || a.game.is_some() || a.server.is_some() || a.site.is_some() {
         let _ = std::fs::write(&settings_path, serde_json::to_string_pretty(&s).unwrap());
     }
-    println!("\nGame:   {}\nServer: {url}", game.display());
+    let src = match &site {
+        Some(d) => Source::Dir(d.clone()),
+        None => Source::Url(server_url(&s.server)),
+    };
+    println!("\nGame:   {}", game.display());
+    match &src {
+        Source::Dir(d) => println!("Site:   {}", d.display()),
+        Source::Url(u) => println!("Server: {u}"),
+    }
 
     // what the server hands out
-    let index = fetch_index(&url).map_err(|e| format!("could not reach the update server: {e}"))?;
+    let index = src.index()?;
     let current = index.current.clone();
-    let entry = index.versions.iter().find(|v| v.version == current).ok_or(format!("the server's index names {current} but does not list it"))?;
-    let cm = fetch_manifest(&url, &current)?;
-    let bm = if entry.base.is_empty() { None } else { Some(fetch_manifest(&url, &entry.base)?) };
-    println!("The server hands out: {current}\n");
+    let (cm, bm, base) = if current.is_empty() {
+        // a new site: the whole game goes in
+        (None, None, String::new())
+    } else {
+        let entry = index.versions.iter().find(|v| v.version == current).ok_or(format!("the server's index names {current} but does not list it"))?;
+        let bm = if entry.base.is_empty() { None } else { Some(src.manifest(&entry.base)?) };
+        (Some(src.manifest(&current)?), bm, entry.base.clone())
+    };
+    println!("The server hands out: {}\n", if current.is_empty() { "nothing yet" } else { &current });
 
     // the install, quickly by patch.cfg, then every file
     if let (Some(mine), Some(theirs)) = (patched_version(&game).as_deref().and_then(version_key), version_key(&current)) {
@@ -180,6 +250,8 @@ pub fn release(a: Args, interactive: bool, p: Progress) -> Result<()> {
     println!("Your game is:        {}", m.version);
     rule();
 
+    let empty = Manifest { format: FORMAT.into(), version: String::new(), build: String::new(), ffximain_sha256: String::new(), ffxi_sha256: String::new(), created: 0, files: Vec::new() };
+    let cm = cm.unwrap_or(empty);
     let files = |m: &Manifest| m.files.iter().map(|e| (e.path.clone(), e.sha256.clone())).collect::<BTreeSet<_>>();
     if files(&m) == files(&cm) {
         println!("The server already hands out exactly this game. Nothing to do.");
@@ -196,10 +268,17 @@ pub fn release(a: Args, interactive: bool, p: Progress) -> Result<()> {
     }
     if index.versions.iter().any(|v| v.version == m.version) {
         println!("The server has {} already, but hands out {current}.", m.version);
-        println!("To hand out {} on the server: {} current {} {}", m.version, s.remote_xi_vault, s.remote_site, m.version);
+        match &site {
+            Some(d) if interactive && yes_no(&format!("Hand out {} now?", m.version), false) => {
+                set_current(d, &m.version)?;
+                println!("Done: your server hands out {} now. Set CLIENT_VER to match.", m.version);
+            }
+            Some(d) => println!("To hand it out: xi-vault current \"{}\" {}", d.display(), m.version),
+            None => println!("To hand it out, on the server: {} current {} {}", s.remote_xi_vault, s.remote_site, m.version),
+        }
         return Ok(());
     }
-    println!("{current} -> {}:", m.version);
+    println!("{} -> {}:", if current.is_empty() { "(nothing)" } else { &current }, m.version);
     println!("  {} new files, {} changed, {} removed", d.added.len(), d.changed.len(), d.removed.len());
     let mut folders: std::collections::BTreeMap<&str, (usize, u64)> = Default::default();
     for e in &d.new_objects {
@@ -224,14 +303,41 @@ pub fn release(a: Args, interactive: bool, p: Progress) -> Result<()> {
     }
     rule();
 
-    // the bundle
     let mut hosted: BTreeSet<String> = cm.files.iter().map(|e| e.sha256.clone()).collect();
     if let Some(b) = &bm {
         hosted.extend(b.files.iter().map(|e| e.sha256.clone()));
     }
+    let ask_hand_out = |unknown: bool| {
+        if interactive {
+            println!("\nHanding it out means players' launchers download it on their next Play.");
+            println!("Set CLIENT_VER in LandSandBoat's login.lua to {} at the same time.", m.version);
+            if unknown {
+                println!("(Not before the launcher knows this FFXiMain.dll: see the note above.)");
+            }
+            yes_no("Hand it out to players now?", false)
+        } else {
+            a.current
+        }
+    };
+
+    // straight into the site folder
+    if let Some(d) = &site {
+        let hand_out = current.is_empty() || ask_hand_out(unknown);
+        let (h, index) = publish_install(d, &game, &m, &hosted, &base, &current, hand_out, p)?;
+        rule();
+        println!("Published {} into {}: {} files, {}.", m.version, d.display(), h.objects, human(h.bytes));
+        if index.current == m.version {
+            println!("Your server hands out {} now. Players get it on their next Play.", m.version);
+        } else {
+            println!("It hands out {} still. To hand the new one out: xi-vault current \"{}\" {}", index.current, d.display(), m.version);
+        }
+        return Ok(());
+    }
+
+    // the bundle, for a server elsewhere
     let name = format!("ffxi-update-{}.tar", m.version);
     let out = a.out.clone().unwrap_or_else(home).join(&name);
-    let h = make_bundle(&game, &m, &hosted, &entry.base, &current, &out, p)?;
+    let h = make_bundle(&game, &m, &hosted, &base, &current, &out, p)?;
     let size = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
     println!("Made {}\n  {} files, {}; the update file is {}", out.display(), h.objects, human(h.bytes), human(size));
 
@@ -247,13 +353,7 @@ pub fn release(a: Args, interactive: bool, p: Progress) -> Result<()> {
         println!("Not uploaded. To publish it by hand: copy it there and run\n  {}", apply(false));
         return Ok(());
     }
-    let hand_out = if interactive {
-        println!("\nHanding it out means players' launchers download it on their next Play.");
-        println!("Set CLIENT_VER in LandSandBoat's login.lua to {} at the same time.", m.version);
-        yes_no("Hand it out to players now?", false)
-    } else {
-        a.current
-    };
+    let hand_out = ask_hand_out(unknown);
     let remote = format!("/tmp/{name}");
     println!("> scp {} {login}:{remote}", out.display());
     let ok = Command::new("scp").arg(&out).arg(format!("{login}:{remote}")).status().map(|s| s.success()).unwrap_or(false);

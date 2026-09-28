@@ -697,9 +697,9 @@ pub fn make_bundle(game: &Path, m: &Manifest, hosted: &BTreeSet<String>, base: &
 /// the site has all the version needs (or its base does), its manifest and its entry in index.json.
 /// `make_current`: also the version the server wants. Nothing is listed when anything is missing.
 pub fn apply_bundle(site: &Path, r: impl Read, make_current: bool, progress: Progress) -> Result<(BundleHeader, Index)> {
-    let index_path = site.join("index.json");
-    let mut index: Index = serde_json::from_str(&fs::read_to_string(&index_path).map_err(err(index_path.display()))?)
-        .map_err(err(index_path.display()))?;
+    if !site.join("index.json").is_file() {
+        return Err(format!("{}: not a site (no index.json)", site.display()));
+    }
     let mut t = tar::Archive::new(r);
     let mut header: Option<BundleHeader> = None;
     let mut manifest: Option<Manifest> = None;
@@ -755,7 +755,16 @@ pub fn apply_bundle(site: &Path, r: impl Read, make_current: bool, progress: Pro
     }
     let h = header.ok_or("not a bundle: no bundle.json")?;
     let m = manifest.ok_or("the bundle has no manifest")?;
-    // everything the version needs: hosted here, or in its base (the players')
+    let index = list_version(site, &h, &m, make_current, "neither in the bundle nor on this site")?;
+    Ok((h, index))
+}
+
+/// Lists a version on a site whose objects are there: once everything it needs is hosted (or in its
+/// base, the players'), its manifest and its entry in index.json; `make_current`: handed out too.
+fn list_version(site: &Path, h: &BundleHeader, m: &Manifest, make_current: bool, lacking: &str) -> Result<Index> {
+    let index_path = site.join("index.json");
+    let mut index: Index = serde_json::from_str(&fs::read_to_string(&index_path).map_err(err(index_path.display()))?)
+        .map_err(err(index_path.display()))?;
     let from_base: BTreeSet<String> = if h.base.is_empty() {
         BTreeSet::new()
     } else {
@@ -771,8 +780,8 @@ pub fn apply_bundle(site: &Path, r: impl Read, make_current: bool, progress: Pro
         .collect();
     if !missing.is_empty() {
         return Err(format!(
-            "{} files of {} are neither in the bundle nor on this site (the first: {}); it was made against {}, \
-             so make it again against what the site has now",
+            "{} files of {} are {lacking} (the first: {}); it was measured against {}, \
+             so run it again against what the site has now",
             missing.len(),
             h.version,
             missing[0].path,
@@ -782,6 +791,7 @@ pub fn apply_bundle(site: &Path, r: impl Read, make_current: bool, progress: Pro
     let mp = site.join("versions").join(format!("{}.json", h.version));
     fs::create_dir_all(mp.parent().unwrap()).map_err(err("versions"))?;
     fs::write(&mp, serde_json::to_string_pretty(&m).unwrap()).map_err(err(mp.display()))?;
+    index.format = FORMAT.into();
     index.versions.retain(|v| v.version != h.version);
     index.versions.push(IndexVersion { version: m.version.clone(), build: m.build.clone(), files: m.files.len(), bytes: m.bytes(), base: h.base.clone() });
     if make_current || index.current.is_empty() {
@@ -790,6 +800,46 @@ pub fn apply_bundle(site: &Path, r: impl Read, make_current: bool, progress: Pro
     let tmp = index_path.with_extension("json.tmp");
     fs::write(&tmp, serde_json::to_string_pretty(&index).unwrap()).map_err(err(tmp.display()))?;
     fs::rename(&tmp, &index_path).map_err(err(index_path.display()))?;
+    Ok(index)
+}
+
+/// make_bundle and apply_bundle in one, for a site folder this machine can write (here, or a
+/// share): each file the site lacks compressed straight into it, then the version listed.
+pub fn publish_install(site: &Path, game: &Path, m: &Manifest, hosted: &BTreeSet<String>, base: &str, since: &str, make_current: bool, progress: Progress) -> Result<(BundleHeader, Index)> {
+    if !plain_name(&m.version) {
+        return Err(format!("version name {:?}: letters, digits, _ - . only", m.version));
+    }
+    let mut objects: BTreeMap<&str, &Entry> = BTreeMap::new();
+    for e in m.files.iter().filter(|e| !hosted.contains(&e.sha256)) {
+        objects.entry(&e.sha256).or_insert(e);
+    }
+    let h = BundleHeader {
+        format: FORMAT.into(),
+        version: m.version.clone(),
+        build: m.build.clone(),
+        base: base.into(),
+        since: since.into(),
+        objects: objects.len(),
+        bytes: objects.values().map(|e| e.size).sum(),
+    };
+    let done = AtomicU64::new(0);
+    objects.par_iter().try_for_each(|(sha, e)| -> Result<()> {
+        let dst = site.join("objects").join(&sha[..2]).join(format!("{sha}.zst"));
+        if !dst.exists() {
+            let data = fs::read(game.join(&e.path)).map_err(err(&e.path))?;
+            if hex(&Sha256::digest(&data)) != **sha {
+                return Err(format!("{} changed while this ran; run it again", e.path));
+            }
+            let z = zstd::bulk::compress(&data, 9).map_err(err("zstd"))?;
+            fs::create_dir_all(dst.parent().unwrap()).map_err(err(dst.display()))?;
+            let tmp = dst.with_extension(format!("tmp{}", std::process::id()));
+            fs::write(&tmp, z).map_err(err(tmp.display()))?;
+            fs::rename(&tmp, &dst).map_err(err(dst.display()))?;
+        }
+        progress("publish", done.fetch_add(e.size, Ordering::Relaxed) + e.size, h.bytes);
+        Ok(())
+    })?;
+    let index = list_version(site, &h, m, make_current, "not on this site")?;
     Ok((h, index))
 }
 
@@ -856,10 +906,8 @@ pub fn publish(
             build: m.build.clone(),
             files: m.files.len(),
             bytes: m.bytes(),
-            base: match &base {
-                Some(b) if b.version != m.version => b.version.clone(),
-                _ => String::new(),
-            },
+            // a version published --since itself: listed, and the players bring all of it
+            base: base.as_ref().map(|b| b.version.clone()).unwrap_or_default(),
         });
     }
     if packs {
@@ -1021,7 +1069,8 @@ pub fn serve(site: &Path, addr: &str) -> Result<()> {
 fn serve_requests(server: &tiny_http::Server, site: &Path) {
     for req in server.incoming_requests() {
         let url = req.url().split('?').next().unwrap_or("/").trim_start_matches('/').to_string();
-        let ok = !url.is_empty() && !url.split('/').any(|c| c.is_empty() || c == "." || c == "..");
+        // '/'-separated plain names only: on Windows '\\' and "C:" are path syntax too
+        let ok = !url.is_empty() && !url.split('/').any(|c| c.is_empty() || c == "." || c == ".." || c.contains(['\\', ':']));
         let path = site.join(&url);
         let resp = match (ok, File::open(&path)) {
             (true, Ok(f)) if path.is_file() => {
