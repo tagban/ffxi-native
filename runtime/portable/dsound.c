@@ -77,6 +77,23 @@ static uint32_t g_ds;      /* the IDirectSound8 object */
 static int32_t g_ds_refs;
 static uint32_t g_vtbl_ds, g_vtbl_buf, g_vtbl_notify;
 static float g_master = 1.0f;
+/* the player's volume, in the world and before it, and the gain now (moving to the one that
+ * applies a little each mix, so a change never clicks) */
+static float g_vol_world = 1.0f, g_vol_title = 0.35f, g_vol_now = 0.35f;
+static int g_in_world;
+
+void dsound_set_volume(float in_world, float before_world)
+{
+    g_vol_world = in_world < 0.0f ? 0.0f : in_world > 1.0f ? 1.0f : in_world;
+    g_vol_title = before_world < 0.0f ? 0.0f : before_world > 1.0f ? 1.0f : before_world;
+}
+
+void dsound_set_in_world(int on)
+{
+    if (g_in_world != (on != 0))
+        rt_log("[recomp] sound: %s\n", on ? "in the world: the world's volume" : "before the world: the title's volume");
+    g_in_world = on != 0;
+}
 
 static const uint8_t IID_IUnknown[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46 };
 static const uint8_t IID_IDirectSoundBuffer[16] = { 0x85, 0xFA, 0x9A, 0x27, 0x81, 0x49, 0xCE, 0x11,
@@ -171,9 +188,13 @@ static void mix(float* out, int frames)
         if (b->playing)
             notify_crossed(b, start, cursor_bytes(b), wrapped);
     }
+    float want = g_in_world ? g_vol_world : g_vol_title;
     for (int f = 0; f < 2 * frames; ++f)
     {
-        float v = out[f] * g_master;
+        /* about a quarter second from one volume to the other at 44.1 kHz */
+        if (g_vol_now != want)
+            g_vol_now += g_vol_now < want ? fminf(want - g_vol_now, 1.0f / 22050.0f) : -fminf(g_vol_now - want, 1.0f / 22050.0f);
+        float v = out[f] * g_master * g_vol_now;
         out[f] = v > 1.0f ? 1.0f : v < -1.0f ? -1.0f : v;
     }
 }

@@ -2218,7 +2218,9 @@ static float* fx_setting(const char* key)
 void gfx_show_overlay(int on) { g_overlay = on != 0; }
 
 int gfx_has_scene_effects(void) { return 1; }
-uint64_t gfx_window_flags(void) { return 0; } /* the view SDL_Metal_CreateView adds needs no flag */
+/* every pixel of a Retina or scaled display (the drawable at the window's pixels, not its points):
+ * else macOS enlarges a smaller drawable itself, softly, and MetalFX never has a larger screen */
+uint64_t gfx_window_flags(void) { return SDL_WINDOW_HIGH_PIXEL_DENSITY; }
 
 void gfx_fx_set(const char* key, float v)
 {

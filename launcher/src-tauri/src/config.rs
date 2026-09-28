@@ -89,6 +89,10 @@ pub struct GameSettings {
     /// The size the player last gave the game's window (points; host64 reports it, --window-size
     /// opens it so next time); 0 x 0: the game's own.
     pub window_points: (u32, u32),
+    /// Volume in percent: in the world, and on the title and login screens before it (which the
+    /// game's own volume setting does not reach)
+    pub volume: u32,
+    pub title_volume: u32,
     /// 0-6 (0000)
     pub mip_mapping: u32,
     /// 0 high, 1 low, 2 uncompressed (0018)
@@ -143,6 +147,8 @@ impl Default for GameSettings {
             background_height: 4096,
             render_quality: "quality".into(),
             window_points: (0, 0),
+            volume: 100,
+            title_volume: 35,
             mip_mapping: 6,
             texture_compression: 1,
             map_compression: 1,
@@ -193,6 +199,8 @@ impl GameSettings {
         s += &format!("nameplate_scale = {}\n", if self.nameplate_scale.is_empty() { "1" } else { &self.nameplate_scale });
         s += &format!("fps_overlay = {}\n", self.fps_overlay as u32);
         s += &format!("window_mode = {}\n", self.window_mode.min(3));
+        s += &format!("volume = {}\n", self.volume.min(100));
+        s += &format!("title_volume = {}\n", self.title_volume.min(100));
         s += &format!("hotkey = {}\n", if self.hotkey.is_empty() { "f12" } else { &self.hotkey });
         for (k, def) in FX_DEFAULTS {
             s += &format!("{k} = {}\n", self.fx.get(*k).copied().unwrap_or(*def));

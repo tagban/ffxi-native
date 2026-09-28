@@ -207,6 +207,10 @@
         </label>
         <p class="hint">In the game, <kbd>Alt+Enter</kbd><span class="mac-only"> or <kbd>⌃⌘F</kbd></span> switches between a window and full screen. The game keeps its resolution and is scaled to fit.</p>
         <label class="check"><input name="fps_overlay" type="checkbox"> Frame-rate counter</label>
+        <label>Volume <input name="volume" type="range" min="0" max="100" step="5" data-num></label>
+        <label>Title and login screens <input name="title_volume" type="range" min="0" max="100" step="5" data-num></label>
+        <p class="hint">The title and login screens play before the game's own volume setting applies: this
+          keeps them quieter. In the world, the game's settings and the volume above apply.</p>
 
         <div id="fx-section">
           <h2>Scene effects</h2>

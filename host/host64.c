@@ -337,6 +337,17 @@ static int live_set(const char* key, const char* v)
             return 0;
         g_aspect = (float)r;
     }
+    else if (!strcmp(key, "volume") || !strcmp(key, "title_volume"))
+    {
+        /* percent: in the world, and on the title and login screens before it */
+        static float world = 100.0f, title = 35.0f;
+        char* end;
+        float pct = strtof(v, &end);
+        if (end == v || pct < 0.0f || pct > 100.0f)
+            return 0;
+        *(!strcmp(key, "volume") ? &world : &title) = pct;
+        dsound_set_volume(world / 100.0f, title / 100.0f);
+    }
     else if (!strcmp(key, "ui_aspect"))
     {
         if (!parse_aspect(v, &a))

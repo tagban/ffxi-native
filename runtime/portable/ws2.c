@@ -42,6 +42,7 @@ static int host_errno(void) { return errno; }
 #include "plat.h"
 #include "thunk.h"
 #include "ws2.h"
+#include "dsound.h"
 
 #define WSAEINTR 10004u
 #define WSAEBADF 10009u
@@ -93,7 +94,11 @@ typedef struct Sock
     uint32_t pending;     /* network events recorded, not yet enumerated */
     uint32_t enabled;     /* which events may be recorded again */
     int errors[10];       /* iErrorCode by FD_*_BIT */
+    int zone;             /* a UDP socket the game has sent on: its talk with a zone server */
 } Sock;
+
+/* UDP sockets the game has sent on: while there are any, it is in the world (the lobby is TCP) */
+static int g_zone_socks;
 
 static Sock g_socks[MAX_SOCKS];
 static volatile uint32_t g_lock_word;
@@ -263,6 +268,9 @@ static void sh_closesocket(Guest* g)
     lock();
     host_sock h = s->h;
     s->used = 0;
+    if (s->zone && --g_zone_socks == 0)
+        dsound_set_in_world(0);
+    s->zone = 0;
     unlock();
     host_close(h);
     RET(0, 1);
@@ -450,6 +458,12 @@ static void sh_sendto(Guest* g)
     {
         gt_set_error(WSAEFAULT);
         RET(GUEST_SOCKET_ERROR, 6);
+    }
+    if (!s->zone && s->type == 2 /* SOCK_DGRAM */)
+    {
+        s->zone = 1;
+        if (g_zone_socks++ == 0)
+            dsound_set_in_world(1);
     }
     int n = (int)sendto(s->h, (const char*)ARGP(1), (int)ARG(2), host_flags(ARG(3)), has ? (struct sockaddr*)&a : NULL, has ? sizeof a : 0);
     if (n < 0)
