@@ -17,6 +17,7 @@ headers go after zig's own (-idirafter), so glibc's always come from zig.
 import argparse
 import hashlib
 import os
+import platform
 import shlex
 import shutil
 import subprocess
@@ -89,7 +90,7 @@ SYS_HEADERS = ['-idirafter', '/usr/include']
 # ... and its libraries, which cmake's finders only read the names of (SDL dlopens each back end's
 # library by its soname, the same on every architecture): with zig as the compiler cmake does not
 # know the multiarch folder they are in
-_MULTIARCH = '/usr/lib/%s-linux-gnu' % os.uname().machine
+_MULTIARCH = '/usr/lib/%s-linux-gnu' % platform.machine()  # (platform: imported on Windows too, windows_dist.py)
 LIB_HINTS = ['-DCMAKE_LIBRARY_PATH=' + _MULTIARCH] if os.path.isdir(_MULTIARCH) else []
 
 
