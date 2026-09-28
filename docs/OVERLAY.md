@@ -57,7 +57,7 @@ server and never presses keys for the player.** No automation, by design, on eve
   - `chat_add`: the entry of its add-a-line-to-the-log: every line the log shows (NPCs, system,
     battle, chat), with its mode. The game's own event-script interpreter was also found
     (0x100bc290), for dialogue later.
-- **Windows**: Chat (tabs by kind, words, the game's colours changeable, auto-translate phrases
+- **Windows**: Chat (tabs by kind, words, the game's colors changeable, auto-translate phrases
   from the install's dictionary), Party (HP, MP, TP, jobs).
 
 ## Menus: the decision to make

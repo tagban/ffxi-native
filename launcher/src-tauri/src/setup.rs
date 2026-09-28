@@ -477,7 +477,7 @@ fn copy_tree(src: &Path, dst: &Path, files: &[PathBuf]) -> Result<(), String> {
 /// fails.
 fn run_cc(app: &dyn Env, building: &Building, mut cmd: Command, what: &str) -> Result<(), String> {
     if building.cancelled.load(Ordering::Relaxed) {
-        return Err("Cancelled.".into());
+        return Err("Canceled.".into());
     }
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("Cannot start the compiler: {e}"))?;
@@ -499,7 +499,7 @@ fn run_cc(app: &dyn Env, building: &Building, mut cmd: Command, what: &str) -> R
     building.children.lock().unwrap().retain(|c| !Arc::ptr_eq(c, &child));
     let text = reader.join().unwrap_or_default();
     if building.cancelled.load(Ordering::Relaxed) {
-        return Err("Cancelled.".into());
+        return Err("Canceled.".into());
     }
     if !out.success() {
         for line in text.lines().take(40) {
@@ -763,7 +763,7 @@ pub fn download_zig(app: &dyn Env, building: &Building) -> Result<String, String
     let mut buf = vec![0u8; 1 << 16];
     loop {
         if building.cancelled.load(Ordering::Relaxed) {
-            return Err("Cancelled.".into());
+            return Err("Canceled.".into());
         }
         let n = reader.read(&mut buf).map_err(|e| format!("{url}: {e}"))?;
         if n == 0 {

@@ -138,7 +138,7 @@ static void status_window(void)
 
 /* --- the chat ------------------------------------------------------------------------------------ */
 /* Lines from the game's own log (gamestate.c), by kind: the game's chat mode sorted into what a
- * player means by say, tell, NPC... Colours default to the game's; tabs show the kinds they choose,
+ * player means by say, tell, NPC... Colors default to the game's; tabs show the kinds they choose,
  * and may ask for words. Both are kept in overlay.ini. */
 enum Kind
 {
@@ -147,7 +147,7 @@ enum Kind
 static const char* const KIND_NAME[KINDS] = { "Say", "Shout", "Yell", "Tell", "Party", "Linkshell 1", "Linkshell 2",
                                               "Emote", "NPC", "Battle", "System" };
 static const char* const KIND_KEY[KINDS] = { "say", "shout", "yell", "tell", "party", "ls1", "ls2", "emote", "npc", "battle", "system" };
-/* the game's default chat colours */
+/* the game's default chat colors */
 static const ImU32 KIND_DEFAULT[KINDS] = {
     IM_COL32(255, 255, 255, 255), /* say */
     IM_COL32(255, 155, 100, 255), /* shout */
@@ -191,7 +191,7 @@ struct Tab
 static const unsigned ALL_KINDS = (1u << KINDS) - 1;
 static Tab g_tabs[16];
 static int g_ntabs, g_tab_edit = -1;
-static bool g_chat_defaults_done, g_chat_colours;
+static bool g_chat_defaults_done, g_chat_colors;
 
 static void chat_defaults(void)
 {
@@ -219,7 +219,7 @@ static void chat_defaults(void)
     }
 }
 
-/* overlay.ini: [Chat][Settings] with colour.<kind>=RRGGBB and tab=kinds|words|name lines */
+/* overlay.ini: [Chat][Settings] with color.<kind>=RRGGBB and tab=kinds|words|name lines */
 static void* chat_ini_open(ImGuiContext*, ImGuiSettingsHandler*, const char*)
 {
     g_ntabs = 0;
@@ -230,7 +230,8 @@ static void chat_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const cha
 {
     unsigned rgb, kinds;
     char key[32];
-    if (sscanf(line, "colour.%31[a-z0-9]=%x", key, &rgb) == 2)
+    if (sscanf(line, "color.%31[a-z0-9]=%x", key, &rgb) == 2 ||
+        sscanf(line, "colour.%31[a-z0-9]=%x", key, &rgb) == 2) /* the first test builds wrote colour. */
     {
         for (int k = 0; k < KINDS; ++k)
             if (!strcmp(key, KIND_KEY[k]))
@@ -256,7 +257,7 @@ static void chat_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextBuff
     for (int k = 0; k < KINDS; ++k)
     {
         ImU32 c = g_kind_col[k];
-        out->appendf("colour.%s=%02x%02x%02x\n", KIND_KEY[k], c & 255, c >> 8 & 255, c >> 16 & 255);
+        out->appendf("color.%s=%02x%02x%02x\n", KIND_KEY[k], c & 255, c >> 8 & 255, c >> 16 & 255);
     }
     for (int i = 0; i < g_ntabs; ++i)
         out->appendf("tab=%x|%s|%s\n", g_tabs[i].kinds, g_tabs[i].words, g_tabs[i].name);
@@ -328,12 +329,12 @@ static void tab_editor(void)
     }
 }
 
-static void colour_editor(void)
+static void color_editor(void)
 {
-    if (!g_chat_colours)
+    if (!g_chat_colors)
         return;
     ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Chat colours", &g_chat_colours))
+    if (ImGui::Begin("Chat colors", &g_chat_colors))
     {
         for (int k = 0; k < KINDS; ++k)
         {
@@ -344,7 +345,7 @@ static void colour_editor(void)
                 ImGui::MarkIniSettingsDirty();
             }
         }
-        if (ImGui::Button("The game's colours"))
+        if (ImGui::Button("The game's colors"))
         {
             for (int k = 0; k < KINDS; ++k)
                 g_kind_col[k] = KIND_DEFAULT[k];
@@ -396,8 +397,8 @@ static void chat_window(void)
                 {
                     if (ImGui::MenuItem("Edit tab..."))
                         g_tab_edit = i;
-                    if (ImGui::MenuItem("Colours..."))
-                        g_chat_colours = true;
+                    if (ImGui::MenuItem("Colors..."))
+                        g_chat_colors = true;
                     ImGui::EndPopup();
                 }
                 if (open)
@@ -420,7 +421,7 @@ static void chat_window(void)
         tab_editor();
     }
     ImGui::End();
-    colour_editor();
+    color_editor();
 }
 
 /* --- the party ----------------------------------------------------------------------------------- */
@@ -432,9 +433,9 @@ static const char* job_name(int j)
 }
 
 /* a bar with its number on it */
-static void bar(float fraction, ImU32 colour, const char* label, float width)
+static void bar(float fraction, ImU32 color, const char* label, float width)
 {
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, colour);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, color);
     ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(40, 40, 48, 220));
     ImGui::ProgressBar(fraction < 0 ? 0 : fraction > 1 ? 1 : fraction, ImVec2(width, 0), label);
     ImGui::PopStyleColor(2);
