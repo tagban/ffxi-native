@@ -13,7 +13,7 @@
 FINAL FANTASY XI running natively on **Windows, macOS and Linux**, without Wine or Rosetta, behind a
 launcher that does the rest: point it at a `FINAL FANTASY XI` folder, and it makes the game for that
 install, keeps it on the client version your server needs, and plays it. It is made for
-**MogHouse** (`ffxi.cc`) first, and works with other LandSandBoat servers too.
+**[MogHouse](https://moghouse.cc)** (server `ffxi.cc`) first, and works with other LandSandBoat servers too.
 
 ## Getting it
 
