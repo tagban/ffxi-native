@@ -297,6 +297,7 @@ fn host_message(app: &AppHandle, msg: &str, lobby_error: &Mutex<Option<u32>>) {
 pub fn lobby_error_text(code: u32) -> String {
     match code {
         331 => "The server needs a different version of the game (lobby error 331). Update the game for this server, then play again.".into(),
+        201 => "The server still has this character signed in from the last session (lobby error 201). Wait a minute or two, then play again.".into(),
         _ => format!("The server's lobby turned the game away (error {code})."),
     }
 }

@@ -19,8 +19,23 @@ static struct
     float fps;
 } g_present;
 
-/* the show/hide key */
-static const SDL_Keycode TOGGLE = SDLK_F11;
+/* The show/hide key: Cmd+U on macOS (the game uses no Command key; macOS keeps F11 for Show
+ * Desktop), Ctrl+Shift+U elsewhere (the game's macros are Ctrl or Alt with a digit). */
+static bool is_toggle(const SDL_KeyboardEvent& k)
+{
+    if (k.key != SDLK_U)
+        return false;
+#if defined(__APPLE__)
+    return (k.mod & SDL_KMOD_GUI) && !(k.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT));
+#else
+    return (k.mod & SDL_KMOD_CTRL) && (k.mod & SDL_KMOD_SHIFT) && !(k.mod & SDL_KMOD_ALT);
+#endif
+}
+#if defined(__APPLE__)
+static const char* const TOGGLE_NAME = "Cmd+U";
+#else
+static const char* const TOGGLE_NAME = "Ctrl+Shift+U";
+#endif
 
 extern "C" void overlay_set_ini(const char* path)
 {
@@ -66,12 +81,13 @@ extern "C" int overlay_event(const SDL_Event* e)
 {
     if (!g_ready)
         return 0;
-    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == TOGGLE && !e->key.repeat)
+    if (e->type == SDL_EVENT_KEY_DOWN && is_toggle(e->key))
     {
-        g_shown = !g_shown;
+        if (!e->key.repeat)
+            g_shown = !g_shown;
         return 1;
     }
-    if (e->type == SDL_EVENT_KEY_UP && e->key.key == TOGGLE)
+    if (e->type == SDL_EVENT_KEY_UP && e->key.key == SDLK_U && (e->key.mod & (SDL_KMOD_GUI | SDL_KMOD_CTRL)))
         return 1;
     ImGui_ImplSDL3_ProcessEvent(e);
     if (!g_shown)
@@ -110,7 +126,7 @@ static void status_window(void)
         ImGui::Text("MetalFX %s", g_present.metalfx ? "upscaling" : "off");
         ImGui::Text("%s", dsound_in_world() ? "In the world" : "Title and login screens");
         ImGui::Separator();
-        ImGui::TextDisabled("F11 shows and hides the overlay");
+        ImGui::TextDisabled("%s shows and hides the overlay", TOGGLE_NAME);
     }
     ImGui::End();
 }
