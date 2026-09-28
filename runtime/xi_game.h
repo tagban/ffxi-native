@@ -49,6 +49,8 @@ typedef struct XiGameModule
     /* appended (size tells whether a module has it): the hook at the end of the game's decrypt and
      * decompress of an incoming packet (meta/builds.json "packet_in"), NULL when its build has none */
     GuestFn* hook_packet_in;
+    /* the entry of the game's encrypt of an outgoing packet ("packet_out"): the player's own chat */
+    GuestFn* hook_packet_out;
 } XiGameModule;
 
 /* The one symbol a module exports. */

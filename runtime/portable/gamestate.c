@@ -38,11 +38,30 @@ static void chat(const uint8_t* p, uint32_t size)
         ++g_chat_count;
 }
 
+/* every so often, to the log: what has come (the ids seen most) */
+static void summary(void)
+{
+    extern void rt_log(const char* fmt, ...);
+    uint32_t top[6] = { 0 }, n[6] = { 0 };
+    for (uint32_t id = 0; id < 512; ++id)
+        for (int k = 0; k < 6; ++k)
+            if (g_by_id[id] > n[k])
+            {
+                memmove(top + k + 1, top + k, (5 - k) * sizeof *top);
+                memmove(n + k + 1, n + k, (5 - k) * sizeof *n);
+                top[k] = id, n[k] = g_by_id[id];
+                break;
+            }
+    rt_log("[recomp] packets: %u in, the most: %03x x%u %03x x%u %03x x%u %03x x%u; chat %u\n", g_udp, top[0], n[0], top[1],
+        n[1], top[2], n[2], top[3], n[3], g_by_id[0x017]);
+}
+
 void gamestate_feed(const uint8_t* buf, uint32_t len)
 {
     if (!buf || len <= HEADER)
         return;
-    ++g_udp;
+    if (++g_udp % 100 == 0)
+        summary();
     for (uint32_t at = HEADER; at + 4 <= len;)
     {
         uint16_t head = (uint16_t)(buf[at] | buf[at + 1] << 8);
@@ -68,4 +87,29 @@ int gamestate_chat(int n, int* kind, const char** sender, const char** text)
     *sender = g_chat[i].sender;
     *text = g_chat[i].text;
     return 1;
+}
+
+/* 0x0B5 from the client: the player's own chat line (kind, a spare byte, the text); the server does
+ * not send it back to them */
+void gamestate_feed_out(const uint8_t* buf, uint32_t len)
+{
+    if (!buf || len <= HEADER)
+        return;
+    for (uint32_t at = HEADER; at + 4 <= len;)
+    {
+        uint32_t id = (buf[at] | buf[at + 1] << 8) & 0x1FF, size = 2u * (buf[at + 1] & 0xFEu);
+        if (size < 4 || at + size > len)
+            break;
+        if (id == 0x0B5 && size > 6)
+        {
+            int i = g_chat_next;
+            g_chat[i].kind = buf[at + 4];
+            strcpy(g_chat[i].sender, "You");
+            plain(g_chat[i].text, sizeof g_chat[i].text, buf + at + 6, size - 6);
+            g_chat_next = (i + 1) % CHAT_LINES;
+            if (g_chat_count < CHAT_LINES)
+                ++g_chat_count;
+        }
+        at += size;
+    }
 }

@@ -516,6 +516,12 @@ static void sh_recv(Guest* g)
 
 static void sh_recvfrom(Guest* g)
 {
+    {
+        /* datagrams the game asks for, to the log now and then (the overlay's packet hook checks) */
+        static unsigned asked;
+        if (++asked % 500 == 1)
+            rt_log("[recomp] ws2: recvfrom #%u\n", asked);
+    }
     Sock* s = sock(ARG(0));
     if (!s)
         RET(GUEST_SOCKET_ERROR, 6);

@@ -17,7 +17,8 @@
         "present_site": "0x100035cb"
       },
       "hooks": {
-        "packet_in": "0x100dd803"
+        "packet_in": "0x100dd803",
+        "packet_out": "0x100dd5a0"
       },
       "crt": {
         "strlen": "0x10317480",
@@ -53,7 +54,8 @@
       },
       "hooks": {
         "nameplate_scale": "0x100863d6",
-        "packet_in": "0x100dd7f3"
+        "packet_in": "0x100dd7f3",
+        "packet_out": "0x100dd590"
       },
       "crt": {
         "strlen": "0x10317440",

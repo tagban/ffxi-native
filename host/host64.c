@@ -286,15 +286,49 @@ extern GuestFn rt_hook_packet_in;
 static void packet_in(Guest* g)
 {
     uint32_t len = g->eax, buf = rd32(g->esp + 4);
+    static int told;
+    if (told < 4)
+    {
+        /* the first few, to the log: what the hook sees */
+        ++told;
+        char hex[3 * 40 + 1] = "";
+        for (int i = 0; buf && (int32_t)len > 0 && i < 40 && (uint32_t)i < len; ++i)
+            snprintf(hex + 3 * i, 4, "%02x ", GUEST_PTR(buf)[i]);
+        rt_log("[recomp] packets: the hook ran: length %d, buffer %08x: %s\n", (int)len, buf, hex);
+    }
     if ((int32_t)len > 28 && len < 0x10000 && buf)
         gamestate_feed(GUEST_PTR(buf), len);
 }
 
+#if defined(FFXI_HOOK_PACKET_OUT)
+extern GuestFn rt_hook_packet_out;
+#define PACKET_OUT_HOOK (&rt_hook_packet_out)
+#elif defined(XI_SPLIT)
+#define PACKET_OUT_HOOK (xi_game->size >= offsetof(XiGameModule, hook_packet_out) + sizeof(GuestFn*) ? xi_game->hook_packet_out : NULL)
+#else
+#define PACKET_OUT_HOOK ((GuestFn*)NULL)
+#endif
+
+/* the entry of the game's encrypt of an outgoing packet: its 4th argument the packet in the clear
+ * (the header, then the client's packets), its 5th the length. Read only. */
+static void packet_out(Guest* g)
+{
+    uint32_t buf = rd32(g->esp + 0x10), len = rd32(g->esp + 0x14);
+    if (len > 28 && len < 0x10000 && buf)
+        gamestate_feed_out(GUEST_PTR(buf), len);
+}
+
 static void setup_packets(void)
 {
+    GuestFn* out = PACKET_OUT_HOOK;
+    if (out)
+        *out = packet_out;
     GuestFn* hook = PACKET_HOOK;
     if (hook)
+    {
         *hook = packet_in;
+        rt_log("[recomp] packets: hooked (build %s)\n", FFXI_BUILD);
+    }
     else
         rt_log("[recomp] packets: build %s has no packet hook; the overlay shows no game state\n", FFXI_BUILD);
 }

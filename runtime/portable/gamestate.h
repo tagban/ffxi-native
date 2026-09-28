@@ -12,6 +12,8 @@ extern "C" {
 /* One incoming UDP packet, decrypted and decompressed: a 28-byte header, then the server's packets
  * (each: 9 bits of id, 7 of size in 4-byte words, a sequence, then its data). */
 void gamestate_feed(const uint8_t* buf, uint32_t len);
+/* One outgoing UDP packet, in the clear (the same framing): the player's own chat. */
+void gamestate_feed_out(const uint8_t* buf, uint32_t len);
 
 /* For the overlay */
 uint32_t gamestate_udp_packets(void);
