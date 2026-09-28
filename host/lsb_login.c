@@ -49,7 +49,13 @@ typedef int sock_t;
 #define sock_close close
 #endif
 
-#if !defined(_WIN32) /* Windows has its own TLS: SChannel */
+/* mbedTLS everywhere but a Windows build without XI_MBEDTLS (SChannel: TLS 1.3 only on Windows 11,
+ * which current LandSandBoat's auth port requires) and UWP (the app's own sockets) */
+#if (!defined(_WIN32) || defined(XI_MBEDTLS)) && !defined(FFXI_UWP)
+#define XI_TLS_MBEDTLS 1
+#endif
+
+#if defined(XI_TLS_MBEDTLS)
 #include <mbedtls/ssl.h>
 #include <psa/crypto.h>
 #if MBEDTLS_VERSION_MAJOR < 4
@@ -133,7 +139,7 @@ static int tls_exchange(uint32_t server, uint16_t port, const char* request, cha
 {
     return uwp_tls_exchange(server, port, request, reply, replyn, err, errn);
 }
-#elif defined(_WIN32)
+#elif !defined(XI_TLS_MBEDTLS)
 /* SChannel: the handshake by hand over the socket, then one encrypted request and one reply */
 static int send_all(sock_t s, const void* p, size_t n)
 {

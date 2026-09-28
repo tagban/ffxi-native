@@ -4,8 +4,9 @@
       build/windows-x86_64/xi-host.exe and SDL3.dll beside it
 
 host64 without the translation (XI_SPLIT, runtime/xi_game.h), as tools/build.py's host64 builds it
-with MSVC, but by zig's clang against MinGW-w64: the same sources, Direct3D 12, SChannel for the
-LandSandBoat sign-in. SDL3 is its released MinGW build (pinned by SHA-256); its SDL3.dll goes beside
+with MSVC, but by zig's clang against MinGW-w64: the same sources, Direct3D 12, and mbedTLS for the
+LandSandBoat sign-in (compiled in from its pinned release, as tools/linux_dist.py: SChannel has TLS 1.3,
+which current LandSandBoat requires, only on Windows 11). SDL3 is its released MinGW build (pinned by SHA-256); its SDL3.dll goes beside
 the host. The launcher makes the game module on the player's machine with zig too, so a Windows
 player needs nothing installed.
 """
@@ -24,6 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import build  # noqa: E402  (the source lists)
+import linux_dist  # noqa: E402  (mbedTLS's pinned release)
 
 TARGET = 'x86_64-windows-gnu'
 SDL = ('https://github.com/libsdl-org/SDL/releases/download/release-3.4.16/SDL3-devel-3.4.16-mingw.tar.gz',
@@ -67,6 +69,25 @@ def sdl(work):
     return tree
 
 
+def mbedtls_objects(zig, work, objdir):
+    """mbedTLS's library, compiled for Windows (its sources need no configure step)."""
+    tree = linux_dist.source(work, 'mbedtls')
+    lib = os.path.join(tree, 'library')
+    out = os.path.join(objdir, 'mbedtls')
+    os.makedirs(out, exist_ok=True)
+    jobs = []
+    for c in sorted(os.listdir(lib)):
+        if c.endswith('.c'):
+            o = os.path.join(out, c[:-2] + '.o')
+            jobs.append((zig + ['-c', '-target', TARGET, '-O2', '-g0', '-I', os.path.join(tree, 'include'), '-I', lib,
+                                os.path.join(lib, c), '-o', o], o))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as ex:
+        failed = [o for (cmd, o), rc in zip(jobs, ex.map(lambda j: subprocess.call(j[0]), jobs)) if rc]
+    if failed:
+        raise SystemExit('mbedtls failed: ' + ', '.join(failed))
+    return [o for _, o in jobs], os.path.join(tree, 'include')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--zig', default=shutil.which('zig') or 'zig')
@@ -78,7 +99,8 @@ def main():
     objdir = os.path.join(work, 'obj')
     os.makedirs(objdir, exist_ok=True)
     srcs = [p.replace('\\', '/') for p in build.PORTABLE + build.HOST_SOURCES] + ['runtime/portable/xi_load.c']
-    flags = CFLAGS + ['-I', os.path.join(tree, 'include')]
+    tls_objs, tls_include = mbedtls_objects(zig, work, objdir)
+    flags = CFLAGS + ['-I', os.path.join(tree, 'include'), '-DXI_MBEDTLS', '-I', tls_include]
     jobs, objs = [], []
     for s in srcs:
         o = os.path.join(objdir, os.path.splitext(os.path.basename(s))[0] + '.o')
@@ -91,7 +113,7 @@ def main():
     out = os.path.join(ROOT, 'build', 'windows-x86_64')
     os.makedirs(out, exist_ok=True)
     exe = os.path.join(out, 'xi-host.exe')
-    run(zig + ['-target', TARGET, '-o', exe] + objs + [os.path.join(tree, 'lib', 'libSDL3.dll.a')] + LIBS, cwd=ROOT)
+    run(zig + ['-target', TARGET, '-o', exe] + objs + tls_objs + [os.path.join(tree, 'lib', 'libSDL3.dll.a')] + LIBS, cwd=ROOT)
     shutil.copy(os.path.join(tree, 'bin', 'SDL3.dll'), out)
     for leftover in ('xi-host.pdb', 'xi-host.lib'):
         p = os.path.join(out, leftover)
