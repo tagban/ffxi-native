@@ -12,7 +12,7 @@
 
 #include "runtime.h"
 
-#define XI_GAME_ABI 2
+#define XI_GAME_ABI 3
 
 typedef struct XiHostFns
 {
@@ -20,8 +20,8 @@ typedef struct XiHostFns
     void (*fatal)(Guest* g, uint32_t addr, const char* what);
     void (*cpuid)(Guest* g);
     void (*safepoint)(void);
-    jmp_buf* (*setjmp_buf)(Guest* g);
-    void (*longjmp)(Guest* g);
+    void* (*setjmp_buf)(Guest* g);
+    void* (*longjmp_regs)(Guest* g);
 } XiHostFns;
 
 typedef struct XiGameModule

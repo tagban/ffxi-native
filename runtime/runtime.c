@@ -136,23 +136,23 @@ void rt_safepoint(void)
 typedef struct JmpSlot
 {
     uint32_t guest; /* the guest jmp_buf */
-    jmp_buf host;
+    _Alignas(16) unsigned char host[RT_JMP_BYTES]; /* the landing: a jmp_buf of the translation's C library */
 } JmpSlot;
 static RT_THREAD_LOCAL JmpSlot g_jmp[RT_JMP_SLOTS];
 static RT_THREAD_LOCAL unsigned g_jmp_next;
 
-jmp_buf* rt_setjmp_buf(Guest* g)
+void* rt_setjmp_buf(Guest* g)
 {
     uint32_t jb = rd32(g->esp + 4);
     for (unsigned i = 0; i < RT_JMP_SLOTS; ++i)
         if (g_jmp[i].guest == jb)
-            return &g_jmp[i].host;
+            return g_jmp[i].host;
     JmpSlot* s = &g_jmp[g_jmp_next++ % RT_JMP_SLOTS];
     s->guest = jb;
-    return &s->host;
+    return s->host;
 }
 
-void rt_longjmp(Guest* g)
+void* rt_longjmp_regs(Guest* g)
 {
     /* longjmp(jmp_buf, value): its return address at esp. The MSVC jmp_buf: ebp, ebx, edi, esi, esp
      * (at the _setjmp3 call's return address), eip, the SEH registration, ... */
@@ -171,11 +171,7 @@ void rt_longjmp(Guest* g)
             g->esp = rd32(jb + 0x10) + 4;
             g->eax = value ? value : 1;
             rt_log("[recomp] longjmp: back to the setjmp that returns to %08x\n", rd32(jb + 0x14));
-#if defined(_WIN32)
-            longjmp(g_jmp[i].host, 1);
-#else
-            _longjmp(g_jmp[i].host, 1);
-#endif
+            return g_jmp[i].host;
         }
     rt_fatal(g, jb, "longjmp to a jmp_buf no translated setjmp filled");
 }

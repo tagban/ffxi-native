@@ -39,6 +39,6 @@ void xi_game_bind(void)
 {
     *xi_game->guest_base = rt_guest_base;
     rt_lock_contended_ptr = xi_game->lock_contended;
-    XiHostFns fns = { rt_call_indirect, rt_fatal, rt_cpuid, rt_safepoint, rt_setjmp_buf, rt_longjmp };
+    XiHostFns fns = { rt_call_indirect, rt_fatal, rt_cpuid, rt_safepoint, rt_setjmp_buf, rt_longjmp_regs };
     xi_game->set_host(&fns);
 }

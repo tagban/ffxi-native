@@ -108,20 +108,27 @@ void rt_rdtsc(Guest* g);
  * landing there (RT_SETJMP, in the translated caller's own frame), and longjmp is translated as
  * rt_longjmp: the guest registers the jmp_buf holds are put back, as the C library would, and the
  * host returns to the landing, where the translation goes on after the call with eax = the value.
- * rt_setjmp_buf: the landing for the jmp_buf the call is given ([esp + 4], its return address at
- * esp), per guest thread. */
-jmp_buf* rt_setjmp_buf(Guest* g);
-#if defined(_MSC_VER)
-__declspec(noreturn)
-#elif defined(__GNUC__)
-__attribute__((noreturn))
-#endif
-void rt_longjmp(Guest* g);
+ *
+ * rt_setjmp_buf: storage for the landing of the jmp_buf the call is given ([esp + 4], its return
+ * address at esp), per guest thread. rt_longjmp_regs: puts the registers back and returns the
+ * landing's storage (never returns when there is none). The host's setjmp and longjmp are called
+ * here, in the translation, so both are the same C library's even when the game is a module built
+ * by another compiler than its host (Windows: MSVC and MinGW jmp_bufs differ). */
+#define RT_JMP_BYTES 512 /* room for any C library's jmp_buf */
+void* rt_setjmp_buf(Guest* g);
+void* rt_longjmp_regs(Guest* g);
 #if defined(_WIN32)
-#define RT_SETJMP(g) setjmp(*rt_setjmp_buf(g))
+#define RT_SETJMP(g) setjmp(*(jmp_buf*)rt_setjmp_buf(g))
+#define RT_HOST_LONGJMP(b) longjmp(*(jmp_buf*)(b), 1)
 #else
-#define RT_SETJMP(g) _setjmp(*rt_setjmp_buf(g)) /* no signal mask to save */
+#define RT_SETJMP(g) _setjmp(*(jmp_buf*)rt_setjmp_buf(g)) /* no signal mask to save */
+#define RT_HOST_LONGJMP(b) _longjmp(*(jmp_buf*)(b), 1)
 #endif
+typedef char rt_jmp_bytes_fit[sizeof(jmp_buf) <= RT_JMP_BYTES ? 1 : -1];
+static inline void rt_longjmp(Guest* g)
+{
+    RT_HOST_LONGJMP(rt_longjmp_regs(g));
+}
 
 /* The guest-wide lock: one guest thread runs
  * translated code at a time. The platform bridge releases it around every native call and takes

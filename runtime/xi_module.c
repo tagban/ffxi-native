@@ -26,12 +26,8 @@ void rt_fatal(Guest* g, uint32_t addr, const char* what)
 }
 void rt_cpuid(Guest* g) { g_host.cpuid(g); }
 void rt_safepoint(void) { g_host.safepoint(); }
-jmp_buf* rt_setjmp_buf(Guest* g) { return g_host.setjmp_buf(g); }
-void rt_longjmp(Guest* g)
-{
-    g_host.longjmp(g);
-    abort(); /* the host's does not return */
-}
+void* rt_setjmp_buf(Guest* g) { return g_host.setjmp_buf(g); }
+void* rt_longjmp_regs(Guest* g) { return g_host.longjmp_regs(g); }
 
 static void set_host(const XiHostFns* fns) { g_host = *fns; }
 
