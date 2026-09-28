@@ -571,6 +571,40 @@ pub fn build(app: &dyn Env, building: &Building, game: &Path, label: &str) -> Re
     let objs: Vec<PathBuf> = jobs.iter().enumerate().map(|(i, (src, _))| {
         objdir.join(format!("{i:03}-{}.o", src.file_stem().unwrap().to_string_lossy()))
     }).collect();
+    // Objects by what made them (the compiler, its flags, the file and the headers it can include):
+    // a file made before is not compiled again. A launcher update usually changes a few of the
+    // translation's files; the rest come from here (<data>/cache/obj; pruned below).
+    let cache = data.join("cache").join("obj");
+    let header_digest = |sub: &str| -> Vec<u8> {
+        let mut h = Sha256::new();
+        let mut hs: Vec<PathBuf> = fs::read_dir(work.join("runtime")).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "h")).collect()).unwrap_or_default();
+        hs.sort();
+        hs.push(work.join("generated/build.h"));
+        if !sub.is_empty() {
+            hs.push(work.join("generated").join(sub).join("funcs.h"));
+        }
+        for p in hs {
+            h.update(p.file_name().unwrap().to_string_lossy().as_bytes());
+            h.update(fs::read(&p).unwrap_or_default());
+        }
+        h.finalize().to_vec()
+    };
+    let digests: std::collections::HashMap<&str, Vec<u8>> = ["", "all", "ffxi"].iter().map(|s| (*s, header_digest(s))).collect();
+    let flags = module_cflags().join(" ");
+    let keys: Vec<String> = jobs
+        .iter()
+        .map(|(src, extra)| {
+            let sub = extra.get(1).and_then(|d| d.strip_prefix("generated/")).unwrap_or("");
+            let mut h = Sha256::new();
+            h.update(cc_name.as_bytes());
+            h.update(flags.as_bytes());
+            h.update(extra.join(" ").as_bytes());
+            h.update(&digests[sub]);
+            h.update(fs::read(src).unwrap_or_default());
+            hex(&h.finalize())
+        })
+        .collect();
+    let hits = AtomicUsize::new(0);
     emit_log(app, &format!("compiling {} files with {cc_name}", jobs.len()));
     let next = AtomicUsize::new(0);
     let done = AtomicUsize::new(0);
@@ -584,11 +618,21 @@ pub fn build(app: &dyn Env, building: &Building, game: &Path, label: &str) -> Re
                     return;
                 }
                 let (src, extra) = &jobs[i];
-                let mut c = command(&cc[0]);
-                c.args(&cc[1..]).arg("-c").args(module_cflags()).args(extra).arg(src).arg("-o").arg(&objs[i]).current_dir(&work);
-                if let Err(e) = run_cc(app, building, c, &src.file_name().unwrap().to_string_lossy()) {
-                    failed.lock().unwrap().get_or_insert(e);
-                    return;
+                let cached = cache.join(&keys[i][..2]).join(format!("{}.o", keys[i]));
+                if cached.is_file() && fs::copy(&cached, &objs[i]).is_ok() {
+                    hits.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    let mut c = command(&cc[0]);
+                    c.args(&cc[1..]).arg("-c").args(module_cflags()).args(extra).arg(src).arg("-o").arg(&objs[i]).current_dir(&work);
+                    if let Err(e) = run_cc(app, building, c, &src.file_name().unwrap().to_string_lossy()) {
+                        failed.lock().unwrap().get_or_insert(e);
+                        return;
+                    }
+                    let _ = fs::create_dir_all(cached.parent().unwrap());
+                    let tmp = cached.with_extension(format!("tmp{i}"));
+                    if fs::copy(&objs[i], &tmp).is_ok() {
+                        let _ = fs::rename(&tmp, &cached);
+                    }
                 }
                 let d = done.fetch_add(1, Ordering::Relaxed) + 1;
                 emit_progress(app, 0.13 + 0.82 * d as f64 / jobs.len() as f64, format!("Compiling the game ({d} of {})…", jobs.len()));
@@ -597,6 +641,10 @@ pub fn build(app: &dyn Env, building: &Building, game: &Path, label: &str) -> Re
     });
     if let Some(e) = failed.into_inner().unwrap() {
         return Err(e);
+    }
+    let hits = hits.into_inner();
+    if hits > 0 {
+        emit_log(app, &format!("{hits} of {} files were made before (the cache)", jobs.len()));
     }
 
     emit_progress(app, 0.96, "Linking…");
@@ -624,13 +672,33 @@ pub fn build(app: &dyn Env, building: &Building, game: &Path, label: &str) -> Re
     });
     fs::write(out.join("build.json"), serde_json::to_string_pretty(&info).unwrap()).map_err(|e| e.to_string())?;
     fs::write(out.join("engine.txt"), &hash).map_err(|e| e.to_string())?;
+    fs::write(out.join("objects.txt"), keys.join("\n")).map_err(|e| e.to_string())?;
     let dest = games.join(label);
     let _ = fs::remove_dir_all(&dest);
     fs::rename(&out, &dest).map_err(|e| e.to_string())?;
+    prune_cache(&cache, &games);
     // the translation and objects (hundreds of MB) are not needed once the game is made
     let _ = fs::remove_dir_all(&work);
     emit_progress(app, 1.0, "Ready");
     Ok(format!("The game is ready (build {label})."))
+}
+
+/// Drops the cached objects no game made here still uses (each game lists its own, objects.txt).
+fn prune_cache(cache: &Path, games: &Path) {
+    let mut keep = std::collections::HashSet::new();
+    for g in fs::read_dir(games).into_iter().flatten().flatten() {
+        if let Ok(t) = fs::read_to_string(g.path().join("objects.txt")) {
+            keep.extend(t.lines().map(str::to_string));
+        }
+    }
+    for d in fs::read_dir(cache).into_iter().flatten().flatten() {
+        for f in fs::read_dir(d.path()).into_iter().flatten().flatten() {
+            let name = f.file_name().to_string_lossy().into_owned();
+            if !keep.contains(name.trim_end_matches(".o")) {
+                let _ = fs::remove_file(f.path());
+            }
+        }
+    }
 }
 
 pub fn start(app: AppHandle, building: Arc<Building>, game_path: String) -> Result<(), String> {
