@@ -1,0 +1,14 @@
+{
+  "bundle": {
+    "resources": {
+      "../../playonline.reg": "playonline.reg",
+      "../../meta/*.json": "engine/meta/",
+      "../../runtime/guest.h": "engine/runtime/guest.h",
+      "../../runtime/runtime.h": "engine/runtime/runtime.h",
+      "../../runtime/xi_game.h": "engine/runtime/xi_game.h",
+      "../../runtime/xi_module.c": "engine/runtime/xi_module.c",
+      "../../build/windows-x86_64/xi-host.exe": "xi-host.exe",
+      "../../build/windows-x86_64/SDL3.dll": "SDL3.dll"
+    }
+  }
+}

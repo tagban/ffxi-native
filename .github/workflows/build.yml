@@ -1,4 +1,5 @@
-# The launcher for players: Linux (x86_64, aarch64) and macOS (arm64), built from this repository alone.
+# The launcher for players: Linux (x86_64, aarch64), macOS (arm64) and Windows (x86_64), built from this
+# repository alone.
 # Nothing here reads the game: the launcher and its game host hold no Square Enix code (README,
 # "Rules"); each player's launcher makes the game from their own install. The build steps are
 # tools/ci/*.sh, which run the same on a developer's machine.
@@ -70,9 +71,33 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher/src-tauri -> ../../build/launcher-target
+          cache-bin: true
+      - uses: actions/cache@v4
+        with:
+          path: build/windows-dist/*.tar.gz # SDL3's MinGW release (checked by SHA-256 either way)
+          key: windows-dist-${{ hashFiles('tools/windows_dist.py') }}
+      - run: tools/ci/windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: dist/*
+          if-no-files-found: error
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos]
+    needs: [linux, macos, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
