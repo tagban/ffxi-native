@@ -96,9 +96,7 @@ fn run_task(
 
 /// The version in the vault that this install is, by its FFXiMain.dll and FFXi.dll.
 fn version_of(vault: &Vault, game: &Path) -> Option<Manifest> {
-    let main = xi_vault::sha256_file(&game.join("FFXiMain.dll")).ok()?;
-    let ffxi = xi_vault::sha256_file(&game.join("FFXi.dll")).ok()?;
-    vault.versions().ok()?.into_iter().rev().find(|m| m.ffximain_sha256 == main && m.ffxi_sha256 == ffxi)
+    xi_vault::identify(vault, game).ok().flatten()
 }
 
 #[derive(Serialize)]

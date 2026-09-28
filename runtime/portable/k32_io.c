@@ -219,6 +219,17 @@ static void sh_CreateFileA(Guest* g)
     }
     uint32_t h = k_new(K_FILE, f, file_close);
     gt_set_error((disp == 2 || disp == 4) && existed ? ERROR_ALREADY_EXISTS : 0);
+    {
+        /* FFXI_FILES_TRACE=1: every file the game opens, and its handle */
+        static int on = -1;
+        if (on < 0)
+        {
+            const char* e = getenv("FFXI_FILES_TRACE");
+            on = e && *e == '1';
+        }
+        if (on)
+            fprintf(stderr, "[files] %08x %s -> %s\n", h, ARGS(0), host);
+    }
     RET(h, 7);
 }
 

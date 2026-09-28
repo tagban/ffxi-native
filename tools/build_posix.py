@@ -132,7 +132,7 @@ def stale(s, obj, headers):
         stamp = max(stamp, headers)
     if os.path.getmtime(obj) < stamp:
         return True
-    if not s.startswith('generated/') and os.path.getmtime(obj) < os.path.getmtime(build.BUILD_H):
+    if not s.startswith('generated/') and os.path.exists(build.BUILD_H) and os.path.getmtime(obj) < os.path.getmtime(build.BUILD_H):
         with open(src, errors='replace') as f:
             return '"build.h"' in f.read()
     return False

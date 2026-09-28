@@ -31,8 +31,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const FORMAT: &str = "xi-vault/1";
 
-/// Folders of an install that are the player's, not the version's.
-const SKIP_DIRS: &[&str] = &["USER", "TEMP"];
+/// Folders of an install that are the player's, not the version's: USER (settings, macros), TEMP, and
+/// SYS, which the game writes while it runs (error and info logs, login bookmarks, the user file).
+const SKIP_DIRS: &[&str] = &["USER", "TEMP", "SYS"];
+
+fn players(path: &str) -> bool {
+    let top = path.split('/').next().unwrap_or("");
+    path.contains('/') && SKIP_DIRS.iter().any(|d| d.eq_ignore_ascii_case(top))
+}
 const SKIP_FILES: &[&str] = &[".DS_Store", "Thumbs.db", "desktop.ini"];
 
 /// The builds the recompiler knows (meta/builds.json): FFXiMain.dll's hash -> build label, version.
@@ -238,7 +244,9 @@ impl Vault {
     pub fn load(&self, version: &str) -> Result<Manifest> {
         let p = self.manifest_path(version);
         let text = fs::read_to_string(&p).map_err(|e| format!("version {version} is not in the vault ({}: {e})", p.display()))?;
-        serde_json::from_str(&text).map_err(err(p.display()))
+        let mut m: Manifest = serde_json::from_str(&text).map_err(err(p.display()))?;
+        m.files.retain(|e| !players(&e.path)); // a manifest made before SYS was the player's
+        Ok(m)
     }
 
     pub fn save(&self, m: &Manifest) -> Result<()> {
@@ -253,7 +261,8 @@ impl Vault {
         for e in fs::read_dir(self.root.join("versions")).map_err(err("versions"))?.flatten() {
             let p = e.path();
             if p.extension().is_some_and(|x| x == "json") {
-                if let Ok(m) = serde_json::from_str::<Manifest>(&fs::read_to_string(&p).unwrap_or_default()) {
+                if let Ok(mut m) = serde_json::from_str::<Manifest>(&fs::read_to_string(&p).unwrap_or_default()) {
+                    m.files.retain(|e| !players(&e.path));
                     out.push(m);
                 }
             }
@@ -321,6 +330,10 @@ impl Vault {
             progress("materialize", done.fetch_add(e.size, Ordering::Relaxed) + e.size, total);
             Ok(())
         })?;
+        // the player's folders the game expects to find, empty
+        for d in SKIP_DIRS {
+            let _ = fs::create_dir_all(out.join(d));
+        }
         Ok(m)
     }
 }
@@ -406,6 +419,59 @@ pub fn verify(game: &Path, m: &Manifest, full: bool, progress: Progress) -> Resu
     let known: BTreeSet<&str> = m.files.iter().map(|e| e.path.as_str()).collect();
     c.extra = install_files(game)?.into_iter().map(|(p, _)| p).filter(|p| !known.contains(p.as_str())).collect();
     Ok(c)
+}
+
+/// Which version in the vault an install is. The DLLs narrow it down, but many updates change only
+/// DATs, so versions can share them: every candidate must have all its files there at their sizes,
+/// and when more than one does, the files the candidates disagree on are hashed to tell them apart
+/// (the one that matches the most of them wins). None when no version fits.
+pub fn identify(vault: &Vault, game: &Path) -> Result<Option<Manifest>> {
+    let main = sha256_file(&game.join("FFXiMain.dll"))?;
+    let ffxi = sha256_file(&game.join("FFXi.dll"))?;
+    let nothing: Progress = &|_: &str, _: u64, _: u64| {};
+    let mut fits: Vec<Manifest> = Vec::new();
+    for m in vault.versions()? {
+        if m.ffximain_sha256 == main && m.ffxi_sha256 == ffxi {
+            let c = verify_sizes(game, &m, nothing);
+            if c.missing.is_empty() && c.wrong.is_empty() {
+                fits.push(m);
+            }
+        }
+    }
+    if fits.len() <= 1 {
+        return Ok(fits.pop());
+    }
+    // the paths where the candidates differ: absent from one, or another hash
+    let mut disputed: BTreeSet<&str> = BTreeSet::new();
+    let maps: Vec<BTreeMap<&str, &Entry>> = fits.iter().map(|m| m.by_path()).collect();
+    for (i, a) in maps.iter().enumerate() {
+        for b in &maps[i + 1..] {
+            for (p, e) in a {
+                if b.get(p).map(|f| f.sha256 != e.sha256).unwrap_or(true) {
+                    disputed.insert(p);
+                }
+            }
+            for p in b.keys() {
+                if !a.contains_key(p) {
+                    disputed.insert(p);
+                }
+            }
+        }
+    }
+    let actual: BTreeMap<&str, Option<String>> = disputed
+        .iter()
+        .map(|p| (*p, if game.join(p).is_file() { sha256_file(&game.join(p)).ok() } else { None }))
+        .collect();
+    let score = |m: &BTreeMap<&str, &Entry>| {
+        actual.iter().filter(|(p, got)| m.get(*p).map(|e| got.as_deref() == Some(e.sha256.as_str())).unwrap_or(got.is_none())).count()
+    };
+    let best = (0..fits.len()).max_by_key(|&i| score(&maps[i])).unwrap();
+    Ok(Some(fits.swap_remove(best)))
+}
+
+/// Only whether each file is there at its size (identify's first pass).
+fn verify_sizes(game: &Path, m: &Manifest, progress: Progress) -> Check {
+    verify(game, m, false, progress).unwrap_or_default()
 }
 
 /// Puts the missing and wrong files of a check back from the vault.

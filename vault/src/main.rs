@@ -36,6 +36,8 @@ enum Cmd {
     Snapshot { game: PathBuf, #[arg(long)] name: Option<String> },
     /// The versions in the vault
     List,
+    /// Which version an install is
+    Identify { game: PathBuf },
     /// What changed between two versions
     Diff { from: String, to: String, #[arg(long)] files: bool, #[arg(long)] json: bool },
     /// Only what <to> adds over <from>, as one zstd-compressed file
@@ -125,6 +127,10 @@ fn run(cli: Cli) -> Result<()> {
                 println!("{:<14} build {:<12} {:>6} files  {:>10}", m.version, if m.build.is_empty() { "?" } else { &m.build }, m.files.len(), human(m.bytes()));
             }
         }
+        Cmd::Identify { game } => match identify(&vault()?, &game)? {
+            Some(m) => println!("{}: version {} ({:.1}s)", game.display(), m.version, t.elapsed().as_secs_f64()),
+            None => println!("{}: no version in the vault fits", game.display()),
+        },
         Cmd::Diff { from, to, files, json } => {
             let v = vault()?;
             let d = diff(&v.load(&from)?, &v.load(&to)?);
