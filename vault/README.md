@@ -80,10 +80,37 @@ build in `meta/builds.json`; it refuses anything else. A site that is compromise
 that is tampered with, cannot get the launcher to run code it does not already know. A new client
 version needs its metadata in the launcher first (`.claude/skills/game-version-update`).
 
+## Rolling back
+
+A site keeps every version it has published: publishing a newer one adds it and makes it `current`,
+and the older ones stay, manifests and files. To take the server back:
+
+```
+xi-vault current site 30260805_0     # the server wants 30260805_0 again
+```
+
+and set LandSandBoat's `CLIENT_VER` back to match (with `VER_LOCK = 2`, a newer client is still let
+in; with `1`, only the exact version). On their next Play, players' launchers switch that server back:
+to their own install when it is that version, else to the copy put together before (nothing is
+downloaded), else they download what they lack of it. `xi-vault current site <newer>` goes forward
+again the same way. Leave a version out of the site only once no server will go back to it:
+republishing without it keeps it listed until you remove its entry from `index.json`.
+
+## Several servers, several versions
+
+Each account plays the version its server wants. The launcher keeps each version the player has
+been sent put together beside their install (`<vault>/installs/<version>/`, clones of the vault's
+files, so a second version costs only what differs), and the game made for each build of
+`FFXiMain.dll` side by side. Switching accounts switches versions; nothing is downloaded or made
+twice. A version is recognised by its files, not only its DLLs, so two versions that differ in their
+DATs alone are told apart.
+
 ## Other commands
 
 ```
 xi-vault list                                  # versions in the vault
+xi-vault identify <folder>                     # which version an install is
+xi-vault current <site> <version>              # which version a published site's server wants
 xi-vault verify <folder> <version> [--full] [--repair]
 xi-vault materialize <version> <out folder>    # a version as an install of its own
 xi-vault fetch <url> [--version v]             # from a published site into the vault

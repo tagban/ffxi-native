@@ -51,6 +51,8 @@ enum Cmd {
     /// Static files for a server to hand out: index.json, manifests, objects, packs. --since <v>:
     /// only what the versions add to <v> (players bring the rest from their own install)
     Publish { out: PathBuf, #[arg(long)] current: String, versions: Vec<String>, #[arg(long)] packs: bool, #[arg(long)] since: Option<String> },
+    /// Which version a published site's server wants (a rollback, or back): one it publishes already
+    Current { site: PathBuf, version: String },
     /// Serve a published site over HTTP
     Serve { site: PathBuf, #[arg(long, default_value = "0.0.0.0:54080")] listen: String },
     /// Bring a version from a published site into the vault (default: the one it wants)
@@ -190,6 +192,11 @@ fn run(cli: Cli) -> Result<()> {
             let versions = if versions.is_empty() { vec![current.clone()] } else { versions };
             let index = publish(&vault()?, &versions, &current, &out, packs, since.as_deref(), &p)?;
             println!("{}: {} versions, {} packs; the server wants {}", out.display(), index.versions.len(), index.packs.len(), index.current);
+        }
+        Cmd::Current { site, version } => {
+            let index = set_current(&site, &version)?;
+            let all: Vec<&str> = index.versions.iter().map(|v| v.version.as_str()).collect();
+            println!("{}: the server wants {} (published: {})", site.display(), index.current, all.join(", "));
         }
         Cmd::Serve { site, listen } => serve(&site, &listen)?,
         Cmd::Fetch { url, version } => {

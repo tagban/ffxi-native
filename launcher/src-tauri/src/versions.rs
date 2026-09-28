@@ -235,13 +235,28 @@ pub fn check_server(app: &AppHandle, account_id: &str) -> Result<ServerVersion, 
     let vault = Vault::open(&dir)?;
     // the player's own install, if it is that version; else one put together from the vault
     let own = Path::new(&cfg.game_path);
-    let own_version = version_of(&vault, own).map(|m| m.version);
-    let (have, game_path) = if own_version.as_deref() == Some(index.current.as_str()) {
+    let (have, game_path) = if xi_vault::is_version(&vault, own, &index.current) {
         (true, cfg.game_path.clone())
     } else {
+        // one put together before (a server that went back to an older version, or another
+        // server on it): all of it, not a copy cut short
         let p = install_path(&dir, &index.current);
-        (p.join("FFXiMain.dll").is_file(), p.to_string_lossy().into_owned())
+        let whole = p.join("FFXiMain.dll").is_file() && xi_vault::is_version(&vault, &p, &index.current);
+        (whole, p.to_string_lossy().into_owned())
     };
+    if have {
+        // the account plays that version from now on, whichever it played before
+        let cdir = config_dir(app)?;
+        let mut cfg = config::load(&cdir);
+        let own_path = cfg.game_path.clone();
+        if let Some(a) = cfg.accounts.iter_mut().find(|a| a.id == account_id) {
+            let want = if game_path == own_path { String::new() } else { game_path.clone() };
+            if a.game_path != want {
+                a.game_path = want;
+                config::save(&cdir, &cfg)?;
+            }
+        }
+    }
     Ok(ServerVersion {
         supported: !info.build.is_empty(),
         build: info.build.clone(),
@@ -265,8 +280,7 @@ pub fn update_for_server(app: AppHandle, tasks: Arc<Tasks>, account_id: String) 
             vault.snapshot(Path::new(&cfg.game_path), None, progress)?;
         }
         let m = xi_vault::fetch(&vault, &url, None, progress)?;
-        let own = version_of(&vault, Path::new(&cfg.game_path)).map(|m| m.version);
-        let game_path = if own.as_deref() == Some(m.version.as_str()) {
+        let game_path = if xi_vault::is_version(&vault, Path::new(&cfg.game_path), &m.version) {
             cfg.game_path.clone()
         } else {
             let p = install_path(&dir, &m.version);

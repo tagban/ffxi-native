@@ -320,8 +320,9 @@ impl Vault {
         let done = AtomicU64::new(0);
         m.files.par_iter().try_for_each(|e| -> Result<()> {
             let dst = out.join(&e.path);
-            if fs::metadata(&dst).map(|md| md.len() == e.size).unwrap_or(false) && sha256_file(&dst).ok().as_deref() == Some(&e.sha256) {
-                // already right
+            if fs::metadata(&dst).map(|md| md.len() == e.size).unwrap_or(false) {
+                // already there: a version put together here before (its files are the vault's
+                // clones, and verify checks them by hash when asked)
             } else {
                 fs::create_dir_all(dst.parent().unwrap()).map_err(err(dst.display()))?;
                 let _ = fs::remove_file(&dst);
@@ -469,6 +470,17 @@ pub fn identify(vault: &Vault, game: &Path) -> Result<Option<Manifest>> {
     Ok(Some(fits.swap_remove(best)))
 }
 
+/// Whether an install is this version: identify's answer, or another version with the very same
+/// files (two names for one version, as when a server publishes the client under its own name).
+pub fn is_version(vault: &Vault, game: &Path, version: &str) -> bool {
+    let (Ok(want), Ok(Some(got))) = (vault.load(version), identify(vault, game)) else { return false };
+    if got.version == version {
+        return true;
+    }
+    let files = |m: &Manifest| m.files.iter().map(|e| (e.path.clone(), e.sha256.clone())).collect::<BTreeSet<_>>();
+    files(&got) == files(&want)
+}
+
 /// Only whether each file is there at its size (identify's first pass).
 fn verify_sizes(game: &Path, m: &Manifest, progress: Progress) -> Check {
     verify(game, m, false, progress).unwrap_or_default()
@@ -614,7 +626,16 @@ pub fn publish(
         progress("publish", done.fetch_add(e.size, Ordering::Relaxed) + e.size, total);
         Ok(())
     })?;
-    let mut index = Index { format: FORMAT.into(), current: current.into(), ..Default::default() };
+    // what the site published before stays (a server can go back to it: set_current), unless
+    // republished here
+    let mut index = fs::read_to_string(out.join("index.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Index>(&t).ok())
+        .unwrap_or_default();
+    index.format = FORMAT.into();
+    index.current = current.into();
+    index.versions.retain(|v| !versions.contains(&v.version));
+    index.packs.retain(|p| !(versions.contains(&p.from) && versions.contains(&p.to)));
     for m in &ms {
         index.versions.push(IndexVersion {
             version: m.version.clone(),
@@ -643,6 +664,22 @@ pub fn publish(
         }
     }
     fs::write(out.join("index.json"), serde_json::to_string_pretty(&index).unwrap()).map_err(err("index.json"))?;
+    Ok(index)
+}
+
+/// Which version a published site's server wants: a rollback, or back again. The version must be
+/// published there already (its manifest and objects stay when a newer one is published).
+pub fn set_current(site: &Path, version: &str) -> Result<Index> {
+    let p = site.join("index.json");
+    let mut index: Index = serde_json::from_str(&fs::read_to_string(&p).map_err(err(p.display()))?).map_err(err(p.display()))?;
+    if !index.versions.iter().any(|v| v.version == version) {
+        let known: Vec<&str> = index.versions.iter().map(|v| v.version.as_str()).collect();
+        return Err(format!("{} does not publish version {version} (it has: {})", site.display(), known.join(", ")));
+    }
+    index.current = version.into();
+    let tmp = p.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(&index).unwrap()).map_err(err(tmp.display()))?;
+    fs::rename(&tmp, &p).map_err(err(p.display()))?;
     Ok(index)
 }
 
