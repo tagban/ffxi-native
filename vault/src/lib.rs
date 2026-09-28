@@ -247,7 +247,7 @@ impl Vault {
     }
 
     /// Puts a file in the store under its hash (a clone on APFS, so free on the same volume).
-    fn put_file(&self, src: &Path, sha: &str) -> Result<()> {
+    pub fn put_file(&self, src: &Path, sha: &str) -> Result<()> {
         let dst = self.object(sha);
         if dst.exists() {
             return Ok(());
@@ -359,6 +359,54 @@ impl Vault {
         }
         Ok(m)
     }
+}
+
+/// The player's folder (USER: each character's macros, key bindings and settings) shared between
+/// their install and a version put together beside it: the copy's is a link to the install's, so
+/// every version plays with the same. Whatever a copy had there already is moved aside, never lost.
+pub fn share_player_dirs(own: &Path, copy: &Path) -> Result<()> {
+    let src = own.join("USER");
+    let dst = copy.join("USER");
+    fs::create_dir_all(&src).map_err(err(src.display()))?;
+    if let (Ok(a), Ok(b)) = (fs::canonicalize(&src), fs::canonicalize(&dst)) {
+        if a == b {
+            return Ok(()); // linked already
+        }
+    }
+    if let Ok(md) = fs::symlink_metadata(&dst) {
+        let empty = md.is_dir() && fs::read_dir(&dst).map(|mut d| d.next().is_none()).unwrap_or(false);
+        if empty {
+            fs::remove_dir(&dst).map_err(err(dst.display()))?;
+        } else if md.file_type().is_symlink() {
+            // a link to somewhere else (an install that moved)
+            let _ = fs::remove_file(&dst).or_else(|_| fs::remove_dir(&dst));
+        } else {
+            let mut aside = copy.join("USER.before-shared");
+            let mut n = 1;
+            while aside.exists() {
+                n += 1;
+                aside = copy.join(format!("USER.before-shared-{n}"));
+            }
+            fs::rename(&dst, &aside).map_err(err(dst.display()))?;
+        }
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&src, &dst).map_err(err(dst.display()))?;
+    #[cfg(windows)]
+    {
+        // a junction: no administrator or developer mode needed, unlike a symbolic link
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&dst)
+            .arg(&src)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            return Err(format!("{}: could not link it to {}", dst.display(), src.display()));
+        }
+    }
+    Ok(())
 }
 
 // --- comparing -----------------------------------------------------------------------------------
@@ -980,6 +1028,100 @@ pub fn fetch_manifest(base: &str, version: &str) -> Result<Manifest> {
     serde_json::from_str(&s).map_err(err(format!("versions/{version}.json")))
 }
 
+// --- bringing an install to a version, in place ----------------------------------------------------
+//
+// For players who run the game from their own install (xiloader, Ashita, Windower) rather than the
+// launcher: the updater changes the install itself, up or down, to the version a server names. Each
+// file it replaces goes into a store first, so going back never depends on a site still hosting it.
+
+/// What update_install did.
+#[derive(Debug, Default)]
+pub struct InstallUpdate {
+    /// files written (new, or replaced)
+    pub written: usize,
+    pub bytes: u64,
+    /// files the version does not have, left where they are (unused by it)
+    pub extra: usize,
+    /// of the objects written, those downloaded (the rest came from the store)
+    pub downloaded: usize,
+}
+
+/// Brings `game` to version `m`: every file of `m` whose content differs is put in place, from the
+/// store when it has it, else from `site` (downloaded into the store first). The file it replaces is
+/// kept in the store. `have` is the install's manifest as it is now (hash_install). Nothing is
+/// changed until everything needed is in the store.
+pub fn update_install(game: &Path, have: &Manifest, m: &Manifest, store: &Vault, site: Option<&str>, progress: Progress) -> Result<InstallUpdate> {
+    let now = have.by_path();
+    let todo: Vec<&Entry> = m.files.iter().filter(|e| now.get(e.path.as_str()).map(|h| h.sha256 != e.sha256).unwrap_or(true)).collect();
+    let wanted: BTreeSet<&str> = m.files.iter().map(|e| e.path.as_str()).collect();
+    let mut r = InstallUpdate { extra: have.files.iter().filter(|e| !wanted.contains(e.path.as_str())).count(), ..Default::default() };
+    // what the store lacks: from another file of the install with that content, else the site
+    let by_sha: BTreeMap<&str, &Entry> = have.files.iter().map(|e| (e.sha256.as_str(), e)).collect();
+    let mut need: BTreeMap<&str, &Entry> = BTreeMap::new();
+    for e in &todo {
+        if store.has(e) {
+            continue;
+        }
+        if let Some(local) = by_sha.get(e.sha256.as_str()) {
+            store.put_file(&game.join(&local.path), &e.sha256)?;
+            continue;
+        }
+        need.insert(&e.sha256, e);
+    }
+    if !need.is_empty() {
+        let Some(base) = site else {
+            return Err(format!("{} files of {} are neither here nor in the backups (the first: {})", need.len(), m.version, need.values().next().unwrap().path));
+        };
+        let total: u64 = need.values().map(|e| e.size).sum();
+        let done = AtomicU64::new(0);
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build().map_err(err("threads"))?;
+        pool.install(|| {
+            need.par_iter().try_for_each(|(sha, e)| -> Result<()> {
+                let url = url_join(base, &format!("objects/{}/{sha}.zst", &sha[..2]));
+                let z = zstd::Decoder::new(get(&url).map_err(|_| {
+                    format!("{} is not on the update server, nor in this PC's backups: it cannot bring version {} here", e.path, m.version)
+                })?)
+                .map_err(err(&url))?;
+                store.put_reader(z, sha)?;
+                progress("download", done.fetch_add(e.size, Ordering::Relaxed) + e.size, total);
+                Ok(())
+            })
+        })?;
+        r.downloaded = need.len();
+    }
+    // everything is here: keep each file that is replaced, then put the version's in place
+    let total: u64 = todo.iter().map(|e| e.size).sum();
+    let mut done = 0;
+    for e in &todo {
+        let dst = game.join(&e.path);
+        if let Some(old) = now.get(e.path.as_str()) {
+            store.put_file(&dst, &old.sha256)?;
+        }
+        fs::create_dir_all(dst.parent().unwrap()).map_err(err(dst.display()))?;
+        let tmp = dst.with_extension("xi-vault-tmp");
+        fs::copy(store.object(&e.sha256), &tmp).map_err(err(dst.display()))?;
+        if sha256_file(&tmp)? != e.sha256 {
+            let _ = fs::remove_file(&tmp);
+            return Err(format!("{}: the copy does not check out; nothing more was changed", e.path));
+        }
+        if let Ok(md) = fs::metadata(&dst) {
+            // a read-only file (Windows installs have some) is replaced too
+            let mut perm = md.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perm.set_readonly(false);
+            let _ = fs::set_permissions(&dst, perm);
+            let _ = fs::remove_file(&dst);
+        }
+        fs::rename(&tmp, &dst).map_err(err(dst.display()))?;
+        done += e.size;
+        r.written += 1;
+        r.bytes += e.size;
+        progress("install", done, total);
+    }
+    store.save(m)?;
+    Ok(r)
+}
+
 // --- what a game server wants --------------------------------------------------------------------
 
 /// What a LandSandBoat server's login server says about the client it wants (xi_connect's
@@ -1085,6 +1227,38 @@ pub fn server_info(server: &str, timeout: std::time::Duration) -> Result<ServerI
     } else {
         format!("{host}:{port}: {text}")
     })
+}
+
+/// Where a server's game versions are looked for when nothing names the address, in order: the
+/// server itself on xi-vault's port, then its update. (or updates.) host, which an operator points
+/// at wherever they host them (a machine at home, say) with a DNS record alone.
+pub fn site_candidates(server: &str) -> Vec<String> {
+    let server = server.trim();
+    if server.is_empty() || server.contains('/') || server.matches(':').count() > 1 {
+        return Vec::new();
+    }
+    let host = server.split(':').next().unwrap_or(server);
+    let port = DEFAULT_PORT;
+    let mut out = vec![format!("http://{host}:{port}")];
+    if host.parse::<std::net::Ipv4Addr>().is_err() && host.contains('.') {
+        out.push(format!("http://update.{host}:{port}"));
+        out.push(format!("https://update.{host}"));
+        out.push(format!("http://updates.{host}:{port}"));
+        out.push(format!("https://updates.{host}"));
+    }
+    out
+}
+
+/// The first of these that answers as an xi-vault site (asked all at once).
+pub fn first_site(candidates: &[String]) -> Option<(String, Index)> {
+    let answers: Vec<_> = candidates
+        .iter()
+        .map(|url| {
+            let url = url.clone();
+            std::thread::spawn(move || fetch_index_within(&url, std::time::Duration::from_millis(1500)).ok().map(|i| (url, i)))
+        })
+        .collect();
+    answers.into_iter().filter_map(|t| t.join().ok().flatten()).next()
 }
 
 /// Which published version is the one a server's CLIENT_VER names: that very name, else the newest

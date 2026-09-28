@@ -223,6 +223,9 @@ It ships the game host (`xi-host`: the runtime, graphics, sound, input and the s
   over the PlayOnline protocol, `launcher/pol/`, hands the host the session value with `--session`,
   and keeps the PlayOnline session up while the game runs). Passwords are kept in the system keychain
   (macOS Keychain, Windows Credential Manager, the Secret Service on Linux), never in the settings file.
+- **Running a server?** [docs/SERVER-OPERATORS.md](docs/SERVER-OPERATORS.md): set up an update
+  server (Windows or Linux), publish each new client version, tell players which version to use,
+  roll back, and hand non-launcher players an updater.
 - **Game versions.** An account can name its server's game updates address (else the launcher looks
   on the server itself, port 54080, then at `update.<server>`, which an operator can point anywhere
   with a DNS record): on Play it brings the version the server wants, downloading only

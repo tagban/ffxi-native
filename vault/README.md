@@ -1,5 +1,7 @@
 # xi-vault: game versions for servers and players
 
+Setting up a server: [docs/SERVER-OPERATORS.md](../docs/SERVER-OPERATORS.md). This is the reference.
+
 `FFXiMain.dll` decides how the DAT files are read, so a **version** is the DLLs and the DATs together.
 `xi-vault` records an install as one version (a manifest of every file's path, size and SHA-256) over a
 content-addressed store, and never mixes the files of two versions. The launcher uses the same library

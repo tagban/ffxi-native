@@ -1,6 +1,7 @@
 # install-server.ps1 [-Exe <xi-vault.exe>] [-Seed <site.zip>] [-Share]: a Windows machine (a VM at home, say) serves game
-# versions to players' launchers. Run in an administrator PowerShell:
-#   powershell -ExecutionPolicy Bypass -File install-server.ps1 -Exe .\ffxi-update-publisher.exe
+# versions to players' launchers. Double-click install-server.cmd beside it (it asks for administrator
+# rights itself); or in PowerShell: powershell -ExecutionPolicy Bypass -File .\install-server.ps1
+# The program (ffxi-update-publisher.exe or xi-vault.exe) and a site-seed-*.zip are found beside it.
 # It puts xi-vault in C:\xi-vault (the update publisher is the same program), the site in
 # C:\xi-vault\site, a task that serves it on port 54080 from startup (as SYSTEM, restarted if it
 # stops), and a firewall rule for the port. -Share also shares the site as \\<this PC>\xi-vault-site
@@ -12,16 +13,25 @@
 # address (DNS), and publish a version: double-click the update publisher on the PC with the game
 # and give it the site folder (vault/README.md).
 param(
-    [string]$Exe = ".\ffxi-update-publisher.exe",
+    [string]$Exe = "",
     [int]$Port = 54080,
     [string]$Seed = "",
     [switch]$Share
 )
 $ErrorActionPreference = "Stop"
+Set-Location -LiteralPath $PSScriptRoot
+# beside this script when not given: the program (either name), and a seed when there is one
+if (-not $Exe) { $Exe = @("ffxi-update-publisher.exe", "xi-vault.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1 }
+if (-not $Seed) { $Seed = Get-ChildItem -Filter "site-seed-*.zip" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
+if (-not $Exe -or -not (Test-Path $Exe)) { throw "No xi-vault program beside this script (give it with -Exe)." }
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw "Run this in an administrator PowerShell."
+    # again as an administrator (Windows asks), in a window that stays open to show the result
+    $again = @("-NoExit", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"", "-Exe", "`"$((Resolve-Path $Exe).Path)`"", "-Port", $Port)
+    if ($Seed) { $again += @("-Seed", "`"$((Resolve-Path $Seed).Path)`"") }
+    if ($Share) { $again += "-Share" }
+    Start-Process powershell -Verb RunAs -ArgumentList $again
+    return
 }
-if (-not (Test-Path $Exe)) { throw "No xi-vault program at $Exe (give it with -Exe)." }
 
 $root = "C:\xi-vault"
 $site = "$root\site"
@@ -29,7 +39,8 @@ New-Item -ItemType Directory -Force -Path $site | Out-Null
 Get-ScheduledTask -TaskName "xi-vault" -ErrorAction SilentlyContinue | Stop-ScheduledTask
 Get-Process -Name "xi-vault" -ErrorAction SilentlyContinue | Stop-Process -Force
 Copy-Item -Force $Exe "$root\xi-vault.exe"
-if ($Seed) {
+# a seed starts a new site only: never over the versions a site publishes already
+if ($Seed -and -not (Test-Path "$site\index.json")) {
     if (-not (Test-Path $Seed)) { throw "No seed at $Seed." }
     Expand-Archive -Force -Path $Seed -DestinationPath $site
 }

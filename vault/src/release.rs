@@ -84,11 +84,11 @@ impl Source {
 }
 
 /// Beside the program (where a double-clicked tool keeps its things), else here.
-fn home() -> PathBuf {
+pub(crate) fn home() -> PathBuf {
     std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn ask(q: &str) -> String {
+pub(crate) fn ask(q: &str) -> String {
     print!("{q} ");
     let _ = std::io::stdout().flush();
     let mut s = String::new();
@@ -97,17 +97,17 @@ fn ask(q: &str) -> String {
     s.trim().trim_matches('"').trim().to_string()
 }
 
-fn yes_no(q: &str, default: bool) -> bool {
+pub(crate) fn yes_no(q: &str, default: bool) -> bool {
     let a = ask(&format!("{q} [{}]", if default { "Y/n" } else { "y/N" })).to_ascii_lowercase();
     if a.is_empty() { default } else { a.starts_with('y') }
 }
 
-fn is_game(p: &Path) -> bool {
+pub(crate) fn is_game(p: &Path) -> bool {
     p.join("FFXiMain.dll").is_file()
 }
 
 /// Where PlayOnline put the game: beside this program, the registry, the usual folders.
-fn find_game() -> Option<PathBuf> {
+pub(crate) fn find_game() -> Option<PathBuf> {
     let mut tries: Vec<PathBuf> = home().ancestors().map(Path::to_path_buf).collect();
     if cfg!(windows) {
         for region in ["PlayOnlineUS", "PlayOnlineEU", "PlayOnline"] {
@@ -129,18 +129,18 @@ fn find_game() -> Option<PathBuf> {
 }
 
 /// "ffxi.cc" -> http://ffxi.cc:54080; an address with a scheme stays as it is.
-fn server_url(s: &str) -> String {
+pub(crate) fn server_url(s: &str) -> String {
     let s = s.trim().trim_end_matches('/');
     if s.contains("://") { s.to_string() } else if s.contains(':') { format!("http://{s}") } else { format!("http://{s}:{DEFAULT_PORT}") }
 }
 
 /// "30260805_0" as numbers, for which is newer.
-fn version_key(v: &str) -> Option<(u64, u64)> {
+pub(crate) fn version_key(v: &str) -> Option<(u64, u64)> {
     let (d, n) = v.split_once('_')?;
     Some((d.parse().ok()?, n.parse().ok()?))
 }
 
-fn rule() {
+pub(crate) fn rule() {
     println!("{}", "-".repeat(72));
 }
 

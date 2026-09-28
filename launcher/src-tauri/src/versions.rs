@@ -204,40 +204,8 @@ pub struct ServerVersion {
     pub game_path: String,
 }
 
-/// Where a server's game versions are looked for when the account names no address, in order: the
-/// server itself on xi-vault's port, then its update. (or updates.) host, which an operator points
-/// at wherever they host them (a machine at home, say) with a DNS record alone.
-fn update_candidates(server: &str) -> Vec<String> {
-    let server = server.trim();
-    if server.is_empty() || server.contains('/') || server.matches(':').count() > 1 {
-        return Vec::new();
-    }
-    let host = server.split(':').next().unwrap_or(server);
-    let port = xi_vault::DEFAULT_PORT;
-    let mut out = vec![format!("http://{host}:{port}")];
-    if host.parse::<std::net::Ipv4Addr>().is_err() && host.contains('.') {
-        out.push(format!("http://update.{host}:{port}"));
-        out.push(format!("https://update.{host}"));
-        out.push(format!("http://updates.{host}:{port}"));
-        out.push(format!("https://updates.{host}"));
-    }
-    out
-}
-
-/// The first of these that answers as an xi-vault site (asked all at once).
-fn discover(candidates: &[String]) -> Option<(String, xi_vault::Index)> {
-    let answers: Vec<_> = candidates
-        .iter()
-        .map(|url| {
-            let url = url.clone();
-            std::thread::spawn(move || xi_vault::fetch_index_within(&url, std::time::Duration::from_millis(1500)).ok().map(|i| (url, i)))
-        })
-        .collect();
-    answers.into_iter().filter_map(|t| t.join().ok().flatten()).next()
-}
-
 /// Where the account's server publishes its game versions: the address it names, else the first
-/// place update_candidates finds one (then remembered). A remembered address that stops answering
+/// place xi_vault::site_candidates finds one (then remembered). A remembered address that stops answering
 /// is looked for again: a server that moved its versions elsewhere.
 fn update_url(app: &AppHandle, account_id: &str) -> Result<(String, xi_vault::Index), String> {
     let cdir = config_dir(app)?;
@@ -252,8 +220,8 @@ fn update_url(app: &AppHandle, account_id: &str) -> Result<(String, xi_vault::In
             Err(e) => Some(e),
         }
     };
-    let candidates: Vec<String> = update_candidates(&account.server).into_iter().filter(|u| *u != saved).collect();
-    match discover(&candidates) {
+    let candidates: Vec<String> = xi_vault::site_candidates(&account.server).into_iter().filter(|u| *u != saved).collect();
+    match xi_vault::first_site(&candidates) {
         Some((url, index)) => {
             account.update_url = url.clone();
             config::save(&cdir, &cfg)?;
@@ -323,6 +291,9 @@ pub fn check_server(app: &AppHandle, account_id: &str) -> Result<ServerVersion, 
         (whole, p.to_string_lossy().into_owned())
     };
     if have {
+        if game_path != cfg.game_path && !cfg.game_path.is_empty() {
+            xi_vault::share_player_dirs(Path::new(&cfg.game_path), Path::new(&game_path))?;
+        }
         // the account plays that version from now on, whichever it played before
         let cdir = config_dir(app)?;
         let mut cfg = config::load(&cdir);
@@ -363,6 +334,9 @@ pub fn update_for_server(app: AppHandle, tasks: Arc<Tasks>, account_id: String) 
         } else {
             let p = install_path(&dir, &m.version);
             vault.materialize(&m.version, &p, progress)?;
+            if !cfg.game_path.is_empty() {
+                xi_vault::share_player_dirs(Path::new(&cfg.game_path), &p)?;
+            }
             p.to_string_lossy().into_owned()
         };
         // the account plays that version from now on

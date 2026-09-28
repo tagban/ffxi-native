@@ -12,9 +12,11 @@
 //!   xi-vault fetch <url> [--version v]                               a version from a site into the vault
 //!   xi-vault release [--game <folder>] [--site <folder> | --server <url> [--upload <ssh login>]] [--current]
 //!                                                                    an updated install to a server (release.rs)
+//!   xi-vault update [--game <folder>] [--server <server>] [--site <url>]  an install to the server's version, in place
 //!   xi-vault server-info <server[:port]>                               a LandSandBoat server's CLIENT_VER, VER_LOCK, UPDATE_URL
 //!   xi-vault apply <site> <bundle.tar> [--current]                   take a release's bundle into a site
-//!   xi-vault                                                         (no arguments: release, asking)
+//!   xi-vault                                                         (no arguments: release, asking; named
+//!                                                                    ffxi-updater: update, asking)
 //!
 //! The vault is --vault <dir>, else XI_VAULT, else ./xi-vault.
 
@@ -26,6 +28,7 @@ use std::time::Instant;
 use xi_vault::*;
 
 mod release;
+mod updater;
 
 #[derive(Parser)]
 #[command(name = "xi-vault", about = "FINAL FANTASY XI client versions: snapshots, diffs, delta packs, a file server")]
@@ -84,6 +87,20 @@ enum Cmd {
         /// hand it out to players once it is on the server
         #[arg(long)]
         current: bool,
+    },
+    /// A player's own install to the version a server wants, up or down, in place (the updater)
+    Update {
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// the game server ("ffxi.cc", or with ":port" for its login server)
+        #[arg(long)]
+        server: Option<String>,
+        /// where its versions are, when the server does not say
+        #[arg(long)]
+        site: Option<String>,
+        /// where replaced files are kept (default: the user's data folder, ffxi-updater)
+        #[arg(long)]
+        store: Option<PathBuf>,
     },
     /// Which client version a LandSandBoat server wants, and where it publishes it (its login server)
     ServerInfo { server: String },
@@ -152,6 +169,12 @@ fn run(cli: Cli) -> Result<()> {
     let p = progress();
     let t = Instant::now();
     let Some(cmd) = cli.cmd else {
+        // double-clicked: the updater when named so (what an operator hands players), else the publisher
+        let name = std::env::current_exe().ok().and_then(|e| e.file_stem().map(|n| n.to_string_lossy().to_lowercase())).unwrap_or_default();
+        if name.contains("updater") {
+            let a = updater::Args { game: None, server: None, site: None, store: None };
+            return updater::update(a, true, &p);
+        }
         let a = release::Args { game: None, server: None, out: None, upload: None, site: None, current: false };
         return release::release(a, true, &p);
     };
@@ -251,6 +274,9 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Release { game, server, out, upload, site, current } => {
             release::release(release::Args { game, server, out, upload, site, current }, false, &p)?;
+        }
+        Cmd::Update { game, server, site, store } => {
+            updater::update(updater::Args { game, server, site, store }, false, &p)?;
         }
         Cmd::ServerInfo { server } => {
             let i = server_info(&server, std::time::Duration::from_secs(5))?;
