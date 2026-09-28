@@ -338,9 +338,9 @@ static void chat_add(Guest* g)
         return;
     uint32_t mode = head && head < 0xF0000000u ? rd32(head) : 0xFFFFFFFFu;
     static int told;
-    if (told < 40)
+    if (told < 0)
     {
-        /* the header's bytes, to learn the modes */
+        /* the header's bytes, to learn the modes (raise the limit to see them) */
         ++told;
         const uint8_t* h = head && head < 0xF0000000u ? GUEST_PTR(head) : NULL;
         rt_log("[recomp] chat: mode %08x head %02x %02x %02x %02x %02x %02x %02x %02x\n", mode, h ? h[0] : 0,
@@ -1050,6 +1050,13 @@ int main(int argc, char** argv)
     d3d8_set_present_hook(present_hook);
     setup_nameplates();
     setup_packets();
+    {
+        /* the auto-translate phrases, for the overlay's chat */
+        char at[1024];
+        snprintf(at, sizeof at, "%s/ROM/76/23.DAT", game);
+        int n = gamestate_load_autotranslate(at);
+        rt_log("[recomp] auto-translate: %d phrases\n", n);
+    }
     user32_key_hook = host_key;
     if (g_live_file[0])
         ws2_lobby_error = launcher_lobby_error;

@@ -2,6 +2,8 @@
  * here only as the overlay needs them. */
 #include "gamestate.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum { HEADER = 28, CHAT_LINES = 64 };
@@ -113,6 +115,82 @@ void gamestate_feed_out(const uint8_t* buf, uint32_t len)
     }
 }
 
+/* The auto-translate dictionary (the install's ROM/76/23.DAT): groups of phrases, each phrase under
+ * the 4-byte key the chat text carries between two 0xFD bytes. A group: its key, its title (32
+ * bytes) and name (32), how many phrases and their bytes; a phrase: its key, then a length and its
+ * text (English groups, key 02 ..), or two (Japanese, 04 ..: the text and its reading). */
+typedef struct
+{
+    uint32_t key;
+    char* text;
+} Phrase;
+static Phrase* g_phrases;
+static int g_nphrases;
+
+static int phrase_cmp(const void* a, const void* b)
+{
+    uint32_t x = ((const Phrase*)a)->key, y = ((const Phrase*)b)->key;
+    return x < y ? -1 : x > y;
+}
+
+static uint32_t key_of(const uint8_t* p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+
+int gamestate_load_autotranslate(const char* path)
+{
+    FILE* f = fopen(path, "rb");
+    if (!f)
+        return 0;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t* d = n > 0 ? (uint8_t*)malloc((size_t)n) : NULL;
+    if (!d || fread(d, 1, (size_t)n, f) != (size_t)n)
+    {
+        fclose(f);
+        free(d);
+        return 0;
+    }
+    fclose(f);
+    int cap = 4096;
+    g_phrases = (Phrase*)malloc(sizeof(Phrase) * (size_t)cap);
+    for (long o = 0; o + 0x4C <= n;)
+    {
+        uint32_t count = (uint32_t)(d[o + 0x44] | d[o + 0x45] << 8 | d[o + 0x46] << 16 | (uint32_t)d[o + 0x47] << 24);
+        uint32_t size = (uint32_t)(d[o + 0x48] | d[o + 0x49] << 8 | d[o + 0x4A] << 16 | (uint32_t)d[o + 0x4B] << 24);
+        int two = d[o] == 0x04; /* Japanese: the text, then its reading */
+        long p = o + 0x4C, end = p + (long)size;
+        if (end > n)
+            break;
+        for (uint32_t i = 0; i < count && p + 5 <= end; ++i)
+        {
+            uint32_t key = key_of(d + p);
+            uint8_t len = d[p + 4];
+            const uint8_t* text = d + p + 5;
+            p += 5 + len;
+            if (two && p < end)
+                p += 1 + d[p];
+            if (g_nphrases == cap)
+                g_phrases = (Phrase*)realloc(g_phrases, sizeof(Phrase) * (size_t)(cap *= 2));
+            g_phrases[g_nphrases].key = key;
+            g_phrases[g_nphrases].text = (char*)malloc((size_t)len + 1);
+            memcpy(g_phrases[g_nphrases].text, text, len);
+            g_phrases[g_nphrases].text[len] = 0;
+            ++g_nphrases;
+        }
+        o = end;
+    }
+    free(d);
+    qsort(g_phrases, (size_t)g_nphrases, sizeof(Phrase), phrase_cmp);
+    return g_nphrases;
+}
+
+static const char* phrase(uint32_t key)
+{
+    Phrase k = { key, NULL };
+    const Phrase* p = g_phrases ? (const Phrase*)bsearch(&k, g_phrases, (size_t)g_nphrases, sizeof(Phrase), phrase_cmp) : NULL;
+    return p ? p->text : NULL;
+}
+
 /* the log's text as plain ASCII: its colour and control codes (0x1E, 0x1F, 0x7F, each with a byte)
  * dropped, auto-translate phrases (0xFD ... 0xFD) as "[AT]", its two-byte characters as '?' */
 static void log_text(char* out, size_t n, const uint8_t* in)
@@ -125,11 +203,18 @@ static void log_text(char* out, size_t n, const uint8_t* in)
             i += in[i + 1] ? 2 : 1;
         else if (c == 0xFD)
         {
+            /* an auto-translate phrase: its key between two 0xFD, shown in braces as the game does */
+            const char* t = in[i + 1] && in[i + 2] && in[i + 3] && in[i + 4] && in[i + 5] == 0xFD ? phrase(key_of(in + i + 1)) : NULL;
             size_t j = i + 1;
             while (j < i + 8 && in[j] && in[j] != 0xFD)
                 ++j;
             i = in[j] == 0xFD ? j + 1 : j;
-            memcpy(out + o, "[AT]", 4), o += 4;
+            if (t)
+                o += (size_t)snprintf(out + o, n - o, "{%s}", t);
+            else
+                memcpy(out + o, "[AT]", 4), o += 4;
+            if (o >= n)
+                o = n - 1;
         }
         else if ((c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC))
             out[o++] = '?', i += in[i + 1] ? 2 : 1;
@@ -141,6 +226,11 @@ static void log_text(char* out, size_t n, const uint8_t* in)
 
 void gamestate_chat_line(uint32_t mode, const uint8_t* text)
 {
+    /* the game adds an NPC's line three times (its dialogue box and its log): the copies have
+     * their third header byte set */
+    if ((mode >> 16 & 0xFF) == 1)
+        return;
+    mode &= 0xFF;
     int i = g_chat_next;
     g_chat[i].kind = (int)mode;
     g_chat[i].sender[0] = 0;

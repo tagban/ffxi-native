@@ -18,10 +18,14 @@ void gamestate_feed_out(const uint8_t* buf, uint32_t len);
 /* A line the game's own chat log shows (host64: its add-a-line), with its mode. */
 void gamestate_chat_line(uint32_t mode, const uint8_t* text);
 
+/* The auto-translate dictionary, from the install (ROM/76/23.DAT): how many phrases, 0 if none. */
+int gamestate_load_autotranslate(const char* path);
+
 /* For the overlay */
 uint32_t gamestate_udp_packets(void);
 uint32_t gamestate_packets(uint16_t id); /* how many of this id have come */
-/* the n-th latest chat line (0 the newest): its kind, sender and text; 0 when there is none */
+/* the n-th latest chat line (0 the newest): its mode (0-255, the game's chat mode), sender and
+ * text; 0 when there is none */
 int gamestate_chat(int n, int* kind, const char** sender, const char** text);
 
 #ifdef __cplusplus
