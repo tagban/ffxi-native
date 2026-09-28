@@ -89,4 +89,9 @@ XI_EXPORT const XiGameModule xi_game_module = {
 #else
     NULL,
 #endif
+#ifdef FFXI_INPUT_LINE
+    FFXI_INPUT_LINE,
+#else
+    0,
+#endif
 };

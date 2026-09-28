@@ -44,6 +44,24 @@ int gamestate_members(GameMember* out, int max);
 /* the player's zone (0 before the first) */
 uint16_t gamestate_zone(void);
 
+/* Who is around (the server's 0x00D and 0x00E, as it sends them for what is in range): position
+ * on the ground (x east, z north; y is height), facing (0-255: 0 east, 64 south, 128 west). */
+enum { ENTITY_PC = 1, ENTITY_NPC = 2 };
+typedef struct
+{
+    uint32_t id;
+    uint16_t index;
+    uint8_t kind;    /* ENTITY_PC, ENTITY_NPC (NPCs and monsters alike) */
+    uint8_t heading;
+    uint8_t hpp;
+    uint8_t claimed; /* a monster someone has claimed */
+    float x, y, z;
+    char name[24];
+} GameEntity;
+int gamestate_entities(GameEntity* out, int max);
+/* the player's own position and facing (their movement packets, and zoning in): 0 before known */
+int gamestate_self(float* x, float* y, float* z, uint8_t* heading);
+
 #ifdef __cplusplus
 }
 #endif

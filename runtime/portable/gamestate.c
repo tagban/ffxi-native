@@ -44,6 +44,7 @@ static void zone_in(const uint8_t* p, uint32_t size);
 static void group_attr(const uint8_t* p, uint32_t size);
 static void group_list(const uint8_t* p, uint32_t size);
 static void group_table(const uint8_t* p, uint32_t size);
+static void entity_update(const uint8_t* p, uint32_t size, int pc);
 
 /* every so often, to the log: what has come (the ids seen most) */
 static void summary(void)
@@ -83,6 +84,8 @@ void gamestate_feed(const uint8_t* buf, uint32_t len)
         case 0x0DF: group_attr(buf + at, size); break;
         case 0x0DD: group_list(buf + at, size); break;
         case 0x0C8: group_table(buf + at, size); break;
+        case 0x00D: entity_update(buf + at, size, 1); break;
+        case 0x00E: entity_update(buf + at, size, 0); break;
         default: break;
         }
         at += size;
@@ -126,6 +129,93 @@ static void name_of(char* out, const uint8_t* in)
     out[i] = 0;
 }
 
+/* --- who is around ------------------------------------------------------------------------------ */
+enum { ENTITIES = 0x900 }; /* the game's own table's size: the index is the entity's place in it */
+static GameEntity g_ents[ENTITIES];
+static struct
+{
+    int known;
+    float x, y, z;
+    uint8_t heading;
+} g_me;
+
+static float f32(const uint8_t* p)
+{
+    uint32_t u = (uint32_t)(p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24);
+    float f;
+    memcpy(&f, &u, 4);
+    return f;
+}
+
+/* 0x00A: a new zone, where the player stands in it; nobody around yet */
+static void zone_entities(const uint8_t* p)
+{
+    memset(g_ents, 0, sizeof g_ents);
+    g_me.heading = p[0x0B];
+    g_me.x = f32(p + 0x0C), g_me.y = f32(p + 0x10), g_me.z = f32(p + 0x14);
+    g_me.known = 1;
+}
+
+/* 0x00D (another player) and 0x00E (an NPC or monster): the id, its index, which parts this update
+ * carries (0x01 position, 0x04 HP and state, 0x08 name, 0x20 gone), facing, position, HP%, the
+ * claim (0x00E), the name (0x00E at 0x34, 0x00D at 0x5A) */
+static void entity_update(const uint8_t* p, uint32_t size, int pc)
+{
+    if (size < 0x20)
+        return;
+    uint32_t id = u32(p + 0x04);
+    uint16_t index = u16(p + 0x08);
+    uint8_t parts = p[0x0A];
+    if (!id || index >= ENTITIES || id == g_self)
+        return;
+    GameEntity* e = &g_ents[index];
+    if (parts & 0x20)
+    {
+        memset(e, 0, sizeof *e);
+        return;
+    }
+    if (e->id != id)
+    {
+        memset(e, 0, sizeof *e);
+        e->id = id, e->index = index, e->hpp = 100;
+    }
+    e->kind = pc ? ENTITY_PC : ENTITY_NPC;
+    if (parts & 0x01)
+    {
+        e->heading = p[0x0B];
+        e->x = f32(p + 0x0C), e->y = f32(p + 0x10), e->z = f32(p + 0x14);
+    }
+    if (parts & 0x04)
+    {
+        e->hpp = p[0x1E];
+        if (!pc && size >= 0x30)
+            e->claimed = u32(p + 0x2C) != 0;
+    }
+    uint32_t at = pc ? 0x5A : 0x34;
+    if ((parts & 0x08) && size > at)
+    {
+        uint32_t i = 0;
+        for (; i + 1 < sizeof e->name && at + i < size && p[at + i] >= 0x20 && p[at + i] < 0x7F; ++i)
+            e->name[i] = (char)p[at + i];
+        e->name[i] = 0;
+    }
+}
+
+int gamestate_entities(GameEntity* out, int max)
+{
+    int n = 0;
+    for (int i = 0; i < ENTITIES && n < max; ++i)
+        if (g_ents[i].id && g_ents[i].kind)
+            out[n++] = g_ents[i];
+    return n;
+}
+
+int gamestate_self(float* x, float* y, float* z, uint8_t* heading)
+{
+    *x = g_me.x, *y = g_me.y, *z = g_me.z, *heading = g_me.heading;
+    return g_me.known;
+}
+
 /* 0x00A, zoning in: the player's id (and name, at 0x84), the zone */
 static void zone_in(const uint8_t* p, uint32_t size)
 {
@@ -133,6 +223,7 @@ static void zone_in(const uint8_t* p, uint32_t size)
         return;
     g_self = u32(p + 0x04);
     g_zone = u16(p + 0x30);
+    zone_entities(p);
     GameMember* m = member(g_self);
     if (m)
     {
@@ -241,6 +332,14 @@ void gamestate_feed_out(const uint8_t* buf, uint32_t len)
         uint32_t id = (buf[at] | buf[at + 1] << 8) & 0x1FF, size = 2u * (buf[at + 1] & 0xFEu);
         if (size < 4 || at + size > len)
             break;
+        if (id == 0x015 && size >= 0x18)
+        {
+            /* the player's position report: x, height, z, and facing at 0x14 */
+            const uint8_t* p = buf + at;
+            g_me.x = f32(p + 0x04), g_me.y = f32(p + 0x08), g_me.z = f32(p + 0x0C);
+            g_me.heading = p[0x14];
+            g_me.known = 1;
+        }
         if (0 && id == 0x0B5 && size > 6) /* the game's log has the player's lines too */
         {
             int i = g_chat_next;

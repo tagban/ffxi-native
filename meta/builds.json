@@ -14,7 +14,8 @@
       "version": "30260805_0",
       "addresses": {
         "chars_ptr": "0x104df7b0",
-        "present_site": "0x100035cb"
+        "present_site": "0x100035cb",
+        "input_line": "0x10080dd0"
       },
       "hooks": {
         "packet_in": "0x100dd803",
@@ -51,7 +52,8 @@
       "version": "30260903_0",
       "addresses": {
         "chars_ptr": "0x104df770",
-        "present_site": "0x100035cb"
+        "present_site": "0x100035cb",
+        "input_line": "0x10080dc0"
       },
       "hooks": {
         "nameplate_scale": "0x100863d6",

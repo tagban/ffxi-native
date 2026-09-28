@@ -1,8 +1,10 @@
 # The overlay: a cleaner interface over the game
 
 A layer the game host draws over FINAL FANTASY XI: windows that show what the game knows, more
-clearly, at the screen's full resolution. Display only: **the overlay never sends anything to the
-server and never presses keys for the player.** No automation, by design, on every server.
+clearly, at the screen's full resolution, and that can stand in for the game's own. **No
+automation, by design, on every server: the overlay does something only when the player clicks or
+types it, one command per action, through the game's own command parser** (the one its input line
+and its own menus use), exactly as if they had typed it.
 
 ## What it is made of
 
@@ -48,42 +50,41 @@ server and never presses keys for the player.** No automation, by design, on eve
 ## Where it stands (2026-09-28)
 
 - **Phase 1 done**: ImGui over the game on Metal, after MetalFX, crisp at 4K; Cmd+U / Ctrl+Shift+U;
-  clicks and keys routed; layout kept. The Status window.
+  clicks and keys routed; layout kept.
 - **Phase 2 underway**: three read-only hooks, found in each build by the byte patterns Ashita
   publishes (Ashita's own file is not copied; the addresses go in meta/builds.json):
   - `packet_in`: the success return of the game's decrypt-and-decompress: every server packet,
-    readable. Parsed now: zone-in (0x00A), party (0x0DD, 0x0DF, 0x0C8).
-  - `packet_out`: the entry of its encrypt: the player's own packets in the clear.
+    readable. Parsed now: zone-in (0x00A), party (0x0DD, 0x0DF, 0x0C8), who is around (0x00D, 0x00E).
+  - `packet_out`: the entry of its encrypt: the player's own packets in the clear (their position,
+    0x015).
   - `chat_add`: the entry of its add-a-line-to-the-log: every line the log shows (NPCs, system,
     battle, chat), with its mode. The game's own event-script interpreter was also found
     (0x100bc290), for dialogue later.
-- **Windows**: Chat (tabs by kind, words, the game's colors changeable, auto-translate phrases
-  from the install's dictionary), Party (HP, MP, TP, jobs).
+- **The player's commands**: `input_line` ("addresses"), the game's parser of a typed line
+  (cdecl: the line, and 1 for typed). Its own menus build lines such as `/magic "%s" %d` and run
+  them through it; the overlay's chat box does the same.
+- **Windows**: Overlay (which windows, text sizes), Chat (tabs by kind, words, the game's colors
+  changeable, auto-translate phrases, a box to send from), Party (compact, like the game's), Map
+  (a radar: who is around, a compass, facing up or north up), Performance.
 
-## Menus: the decision to make
+## Menus: decided
 
-The game's menus (equipment, inventory, status, magic, the auction house...) are the harder part,
-and the rule above matters most there. Three ways, which can be combined:
+The choice was between (1) the game's menus drawn sharper, (2) display-only companion windows, and
+(3) replacement windows that act. **3, with 1 and 2 where they fit**: the overlay's windows may
+stand in for the game's, and each is a switch, so a player can keep the game's own interface or
+use the overlay's, piece by piece. Every action goes through `input_line` as the player's own
+command, one per click, never on its own.
 
-1. **The game's menus, looking better.** They stay the game's (all their logic, nothing new sent),
-   drawn sharper: higher-resolution interface textures and fonts (the host's `--textures` packs and
-   DAT overlays already do this), the interface at its own scale (the menu resolution). No risk.
-2. **Companion windows, display only.** New windows beside the game's menus that only show:
-   inventory across every bag with search and sort, equipment sets, what a piece of gear does,
-   status effects with their time left, the party's buffs. The game's menus stay for doing things.
-   Within the rules as they are.
-3. **Replacement menus that act.** New windows that also do things (equip this, use that, move
-   an item). Every action would go through the game itself, as the player's own command
-   (the same as typing `/equip` in the game's input line), one per click, never on its own: no
-   automation. But it is no longer display only, so it needs the rule changed for it, and servers
-   told what it does.
-
-The suggestion: 1 and 2 now; 3 only after deciding it, menu by menu.
+Next, in order: hiding the game's own window where the overlay's replaces it (party list, chat log),
+the zone's map art under the radar, nameplates in the overlay's fonts (from the game's view and
+projection, which the host sees in its Direct3D calls), then equipment and inventory.
 
 ## Rules
 
-- Display only: no packet is sent, no key pressed, no game memory written, by the overlay or any
-  addon. Servers can ask players to turn it off; the launcher can do that per account.
+- Nothing on its own: the overlay sends a command only when the player clicks or types it, and only
+  through the game's own command parser; it writes no packet of its own and presses no key. Addons
+  (phase 5) stay read only. Servers can ask players to turn it off; the launcher can do that per
+  account.
 - It adds nothing when hidden: the game runs as without it.
 - No Square Enix bytes in the repository, as everywhere: fonts are open-licensed, map data comes
   from the player's own install at run time.

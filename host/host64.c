@@ -349,8 +349,39 @@ static void chat_add(Guest* g)
     gamestate_chat_line(mode, GUEST_PTR(text));
 }
 
+#if defined(FFXI_INPUT_LINE)
+#define INPUT_LINE FFXI_INPUT_LINE
+#elif defined(XI_SPLIT)
+#define INPUT_LINE (xi_game->size >= offsetof(XiGameModule, input_line) + sizeof(uint32_t) ? xi_game->input_line : 0u)
+#else
+#define INPUT_LINE 0u
+#endif
+
+/* A line from the overlay (its chat box, or a window's button, on the player's click): through the
+ * game's own parser of a typed line, as if typed in its input line: its /commands, or chat. The
+ * game's own menus run their commands the same way. On the game's thread (the overlay's frame). */
+static int run_line(const char* line)
+{
+    static uint32_t buf;
+    uint32_t fn = INPUT_LINE;
+    if (!fn || !line || !line[0])
+        return 0;
+    if (!buf && !(buf = gheap_alloc(512, 1)))
+        return 0;
+    size_t n = strlen(line);
+    if (n > 255)
+        n = 255;
+    memcpy(GUEST_PTR(buf), line, n);
+    GUEST_PTR(buf)[n] = 0;
+    uint32_t args[2] = { buf, 1 /* typed */ };
+    guest_call(fn, 2, args);
+    return 1;
+}
+
 static void setup_packets(void)
 {
+    if (INPUT_LINE)
+        overlay_set_line_runner(run_line);
     GuestFn* ca = CHAT_ADD_HOOK;
     if (ca)
         *ca = chat_add;

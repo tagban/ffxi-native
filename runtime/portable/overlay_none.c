@@ -10,3 +10,4 @@ void overlay_note_present(int frame_w, int frame_h, int screen_w, int screen_h, 
     (void)frame_w, (void)frame_h, (void)screen_w, (void)screen_h, (void)metalfx, (void)fps;
 }
 void overlay_build_frame(void) {}
+void overlay_set_line_runner(int (*run)(const char* line)) { (void)run; }

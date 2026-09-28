@@ -53,6 +53,9 @@ typedef struct XiGameModule
     GuestFn* hook_packet_out;
     /* the entry of the game's add-a-line-to-the-chat-log ("chat_add"): every line its log shows */
     GuestFn* hook_chat_add;
+    /* the game's parser of a typed line ("addresses" input_line; 0 when unknown): cdecl, the line
+     * and how it came (1: typed). Its own menus run their commands through it too. */
+    uint32_t input_line;
 } XiGameModule;
 
 /* The one symbol a module exports. */

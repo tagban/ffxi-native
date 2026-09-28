@@ -3,6 +3,8 @@
 #include "overlay.h"
 #include "gamestate.h"
 
+#include <float.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -16,6 +18,18 @@ extern "C" int dsound_in_world(void);
 
 static bool g_ready, g_shown;
 static void chat_register(void);
+static void overlay_register(void);
+static int (*g_run_line)(const char* line); /* host64: the game's parser of a typed line */
+
+/* The player's choices, kept in overlay.ini ([Overlay][Settings]) */
+static struct
+{
+    bool chat = true, party = true, map = true, status = false;
+    float ui_size = 15.0f;   /* the windows' text */
+    float chat_size = 15.0f; /* the chat's lines */
+    float map_range = 50.0f; /* yalms from the middle to the edge */
+    bool map_north_up = false, map_names = false;
+} g_set;
 static char g_ini[1024];
 static struct
 {
@@ -64,6 +78,7 @@ extern "C" void overlay_init(SDL_Window* window)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     chat_register(); /* before overlay.ini is read */
+    overlay_register();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = g_ini[0] ? g_ini : NULL; /* where its windows were, kept between sessions */
     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange; /* the game's cursor stays the game's */
@@ -82,6 +97,11 @@ extern "C" void overlay_init(SDL_Window* window)
     st.WindowBorderSize = 1.0f;
     st.Colors[ImGuiCol_WindowBg].w = 0.82f; /* the world shows through a little */
     g_ready = true;
+}
+
+extern "C" void overlay_set_line_runner(int (*run)(const char* line))
+{
+    g_run_line = run;
 }
 
 extern "C" int overlay_shown(void)
@@ -131,21 +151,85 @@ extern "C" int overlay_event(const SDL_Event* e)
     }
 }
 
-/* What the host knows now, before the game-state feed (docs/OVERLAY.md, phase 2) */
-static void status_window(void)
+/* [Overlay][Settings] in overlay.ini: which windows, the text sizes, the map's */
+static void* overlay_ini_open(ImGuiContext*, ImGuiSettingsHandler*, const char*) { return (void*)1; }
+
+static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const char* line)
+{
+    int v;
+    float f;
+    if (sscanf(line, "chat=%d", &v) == 1) g_set.chat = v != 0;
+    else if (sscanf(line, "party=%d", &v) == 1) g_set.party = v != 0;
+    else if (sscanf(line, "map=%d", &v) == 1) g_set.map = v != 0;
+    else if (sscanf(line, "status=%d", &v) == 1) g_set.status = v != 0;
+    else if (sscanf(line, "ui_size=%f", &f) == 1 && f >= 10 && f <= 32) g_set.ui_size = f;
+    else if (sscanf(line, "chat_size=%f", &f) == 1 && f >= 10 && f <= 32) g_set.chat_size = f;
+    else if (sscanf(line, "map_range=%f", &f) == 1 && f >= 10 && f <= 250) g_set.map_range = f;
+    else if (sscanf(line, "map_north_up=%d", &v) == 1) g_set.map_north_up = v != 0;
+    else if (sscanf(line, "map_names=%d", &v) == 1) g_set.map_names = v != 0;
+}
+
+static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextBuffer* out)
+{
+    out->appendf("[%s][Settings]\n", h->TypeName);
+    out->appendf("chat=%d\nparty=%d\nmap=%d\nstatus=%d\n", g_set.chat, g_set.party, g_set.map, g_set.status);
+    out->appendf("ui_size=%g\nchat_size=%g\nmap_range=%g\n", g_set.ui_size, g_set.chat_size, g_set.map_range);
+    out->appendf("map_north_up=%d\nmap_names=%d\n\n", g_set.map_north_up, g_set.map_names);
+}
+
+static void overlay_register(void)
+{
+    ImGuiSettingsHandler h;
+    h.TypeName = "Overlay";
+    h.TypeHash = ImHashStr("Overlay");
+    h.ReadOpenFn = overlay_ini_open;
+    h.ReadLineFn = overlay_ini_line;
+    h.WriteAllFn = overlay_ini_write;
+    ImGui::AddSettingsHandler(&h);
+}
+
+/* The overlay's own window: which windows show, text sizes, and what the host knows */
+static void overlay_window(void)
 {
     ImGui::SetNextWindowPos(ImVec2(24, 24), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Status"))
+    ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowCollapsed(true, ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Overlay"))
+    {
+        bool dirty = false;
+        ImGui::TextDisabled("Windows");
+        dirty |= ImGui::Checkbox("Chat", &g_set.chat);
+        ImGui::SameLine(100);
+        dirty |= ImGui::Checkbox("Party", &g_set.party);
+        ImGui::SameLine(190);
+        dirty |= ImGui::Checkbox("Map", &g_set.map);
+        dirty |= ImGui::Checkbox("Performance", &g_set.status);
+        ImGui::Separator();
+        ImGui::TextDisabled("Text size");
+        ImGui::SetNextItemWidth(-60);
+        dirty |= ImGui::SliderFloat("Windows##size", &g_set.ui_size, 11, 24, "%.0f");
+        ImGui::SetNextItemWidth(-60);
+        dirty |= ImGui::SliderFloat("Chat##size", &g_set.chat_size, 10, 28, "%.0f");
+        ImGui::Separator();
+        ImGui::TextDisabled("%s shows and hides the overlay", TOGGLE_NAME);
+        if (dirty)
+            ImGui::MarkIniSettingsDirty();
+    }
+    ImGui::End();
+}
+
+/* What the host knows now: the frame rate and sizes */
+static void status_window(void)
+{
+    ImGui::SetNextWindowPos(ImVec2(24, 240), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(240, 0), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Performance", &g_set.status, ImGuiWindowFlags_AlwaysAutoResize))
     {
         ImGui::Text("%.0f FPS", g_present.fps);
-        ImGui::Separator();
         ImGui::Text("Frame  %d x %d", g_present.frame_w, g_present.frame_h);
         ImGui::Text("Screen %d x %d", g_present.screen_w, g_present.screen_h);
         ImGui::Text("MetalFX %s", g_present.metalfx ? "upscaling" : "off");
         ImGui::Text("%s", dsound_in_world() ? "In the world" : "Title and login screens");
-        ImGui::Separator();
-        ImGui::TextDisabled("%s shows and hides the overlay", TOGGLE_NAME);
     }
     ImGui::End();
 }
@@ -371,7 +455,9 @@ static void color_editor(void)
 
 static void chat_lines(const Tab& t)
 {
-    ImGui::BeginChild("lines");
+    float box = g_run_line ? ImGui::GetFrameHeightWithSpacing() : 0.0f;
+    ImGui::BeginChild("lines", ImVec2(0, -box));
+    ImGui::PushFont(NULL, g_set.chat_size / ImGui::GetStyle().FontScaleMain); /* its own size, whatever the windows' */
     int mode, n = 0;
     const char *sender, *text;
     while (gamestate_chat(n, &mode, &sender, &text))
@@ -391,7 +477,57 @@ static void chat_lines(const Tab& t)
         }
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f)
         ImGui::SetScrollHereY(1.0f);
+    ImGui::PopFont();
     ImGui::EndChild();
+}
+
+/* The chat box: a line to the game, as if typed in its input line. Chat goes to the channel chosen
+ * beside it; a line that starts with / is the game's command as it is (/tell, /equip, /ma...). */
+static const struct
+{
+    const char *name, *prefix;
+} SEND_TO[] = {
+    { "Say", "/s " }, { "Party", "/p " }, { "Linkshell", "/l " }, { "Linkshell 2", "/l2 " },
+    { "Shout", "/sh " }, { "Yell", "/yell " }, { "Tell", "/t " }, { "Emote", "/em " },
+};
+static int g_send_to;
+static char g_send[256];
+static bool g_send_refocus;
+
+static void chat_box(void)
+{
+    if (!g_run_line)
+        return;
+    ImGui::SetNextItemWidth(ImGui::CalcTextSize("Linkshell 2").x + ImGui::GetFrameHeight() + 12.0f);
+    if (ImGui::BeginCombo("##to", SEND_TO[g_send_to].name))
+    {
+        for (int i = 0; i < (int)(sizeof SEND_TO / sizeof *SEND_TO); ++i)
+            if (ImGui::Selectable(SEND_TO[i].name, i == g_send_to))
+                g_send_to = i;
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1);
+    if (g_send_refocus)
+    {
+        ImGui::SetKeyboardFocusHere();
+        g_send_refocus = false;
+    }
+    const char* hint = g_send_to == 6 ? "name, then the message" : "Type here; Enter sends, Esc leaves";
+    if (ImGui::InputTextWithHint("##send", hint, g_send, sizeof g_send, ImGuiInputTextFlags_EnterReturnsTrue))
+    {
+        const char* t = g_send;
+        while (*t == ' ')
+            ++t;
+        if (*t)
+        {
+            char line[300];
+            snprintf(line, sizeof line, "%s%s", *t == '/' ? "" : SEND_TO[g_send_to].prefix, t);
+            g_run_line(line);
+        }
+        g_send[0] = 0;
+        g_send_refocus = true; /* stay in the box for the next line */
+    }
 }
 
 static void chat_window(void)
@@ -399,7 +535,7 @@ static void chat_window(void)
     chat_defaults();
     ImGui::SetNextWindowPos(ImVec2(24, 220), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(560, 280), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Chat"))
+    if (ImGui::Begin("Chat", &g_set.chat))
     {
         if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_FittingPolicyScroll))
         {
@@ -418,6 +554,7 @@ static void chat_window(void)
                 if (open)
                 {
                     chat_lines(g_tabs[i]);
+                    chat_box();
                     ImGui::EndTabItem();
                 }
                 ImGui::PopID();
@@ -446,72 +583,230 @@ static const char* job_name(int j)
     return j > 0 && j < (int)(sizeof JOBS / sizeof *JOBS) ? JOBS[j] : "";
 }
 
-/* a bar with its number on it */
-static void bar(float fraction, ImU32 color, const char* label, float width)
+/* a thin bar, drawn where the cursor is, the width it is given */
+static void thin_bar(float fraction, ImU32 color, float width, float height)
 {
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, color);
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(40, 40, 48, 220));
-    ImGui::ProgressBar(fraction < 0 ? 0 : fraction > 1 ? 1 : fraction, ImVec2(width, 0), label);
-    ImGui::PopStyleColor(2);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    fraction = fraction < 0 ? 0 : fraction > 1 ? 1 : fraction;
+    dl->AddRectFilled(a, ImVec2(a.x + width, a.y + height), IM_COL32(20, 20, 26, 200), 1.5f);
+    if (fraction > 0)
+        dl->AddRectFilled(a, ImVec2(a.x + width * fraction, a.y + height), color, 1.5f);
+    ImGui::Dummy(ImVec2(width, height));
 }
 
+/* The party the way the game lays it out, small: per member a name with HP, MP and TP, and thin
+ * HP and MP bars under it. Job and zone on hover. */
 static void party_window(void)
 {
     GameMember m[18];
     int n = gamestate_members(m, 18);
     ImGui::SetNextWindowPos(ImVec2(24, 520), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Party"))
+    ImGui::SetNextWindowSizeConstraints(ImVec2(160, 0), ImVec2(600, FLT_MAX));
+    /* its width is the player's; its height always fits who is in it */
+    if (ImGuiWindow* pw = ImGui::FindWindowByName("Party"))
+        ImGui::SetNextWindowSize(ImVec2(pw->SizeFull.x, 0));
+    else
+        ImGui::SetNextWindowSize(ImVec2(230, 0), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowBgAlpha(0.55f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1));
+    if (ImGui::Begin("Party", &g_set.party, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse))
     {
         if (!n)
-            ImGui::TextDisabled("Nobody yet: the party appears as the server tells it");
+            ImGui::TextDisabled("Party");
         uint16_t here = gamestate_zone();
+        float w = ImGui::GetContentRegionAvail().x;
         for (int i = 0; i < n; ++i)
         {
             const GameMember& p = m[i];
             if (i && p.party != m[i - 1].party)
-                ImGui::Separator(); /* the alliance's other parties */
+                ImGui::Dummy(ImVec2(0, 5)); /* the alliance's other parties */
+            else if (i)
+                ImGui::Dummy(ImVec2(0, 2));
             bool away = here && p.zone && p.zone != here;
-            ImGui::PushStyleColor(ImGuiCol_Text, away ? IM_COL32(150, 150, 150, 255) : IM_COL32(255, 255, 255, 255));
-            ImGui::Text("%s%s", p.leader ? "* " : "", p.name[0] ? p.name : "(you)");
+            ImGui::BeginGroup();
+            ImGui::PushStyleColor(ImGuiCol_Text, away ? IM_COL32(140, 140, 140, 255) : IM_COL32(255, 255, 255, 255));
+            ImGui::Text("%s%s", p.name[0] ? p.name : "You", p.leader ? " *" : "");
             ImGui::PopStyleColor();
-            if (p.mjob)
-            {
-                ImGui::SameLine();
-                if (p.sjob)
-                    ImGui::TextDisabled("%s %d / %s %d", job_name(p.mjob), p.mjob_lv, job_name(p.sjob), p.sjob_lv);
-                else
-                    ImGui::TextDisabled("%s %d", job_name(p.mjob), p.mjob_lv);
-            }
-            if (away)
-            {
-                ImGui::SameLine();
-                ImGui::TextDisabled("(elsewhere)");
-            }
-            float w = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2) / 3.0f;
+            /* HP, MP and TP, right-aligned on the name's line */
             char hp[16], mp[16], tp[16];
             snprintf(hp, sizeof hp, "%u", p.hp);
             snprintf(mp, sizeof mp, "%u", p.mp);
             snprintf(tp, sizeof tp, "%u", p.tp);
-            bar(p.hpp / 100.0f, IM_COL32(80, 200, 110, 255), hp, w);
-            ImGui::SameLine();
-            bar(p.mpp / 100.0f, IM_COL32(215, 110, 190, 255), mp, w);
-            ImGui::SameLine();
-            bar(p.tp / 3000.0f, IM_COL32(110, 170, 255, 255), tp, w);
+            float col = ImGui::CalcTextSize("00000").x;
+            float x0 = ImGui::GetCursorPosX();
+            ImGui::SameLine(x0 + w - col * 3 - 8);
+            ImGui::TextColored(ImVec4(0.55f, 0.9f, 0.6f, 1), "%*s", 5, hp);
+            ImGui::SameLine(x0 + w - col * 2 - 4);
+            ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.85f, 1), "%*s", 5, mp);
+            ImGui::SameLine(x0 + w - col);
+            ImGui::TextColored(p.tp >= 1000 ? ImVec4(0.55f, 0.8f, 1, 1) : ImVec4(0.45f, 0.55f, 0.7f, 1), "%*s", 5, tp);
+            float h = ImMax(3.0f, ImGui::GetFontSize() * 0.28f);
+            thin_bar(p.hpp / 100.0f, p.hpp <= 25 ? IM_COL32(230, 80, 70, 255) : p.hpp <= 50 ? IM_COL32(230, 190, 70, 255) : IM_COL32(90, 200, 110, 255), w, h);
+            thin_bar(p.mpp / 100.0f, IM_COL32(210, 110, 190, 255), w, h * 0.75f);
+            ImGui::EndGroup();
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::BeginTooltip();
+                if (p.mjob && p.sjob)
+                    ImGui::Text("%s %d / %s %d", job_name(p.mjob), p.mjob_lv, job_name(p.sjob), p.sjob_lv);
+                else if (p.mjob)
+                    ImGui::Text("%s %d", job_name(p.mjob), p.mjob_lv);
+                ImGui::Text("HP %u (%u%%)  MP %u (%u%%)  TP %u", p.hp, p.hpp, p.mp, p.mpp, p.tp);
+                if (away)
+                    ImGui::TextDisabled("In another area");
+                ImGui::EndTooltip();
+            }
         }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
+
+/* --- the map ------------------------------------------------------------------------------------- */
+/* A radar of who is around (the server's updates, gamestate.c): the player in the middle, facing up
+ * (or north up), a compass ring, a dot per player, NPC and monster; the name on hover. The mouse
+ * wheel zooms. The zone's own map art under it is to come. */
+static void map_window(void)
+{
+    ImGui::SetNextWindowPos(ImVec2(1200, 24), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(260, 280), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowBgAlpha(0.0f);
+    if (!ImGui::Begin("Map", &g_set.map, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+    {
+        ImGui::End();
+        return;
+    }
+    float me_x, me_y, me_z;
+    uint8_t me_h;
+    bool known = gamestate_self(&me_x, &me_y, &me_z, &me_h) != 0;
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    float side = ImMax(60.0f, ImMin(avail.x, avail.y));
+    ImVec2 at = ImGui::GetCursorScreenPos();
+    ImVec2 c(at.x + avail.x * 0.5f, at.y + side * 0.5f);
+    float r = side * 0.5f - 2.0f;
+    ImGui::InvisibleButton("radar", ImVec2(avail.x, side));
+    bool hovered = ImGui::IsItemHovered();
+    if (hovered && ImGui::GetIO().MouseWheel != 0.0f)
+    {
+        g_set.map_range = ImClamp(g_set.map_range * (ImGui::GetIO().MouseWheel > 0 ? 0.8f : 1.25f), 10.0f, 250.0f);
+        ImGui::MarkIniSettingsDirty();
+    }
+    if (ImGui::BeginPopupContextItem("map"))
+    {
+        if (ImGui::MenuItem("North up", NULL, &g_set.map_north_up))
+            ImGui::MarkIniSettingsDirty();
+        if (ImGui::MenuItem("Names", NULL, &g_set.map_names))
+            ImGui::MarkIniSettingsDirty();
+        ImGui::EndPopup();
+    }
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddCircleFilled(c, r, IM_COL32(12, 16, 22, 190), 64);
+    dl->AddCircle(c, r * 0.5f, IM_COL32(255, 255, 255, 28), 48);
+    dl->AddCircle(c, r, IM_COL32(255, 255, 255, 70), 64, 1.5f);
+
+    /* the world (x east, z north) to the radar: facing up, or north up. Facing 0 is east and grows
+     * clockwise (64 south), so facing t looks along (cos t, -sin t). */
+    float t = me_h * (IM_PI * 2.0f / 256.0f);
+    float ct = cosf(t), st = sinf(t);
+    float scale = r / g_set.map_range;
+    auto to_screen = [&](float dx, float dz) {
+        if (g_set.map_north_up)
+            return ImVec2(c.x + dx * scale, c.y - dz * scale);
+        float fwd = dx * ct - dz * st, right = -dx * st - dz * ct;
+        return ImVec2(c.x + right * scale, c.y - fwd * scale);
+    };
+
+    /* the compass ring's letters */
+    static const struct { const char* l; float dx, dz; } DIRS[] = { { "N", 0, 1 }, { "E", 1, 0 }, { "S", 0, -1 }, { "W", -1, 0 } };
+    for (const auto& d : DIRS)
+    {
+        ImVec2 p = to_screen(d.dx * g_set.map_range * 0.9f, d.dz * g_set.map_range * 0.9f);
+        ImVec2 ts = ImGui::CalcTextSize(d.l);
+        dl->AddText(ImVec2(p.x - ts.x * 0.5f, p.y - ts.y * 0.5f), d.l[0] == 'N' ? IM_COL32(255, 110, 90, 255) : IM_COL32(220, 220, 220, 200), d.l);
+    }
+
+    static GameEntity ents[0x900];
+    int n = known ? gamestate_entities(ents, 0x900) : 0;
+    GameMember party[18];
+    int np = gamestate_members(party, 18);
+    const GameEntity* near_one = NULL;
+    float near_d = 64.0f;
+    ImVec2 mouse = ImGui::GetIO().MousePos;
+    dl->PushClipRect(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), true);
+    for (int i = 0; i < n; ++i)
+    {
+        const GameEntity& e = ents[i];
+        float dx = e.x - me_x, dz = e.z - me_z;
+        if (dx * dx + dz * dz > g_set.map_range * g_set.map_range)
+            continue;
+        bool in_party = false;
+        for (int k = 0; k < np && !in_party; ++k)
+            in_party = party[k].id == e.id;
+        ImU32 col = e.kind == ENTITY_PC ? (in_party ? IM_COL32(90, 230, 255, 255) : IM_COL32(110, 150, 255, 255))
+                  : e.claimed           ? IM_COL32(240, 80, 70, 255)
+                  : e.hpp == 0          ? IM_COL32(120, 120, 120, 200)
+                                        : IM_COL32(235, 205, 95, 255);
+        ImVec2 p = to_screen(dx, dz);
+        dl->AddCircleFilled(p, e.kind == ENTITY_PC ? 3.5f : 3.0f, col, 10);
+        if (g_set.map_names && e.name[0])
+            dl->AddText(ImVec2(p.x + 5, p.y - ImGui::GetFontSize() * 0.5f), IM_COL32(230, 230, 230, 200), e.name);
+        float md = (p.x - mouse.x) * (p.x - mouse.x) + (p.y - mouse.y) * (p.y - mouse.y);
+        if (hovered && md < near_d)
+            near_d = md, near_one = &e;
+    }
+    dl->PopClipRect();
+
+    /* the player: an arrow the way they face */
+    {
+        float a = g_set.map_north_up ? t : 0.0f; /* screen angle of facing: up is facing when not north up */
+        ImVec2 fwd = g_set.map_north_up ? ImVec2(cosf(a), sinf(a)) : ImVec2(0, -1); /* east is +x; t grows clockwise = +y down */
+        ImVec2 side_v(-fwd.y, fwd.x);
+        float L = 7.0f;
+        ImVec2 tip(c.x + fwd.x * L, c.y + fwd.y * L);
+        ImVec2 b1(c.x - fwd.x * L * 0.6f + side_v.x * L * 0.6f, c.y - fwd.y * L * 0.6f + side_v.y * L * 0.6f);
+        ImVec2 b2(c.x - fwd.x * L * 0.6f - side_v.x * L * 0.6f, c.y - fwd.y * L * 0.6f - side_v.y * L * 0.6f);
+        dl->AddTriangleFilled(tip, b1, b2, IM_COL32(255, 255, 255, 255));
+    }
+
+    char range[32];
+    snprintf(range, sizeof range, "%.0f yalms", g_set.map_range);
+    dl->AddText(ImVec2(at.x + 2, at.y + side - ImGui::GetFontSize()), IM_COL32(200, 200, 200, 150), range);
+    if (!known)
+        dl->AddText(ImVec2(c.x - ImGui::CalcTextSize("Waiting for the world").x * 0.5f, c.y + 12), IM_COL32(200, 200, 200, 180), "Waiting for the world");
+
+    if (near_one)
+    {
+        float dx = near_one->x - me_x, dz = near_one->z - me_z;
+        ImGui::BeginTooltip();
+        ImGui::Text("%s", near_one->name[0] ? near_one->name : "(no name yet)");
+        ImGui::TextDisabled("%.1f yalms, HP %u%%", sqrtf(dx * dx + dz * dz), near_one->hpp);
+        ImGui::EndTooltip();
     }
     ImGui::End();
 }
 
 extern "C" void overlay_build_frame(void)
 {
+    ImGui::GetStyle().FontScaleMain = g_set.ui_size / 16.0f;
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
+    bool was[4] = { g_set.chat, g_set.party, g_set.map, g_set.status };
     if (g_shown)
     {
-        status_window();
-        chat_window();
-        party_window();
+        overlay_window();
+        if (g_set.status)
+            status_window();
+        if (g_set.chat)
+            chat_window();
+        if (g_set.party)
+            party_window();
+        if (g_set.map)
+            map_window();
     }
+    if (was[0] != g_set.chat || was[1] != g_set.party || was[2] != g_set.map || was[3] != g_set.status)
+        ImGui::MarkIniSettingsDirty(); /* a window closed with its x */
     ImGui::Render();
 }
