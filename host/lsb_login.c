@@ -88,13 +88,17 @@ static int loader_variant(int major, int minor)
     return -1;
 }
 
-/* xi_connect's refusal names the version it wants: "... update to version '2.2.x' ..." */
+/* xi_connect's refusal names the version it wants as "<major>.<minor>.x", whatever the wording
+ * around it: "Please update to version '2.1.x'." (2.1 servers), "This server requires version
+ * 2.2.x." (2.2 servers). The client's own version in the same message has no ".x". */
 static int wanted_variant(const char* message)
 {
-    const char* p = strstr(message, "version '");
-    int major, minor;
-    if (p && sscanf(p + 9, "%d.%d", &major, &minor) == 2)
-        return loader_variant(major, minor);
+    for (const char* p = message; *p; p++)
+    {
+        int major, minor, n = 0;
+        if ((p == message || !(p[-1] >= '0' && p[-1] <= '9')) && sscanf(p, "%d.%d.x%n", &major, &minor, &n) == 2 && n > 0)
+            return loader_variant(major, minor);
+    }
     return -1;
 }
 
