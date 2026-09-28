@@ -2,7 +2,7 @@
  * player's machine into a shared library (runtime/xi_module.c + generated/), and loaded by a host
  * that ships prebuilt (runtime/portable/xi_load.c, built with XI_SPLIT).
  *
- * The translation needs little of the runtime: four functions (given to it through XiHostFns) and
+ * The translation needs little of the runtime: six functions (given to it through XiHostFns) and
  * three variables, which the module keeps itself so its hot paths read them directly: the guest
  * window's base and the relocation delta (set once, before any guest code runs) and the guest
  * lock's contention flag (which the host's threads write through the pointer here). Everything
@@ -12,7 +12,7 @@
 
 #include "runtime.h"
 
-#define XI_GAME_ABI 1
+#define XI_GAME_ABI 2
 
 typedef struct XiHostFns
 {
@@ -20,6 +20,8 @@ typedef struct XiHostFns
     void (*fatal)(Guest* g, uint32_t addr, const char* what);
     void (*cpuid)(Guest* g);
     void (*safepoint)(void);
+    jmp_buf* (*setjmp_buf)(Guest* g);
+    void (*longjmp)(Guest* g);
 } XiHostFns;
 
 typedef struct XiGameModule

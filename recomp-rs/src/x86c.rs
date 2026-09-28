@@ -394,13 +394,22 @@ impl<'a> FunctionTranslator<'a> {
 
     fn call(&mut self, target: u64, ret_addr: u64) -> Vec<String> {
         self.referenced.push(target);
-        vec![format!("esp -= 4; wr32(esp, {} + RD);", hex32(ret_addr)),
-             format!("REGS_STORE; {}{:08x}(g); REGS_LOAD;", self.ctx.prefix, target)]
+        let push = format!("esp -= 4; wr32(esp, {} + RD);", hex32(ret_addr));
+        if self.ctx.setjmps.contains(&target) {
+            // _setjmp3: a host landing here too, for longjmp to come back to (guest.h)
+            return vec![push, format!("REGS_STORE; if (!RT_SETJMP(g)) {}{:08x}(g); REGS_LOAD;", self.ctx.prefix, target)];
+        }
+        vec![push, format!("REGS_STORE; {}{:08x}(g); REGS_LOAD;", self.ctx.prefix, target)]
     }
 
     // ------------------------------------------------------------------ translation
 
     pub fn translate(mut self) -> Result<Translated, crate::Error> {
+        if self.ctx.longjmps.contains(&self.entry) {
+            // the C library's longjmp: back to the landing its _setjmp3 call left (guest.h)
+            let lines = vec![format!("void {}{:08x}(Guest* g)", self.ctx.prefix, self.entry), "{".into(), "    rt_longjmp(g);".into(), "}".into()];
+            return Ok(Translated { lines, unimpl: Vec::new(), referenced: Vec::new(), hooked: Vec::new() });
+        }
         self.decode();
         let insns = std::mem::take(&mut self.insns);
         let mut body: Vec<Item> = Vec::with_capacity(insns.len() * 6);

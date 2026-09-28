@@ -123,6 +123,63 @@ void rt_safepoint(void)
         g_yield();
 }
 
+/* --- setjmp and longjmp (guest.h) --------------------------------------------------------------------
+ * The landings a guest thread's _setjmp3 calls left, by jmp_buf address: a jmp_buf is filled and
+ * jumped to on one thread, and a function rarely has more than one in play, so a few per thread,
+ * reused oldest first, are plenty. */
+#if defined(_MSC_VER)
+#define RT_THREAD_LOCAL __declspec(thread)
+#else
+#define RT_THREAD_LOCAL _Thread_local
+#endif
+#define RT_JMP_SLOTS 16
+typedef struct JmpSlot
+{
+    uint32_t guest; /* the guest jmp_buf */
+    jmp_buf host;
+} JmpSlot;
+static RT_THREAD_LOCAL JmpSlot g_jmp[RT_JMP_SLOTS];
+static RT_THREAD_LOCAL unsigned g_jmp_next;
+
+jmp_buf* rt_setjmp_buf(Guest* g)
+{
+    uint32_t jb = rd32(g->esp + 4);
+    for (unsigned i = 0; i < RT_JMP_SLOTS; ++i)
+        if (g_jmp[i].guest == jb)
+            return &g_jmp[i].host;
+    JmpSlot* s = &g_jmp[g_jmp_next++ % RT_JMP_SLOTS];
+    s->guest = jb;
+    return &s->host;
+}
+
+void rt_longjmp(Guest* g)
+{
+    /* longjmp(jmp_buf, value): its return address at esp. The MSVC jmp_buf: ebp, ebx, edi, esi, esp
+     * (at the _setjmp3 call's return address), eip, the SEH registration, ... */
+    uint32_t jb = rd32(g->esp + 4), value = rd32(g->esp + 8);
+    for (unsigned i = 0; i < RT_JMP_SLOTS; ++i)
+        if (g_jmp[i].guest == jb)
+        {
+            /* what the C library's longjmp leaves: the SEH chain as it was at the setjmp (the
+             * frames in between are not unwound: their handlers do not run), the callee-saved
+             * registers, the stack as after the call returned, and the value (0 comes back as 1) */
+            wr32(g->fs_base, rd32(jb + 0x18));
+            g->ebp = rd32(jb);
+            g->ebx = rd32(jb + 4);
+            g->edi = rd32(jb + 8);
+            g->esi = rd32(jb + 0xc);
+            g->esp = rd32(jb + 0x10) + 4;
+            g->eax = value ? value : 1;
+            rt_log("[recomp] longjmp: back to the setjmp that returns to %08x\n", rd32(jb + 0x14));
+#if defined(_WIN32)
+            longjmp(g_jmp[i].host, 1);
+#else
+            _longjmp(g_jmp[i].host, 1);
+#endif
+        }
+    rt_fatal(g, jb, "longjmp to a jmp_buf no translated setjmp filled");
+}
+
 static FILE* g_log;
 static RtFatalHook g_fatal_hook;
 

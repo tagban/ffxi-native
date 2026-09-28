@@ -187,6 +187,21 @@ async function readyForServer(a) {
   playProgress(null);
 }
 
+// The game made for this install, and made by this launcher: a game from an older one may not run
+// with its host (a new module ABI), so Play makes it again first (about half a minute).
+async function ensureGame(gamePath) {
+  const gs = await invoke("game_status", { gamePath });
+  if (gs.ready && !gs.outdated) return;
+  if (gs.error) throw gs.error;
+  const done = waitFor("build-done");
+  playProgress(0, gs.ready ? "Updating the game for this launcher…" : "Making the game…");
+  await invoke("start_build", { gamePath });
+  const r = await done;
+  if (!r.ok) throw r.message;
+  playProgress(null);
+  await refreshGame();
+}
+
 listen("task-progress", ({ payload }) => {
   if (payload.task === "update") playProgress(payload.fraction, payload.step);
   else taskProgress(payload.fraction, payload.step);
@@ -205,6 +220,7 @@ accountForm.addEventListener("submit", async (e) => {
   try {
     await readyForServer(a);
     a = account();
+    await ensureGame(a.game_path || cfg.game_path);
     a.password_saved = await invoke("launch", {
       accountId: a.id,
       password: accountForm.elements.password.value,

@@ -25,6 +25,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from x86c import FunctionTranslator  # noqa: E402
 
 
+# The C library's setjmp and longjmp (MSVC's _setjmp3 and longjmp), found by their code. A call to
+# _setjmp3 also leaves a host landing (RT_SETJMP); longjmp, which would end in a jump into the
+# middle of a translated function, is translated as a return to it (rt_longjmp, runtime.c).
+SETJMP3_CODE = bytes.fromhex('8b542404892a895a04897a0889720c8962108b0424894214c7422030324356')
+LONGJMP_HEAD = bytes.fromhex('8b5c24048b2b8b7318643b3500000000')  # ebx = jmp_buf; ebp; SEH registration
+LONGJMP_TAIL = bytes.fromhex('8b621083c404ff6214')  # mov esp, [edx+0x10]; add esp, 4; jmp [edx+0x14]
+
+
 class Program:
     def __init__(self, meta, image_path):
         self.meta = meta
@@ -45,6 +53,16 @@ class Program:
         self.relocs = self.text_relocations(pe)
         self.inner = self.add_data_entries(pe)
         self.inner |= self.add_branch_entries()
+        self.setjmps, self.longjmps = self.c_library_jumps()
+
+    def c_library_jumps(self):
+        """The entries that are the C library's _setjmp3, and its longjmp."""
+        def code(e, n):
+            o = e - self.base
+            return bytes(self.image[o:o + n])
+        setjmps = {e for e in self.entries if code(e, len(SETJMP3_CODE)) == SETJMP3_CODE}
+        longjmps = {e for e in self.entries if code(e, len(LONGJMP_HEAD)) == LONGJMP_HEAD and LONGJMP_TAIL in code(e, 0x80)}
+        return setjmps, longjmps
 
     def add_data_entries(self, pe):
         """Code the image's data points at (vtables, callbacks, exception handlers) is called

@@ -246,11 +246,18 @@ class FunctionTranslator:
 
     def call(self, target, ret_addr):
         self.ctx.referenced.add(target)
-        return ['esp -= 4; wr32(esp, %s + RD);' % hexu(ret_addr), 'REGS_STORE; %s%08x(g); REGS_LOAD;' % (self.ctx.prefix, target)]
+        push = 'esp -= 4; wr32(esp, %s + RD);' % hexu(ret_addr)
+        if target in self.ctx.setjmps:
+            # _setjmp3: a host landing here too, for longjmp to come back to (guest.h)
+            return [push, 'REGS_STORE; if (!RT_SETJMP(g)) %s%08x(g); REGS_LOAD;' % (self.ctx.prefix, target)]
+        return [push, 'REGS_STORE; %s%08x(g); REGS_LOAD;' % (self.ctx.prefix, target)]
 
     # ------------------------------------------------------------------ translation
 
     def translate(self):
+        if self.entry in self.ctx.longjmps:
+            # the C library's longjmp: back to the landing its _setjmp3 call left (guest.h)
+            return ['void %s%08x(Guest* g)' % (self.ctx.prefix, self.entry), '{', '    rt_longjmp(g);', '}']
         self.decode()
         body = []
         prev_falls_to = None

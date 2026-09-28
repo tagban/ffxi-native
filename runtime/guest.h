@@ -10,6 +10,7 @@
 #pragma once
 
 #include <math.h>
+#include <setjmp.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -100,6 +101,27 @@ __attribute__((noreturn))
 void rt_fatal(Guest* g, uint32_t addr, const char* what);
 void rt_cpuid(Guest* g);
 void rt_rdtsc(Guest* g);
+
+/* setjmp and longjmp: the game's C library's _setjmp3 and longjmp (recomp.py finds them by their
+ * code). The C library's longjmp ends in a jump to the setjmp's return address, the middle of a
+ * translated function, which no translation can take. So a call to _setjmp3 also leaves a host
+ * landing there (RT_SETJMP, in the translated caller's own frame), and longjmp is translated as
+ * rt_longjmp: the guest registers the jmp_buf holds are put back, as the C library would, and the
+ * host returns to the landing, where the translation goes on after the call with eax = the value.
+ * rt_setjmp_buf: the landing for the jmp_buf the call is given ([esp + 4], its return address at
+ * esp), per guest thread. */
+jmp_buf* rt_setjmp_buf(Guest* g);
+#if defined(_MSC_VER)
+__declspec(noreturn)
+#elif defined(__GNUC__)
+__attribute__((noreturn))
+#endif
+void rt_longjmp(Guest* g);
+#if defined(_WIN32)
+#define RT_SETJMP(g) setjmp(*rt_setjmp_buf(g))
+#else
+#define RT_SETJMP(g) _setjmp(*rt_setjmp_buf(g)) /* no signal mask to save */
+#endif
 
 /* The guest-wide lock: one guest thread runs
  * translated code at a time. The platform bridge releases it around every native call and takes

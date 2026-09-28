@@ -9,6 +9,18 @@ use std::collections::{HashMap, HashSet};
 
 pub type Ranges = Vec<(u64, u64)>;
 
+/// The C library's setjmp and longjmp (MSVC's _setjmp3 and longjmp), found by their code. A call to
+/// _setjmp3 also leaves a host landing (RT_SETJMP); longjmp, which would end in a jump into the
+/// middle of a translated function, is translated as a return to it (rt_longjmp, runtime.c).
+const SETJMP3_CODE: [u8; 31] = [
+    0x8b, 0x54, 0x24, 0x04, 0x89, 0x2a, 0x89, 0x5a, 0x04, 0x89, 0x7a, 0x08, 0x89, 0x72, 0x0c, 0x89, 0x62, 0x10, 0x8b, 0x04,
+    0x24, 0x89, 0x42, 0x14, 0xc7, 0x42, 0x20, 0x30, 0x32, 0x43, 0x56,
+];
+/// ebx = jmp_buf; ebp; the SEH registration
+const LONGJMP_HEAD: [u8; 16] = [0x8b, 0x5c, 0x24, 0x04, 0x8b, 0x2b, 0x8b, 0x73, 0x18, 0x64, 0x3b, 0x35, 0x00, 0x00, 0x00, 0x00];
+/// mov esp, [edx+0x10]; add esp, 4; jmp [edx+0x14]
+const LONGJMP_TAIL: [u8; 9] = [0x8b, 0x62, 0x10, 0x83, 0xc4, 0x04, 0xff, 0x62, 0x14];
+
 pub struct Program {
     pub base: u64,
     pub image: Vec<u8>,
@@ -23,6 +35,9 @@ pub struct Program {
     pub relocs: HashSet<u64>,
     /// entries that sit inside another function's body
     pub inner: HashSet<u64>,
+    /// the entries that are the C library's _setjmp3, and its longjmp
+    pub setjmps: HashSet<u64>,
+    pub longjmps: HashSet<u64>,
     text: (u64, u64),
     tables: HashSet<u64>,
     boundaries: HashMap<u64, HashSet<u64>>,
@@ -104,7 +119,8 @@ impl Program {
         let text = (int(&text[0], "text")?, int(&text[1], "text")?);
         let mut p = Program {
             base, image: pe.memory_mapped_image(), prefix: prefix.to_string(), entries: functions.keys().copied().collect(),
-            functions, switches, hooks, relocs: HashSet::new(), inner: HashSet::new(), text, tables, boundaries: HashMap::new(),
+            functions, switches, hooks, relocs: HashSet::new(), inner: HashSet::new(), setjmps: HashSet::new(),
+            longjmps: HashSet::new(), text, tables, boundaries: HashMap::new(),
         };
         p.relocs = p.text_relocations(pe)?;
         let mut md = Disasm::new(true);
@@ -113,7 +129,25 @@ impl Program {
         let more = p.add_branch_entries(&mut lite)?;
         p.inner.extend(more);
         p.boundaries.clear();
+        let (setjmps, longjmps) = p.c_library_jumps();
+        p.setjmps = setjmps;
+        p.longjmps = longjmps;
         Ok(p)
+    }
+
+    /// The entries that are the C library's _setjmp3, and its longjmp.
+    fn c_library_jumps(&self) -> (HashSet<u64>, HashSet<u64>) {
+        let setjmps = self.entries.iter().copied().filter(|&e| self.read(e, SETJMP3_CODE.len() as u64) == SETJMP3_CODE).collect();
+        let longjmps = self
+            .entries
+            .iter()
+            .copied()
+            .filter(|&e| {
+                self.read(e, LONGJMP_HEAD.len() as u64) == LONGJMP_HEAD
+                    && self.read(e, 0x80).windows(LONGJMP_TAIL.len()).any(|w| w == LONGJMP_TAIL)
+            })
+            .collect();
+        (setjmps, longjmps)
     }
 
     pub fn read(&self, va: u64, n: u64) -> &[u8] {

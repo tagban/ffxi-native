@@ -415,6 +415,12 @@ install folder. By hand:
    exception handlers), including small functions the discovery pass folded into a neighbour, so
    what remains is a real gap: add the function to the metadata and rebuild.
 
+   One kind of jump is not a gap: the C library's `longjmp` (libjpeg's error recovery uses it, for
+   example when a DAT that should hold a JPEG holds something else) ends in a jump back into the
+   middle of the function that called `setjmp`. The translator finds the game's `_setjmp3` and
+   `longjmp` by their code, leaves a host landing at every `_setjmp3` call, and translates `longjmp`
+   as a return to it (`runtime/guest.h`, `rt_longjmp`); the log says `[recomp] longjmp: ...`.
+
 6. **Record it.** Add the build to the table under *Rules*, write its discovery notes in
    `discovery/notes/`, and commit the metadata, `builds.json` and `discovery/verdicts.py`
    together. Never commit anything from `generated/`.
