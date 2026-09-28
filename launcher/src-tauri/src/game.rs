@@ -182,6 +182,8 @@ fn run(app: &AppHandle, running: &Running, cfg: &LauncherConfig, paths: &Paths, 
 
     let _ = fs::create_dir_all(&paths.log_dir);
     let log_path = paths.log_dir.join("host64.log");
+    // the session before stays beside it (a crash, then a retry)
+    let _ = fs::rename(&log_path, paths.log_dir.join("host64.previous.log"));
     let log = Arc::new(Mutex::new(File::create(&log_path).ok()));
     let args = host_args(cfg, paths, account, session.as_deref(), &req.otp);
     log_line(app, &log, &format!("> {} {}", paths.host.display(), args.join(" ")));
