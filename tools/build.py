@@ -169,7 +169,7 @@ SDL3 = os.environ.get('SDL3_DIR', r'C:\Dev\SDL3\SDL3-3.4.16')  # the SDL3 VC dev
 GFX_SOURCES = ['runtime\\portable\\gfx_hlsl.c', 'runtime\\portable\\gfx_hlsl_shaders.c', 'runtime\\portable\\gfx_d3d12.c',
                'runtime\\portable\\overlay_none.c']  # the overlay: none on Direct3D 12 yet (docs/OVERLAY.md)
 GFX_LIBS = ['d3d12.lib', 'dxgi.lib', 'd3dcompiler.lib', 'dxguid.lib']
-HOST_BASE = ['runtime\\portable\\user32.c', 'runtime\\portable\\d3d8.c', 'runtime\\portable\\dsound.c',
+HOST_BASE = ['runtime\\portable\\user32.c', 'runtime\\portable\\d3d8.c', 'runtime\\portable\\dsound.c', 'runtime\\portable\\gamestate.c',
              'runtime\\portable\\input.c', 'runtime\\portable\\dinput.c', 'runtime\\portable\\ws2.c', 'host\\host64.c',
              'host\\lsb_login.c', 'host\\datui.c', 'host\\uidraw.c', 'host\\signin.c', 'host\\ui_art.c',
              'host\\keychain.c', 'host\\appdefaults.c', 'launcher\\pol\\polcrypt.c', 'launcher\\pol\\polnet.c',

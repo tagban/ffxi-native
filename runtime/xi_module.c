@@ -35,6 +35,9 @@ extern const RtModule rt_module_ffxi;
 #ifdef FFXI_HOOK_NAMEPLATE_SCALE
 extern GuestFn rt_hook_nameplate_scale;
 #endif
+#ifdef FFXI_HOOK_PACKET_IN
+extern GuestFn rt_hook_packet_in;
+#endif
 
 XI_EXPORT const XiGameModule xi_game_module = {
     XI_GAME_ABI,
@@ -65,4 +68,9 @@ XI_EXPORT const XiGameModule xi_game_module = {
     &rt_reloc_delta,
     &rt_lock_contended,
     set_host,
+#ifdef FFXI_HOOK_PACKET_IN
+    &rt_hook_packet_in,
+#else
+    NULL,
+#endif
 };

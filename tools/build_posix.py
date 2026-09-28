@@ -70,7 +70,7 @@ else:
     raise SystemExit('XI_GFX=%s: metal, gl or null' % GFX)
 if sys.platform == 'darwin':  # the sign-in screen's saved passwords (host/keychain.c)
     GFX_LIBS += ['-framework', 'Security', '-framework', 'CoreFoundation']
-HOST_SOURCES = ['runtime/portable/user32.c', 'runtime/portable/d3d8.c', 'runtime/portable/dsound.c',
+HOST_SOURCES = ['runtime/portable/user32.c', 'runtime/portable/d3d8.c', 'runtime/portable/dsound.c', 'runtime/portable/gamestate.c',
                 'runtime/portable/input.c', 'runtime/portable/dinput.c', 'runtime/portable/ws2.c', 'host/host64.c',
                 'host/lsb_login.c', 'host/datui.c', 'host/uidraw.c', 'host/signin.c', 'host/ui_art.c', 'host/keychain.c', 'host/appdefaults.c', 'launcher/pol/polcrypt.c',
                 'launcher/pol/polnet.c', 'launcher/pol/polsession.c'] + GFX_SOURCES

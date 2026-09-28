@@ -1,6 +1,7 @@
 /* The overlay's windows (overlay.h, docs/OVERLAY.md), with Dear ImGui (third_party/imgui). The back
  * end draws what overlay_build_frame makes (overlay_metal.mm). Display only. */
 #include "overlay.h"
+#include "gamestate.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -131,11 +132,47 @@ static void status_window(void)
     ImGui::End();
 }
 
+/* The chat, from the game's own packets (gamestate.c): the first proof of the feed */
+static void chat_window(void)
+{
+    ImGui::SetNextWindowPos(ImVec2(24, 220), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(520, 260), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Chat"))
+    {
+        ImGui::TextDisabled("%u packets received", gamestate_udp_packets());
+        ImGui::Separator();
+        ImGui::BeginChild("lines");
+        int kind;
+        const char *sender, *text;
+        /* oldest first, the newest at the bottom, kept in view */
+        int n = 0;
+        while (gamestate_chat(n, &kind, &sender, &text))
+            ++n;
+        for (int i = n - 1; i >= 0; --i)
+            if (gamestate_chat(i, &kind, &sender, &text))
+            {
+                ImVec4 c = kind == 3 ? ImVec4(0.55f, 0.95f, 1.0f, 1) /* tell */
+                         : kind == 4 ? ImVec4(0.55f, 1.0f, 0.55f, 1) /* party */
+                         : kind == 5 ? ImVec4(0.6f, 1.0f, 0.8f, 1)   /* linkshell */
+                         : kind == 1 ? ImVec4(1.0f, 0.75f, 0.45f, 1) /* shout */
+                                     : ImVec4(1, 1, 1, 1);
+                ImGui::TextColored(c, "%s: %s", sender, text);
+            }
+        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f)
+            ImGui::SetScrollHereY(1.0f);
+        ImGui::EndChild();
+    }
+    ImGui::End();
+}
+
 extern "C" void overlay_build_frame(void)
 {
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
     if (g_shown)
+    {
         status_window();
+        chat_window();
+    }
     ImGui::Render();
 }

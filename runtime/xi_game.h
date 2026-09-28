@@ -46,6 +46,9 @@ typedef struct XiGameModule
     uint32_t* reloc_delta;
     volatile uint32_t* lock_contended;
     void (*set_host)(const XiHostFns* fns);
+    /* appended (size tells whether a module has it): the hook at the end of the game's decrypt and
+     * decompress of an incoming packet (meta/builds.json "packet_in"), NULL when its build has none */
+    GuestFn* hook_packet_in;
 } XiGameModule;
 
 /* The one symbol a module exports. */

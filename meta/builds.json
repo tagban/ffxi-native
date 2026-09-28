@@ -16,6 +16,9 @@
         "chars_ptr": "0x104df7b0",
         "present_site": "0x100035cb"
       },
+      "hooks": {
+        "packet_in": "0x100dd803"
+      },
       "crt": {
         "strlen": "0x10317480",
         "strncmp": "0x10312980",
@@ -49,7 +52,8 @@
         "present_site": "0x100035cb"
       },
       "hooks": {
-        "nameplate_scale": "0x100863d6"
+        "nameplate_scale": "0x100863d6",
+        "packet_in": "0x100dd7f3"
       },
       "crt": {
         "strlen": "0x10317440",

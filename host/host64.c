@@ -57,6 +57,7 @@
  * (--data-dir, else the user's app data), the password in the keychain, and writes display
  * defaults to <data dir>/settings.reg, loaded when no --reg-final is given. Its window becomes the
  * game's. */
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,6 +80,7 @@
 #include "gfx.h"
 #include "dsound.h"
 #include "overlay.h"
+#include "gamestate.h"
 #include "dinput.h"
 #include "ws2.h"
 #include "plat.h"
@@ -266,6 +268,35 @@ static void setup_nameplates(void)
     }
     else if (wanted)
         rt_log("[recomp] nameplates: build %s has no nameplate hook; they stay as the game draws them\n", FFXI_BUILD);
+}
+
+/* The game's incoming packets, for the overlay (docs/OVERLAY.md): the hook sits on the success
+ * return of the game's own decrypt-and-decompress (meta/builds.json "packet_in"), where eax is the
+ * length it made and the first argument its buffer. Read only. */
+#if defined(FFXI_HOOK_PACKET_IN)
+extern GuestFn rt_hook_packet_in;
+#define PACKET_HOOK (&rt_hook_packet_in)
+#elif defined(XI_SPLIT)
+/* a module from before the field was appended has none */
+#define PACKET_HOOK (xi_game->size >= offsetof(XiGameModule, hook_packet_in) + sizeof(GuestFn*) ? xi_game->hook_packet_in : NULL)
+#else
+#define PACKET_HOOK ((GuestFn*)NULL)
+#endif
+
+static void packet_in(Guest* g)
+{
+    uint32_t len = g->eax, buf = rd32(g->esp + 4);
+    if ((int32_t)len > 28 && len < 0x10000 && buf)
+        gamestate_feed(GUEST_PTR(buf), len);
+}
+
+static void setup_packets(void)
+{
+    GuestFn* hook = PACKET_HOOK;
+    if (hook)
+        *hook = packet_in;
+    else
+        rt_log("[recomp] packets: build %s has no packet hook; the overlay shows no game state\n", FFXI_BUILD);
 }
 
 /* s, or sx x sy (1.25, 1x1.2); 0 if it is neither */
@@ -950,6 +981,7 @@ int main(int argc, char** argv)
     d3d8_setup();
     d3d8_set_present_hook(present_hook);
     setup_nameplates();
+    setup_packets();
     user32_key_hook = host_key;
     if (g_live_file[0])
         ws2_lobby_error = launcher_lobby_error;
