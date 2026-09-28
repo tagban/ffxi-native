@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.tagban.ffxi-native</id>
+  <name>FFXI Launcher</name>
+  <summary>Play FINAL FANTASY XI natively on private servers</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <description>
+    <p>Point it at your FINAL FANTASY XI folder: it makes the game for your install and plays it
+    natively, without Wine. It brings each private server the client version it wants, and lets
+    you change graphics settings while you play.</p>
+  </description>
+  <launchable type="desktop-id">com.tagban.ffxi-native.desktop</launchable>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.2" date="2026-09-28"/>
+  </releases>
+</component>

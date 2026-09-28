@@ -1,4 +1,5 @@
-# The launcher for players: Linux (x86_64, aarch64), macOS (arm64) and Windows (x86_64), built from this
+# The launcher for players: Linux (x86_64, aarch64: .deb, AppImage, Flatpak), macOS (arm64) and
+# Windows (x86_64), built from this
 # repository alone.
 # Nothing here reads the game: the launcher and its game host hold no Square Enix code (README,
 # "Rules"); each player's launcher makes the game from their own install. The build steps are
@@ -95,9 +96,46 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  flatpak:
+    name: Flatpak ${{ matrix.arch }}
+    needs: linux
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: build/linux-packages
+      # the .deb the linux job made, repackaged (packaging/flatpak)
+      - run: cp build/linux-packages/*.deb packaging/flatpak/ffxi-launcher.deb
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: packaging/flatpak/com.tagban.ffxi-native.yml
+          bundle: FFXI-Launcher-${{ matrix.arch }}.flatpak
+          arch: ${{ matrix.arch }}
+          upload-artifact: false
+          cache-key: flatpak-${{ matrix.arch }}-${{ github.sha }}
+      - run: mkdir -p dist && mv FFXI-Launcher-${{ matrix.arch }}.flatpak dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos, windows]
+    needs: [linux, flatpak, macos, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

@@ -1,0 +1,45 @@
+# The launcher as a Flatpak (Linux, any distribution), repackaged from the .deb CI builds
+# (tools/ci/linux.sh): the launcher, the game host beside it (/app/bin), the engine files where
+# Tauri looks for them (/app/lib/FFXI Launcher). The GNOME runtime brings WebKitGTK and Mesa; the
+# launcher downloads zig itself to make the game, so no compiler is needed in the sandbox.
+# CI copies the .deb here as ffxi-launcher.deb (.github/workflows/build.yml, job flatpak).
+id: com.tagban.ffxi-native
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: ffxi-launcher
+finish-args:
+  - --share=network # the game servers, update servers, and zig's download
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=all # the GPU, and gamepads
+  - --filesystem=home # the FINAL FANTASY XI folder, wherever the player keeps it ...
+  - --filesystem=/media # ... or on another drive
+  - --filesystem=/run/media
+  - --filesystem=/mnt
+  - --talk-name=org.freedesktop.secrets # saved passwords, in the desktop's keyring
+modules:
+  - name: ffxi-launcher
+    buildsystem: simple
+    sources:
+      - type: file
+        path: ffxi-launcher.deb
+      - type: file
+        path: com.tagban.ffxi-native.metainfo.xml
+    build-commands:
+      - ar -x ffxi-launcher.deb
+      - tar -xf data.tar.gz
+      - install -Dm755 usr/bin/ffxi-launcher /app/bin/ffxi-launcher
+      - install -Dm755 usr/bin/xi-host /app/bin/xi-host
+      - mkdir -p /app/lib && cp -r "usr/lib/FFXI Launcher" /app/lib/
+      - |
+        for d in usr/share/icons/hicolor/*/apps; do
+          size=$(basename "$(dirname "$d")")
+          install -Dm644 "$d/ffxi-launcher.png" "/app/share/icons/hicolor/$size/apps/com.tagban.ffxi-native.png"
+        done
+      - sed -e 's/^Icon=.*/Icon=com.tagban.ffxi-native/' -e 's/^Categories=.*/Categories=Game;RolePlaying;/'
+        "usr/share/applications/FFXI Launcher.desktop" > com.tagban.ffxi-native.desktop
+      - install -Dm644 com.tagban.ffxi-native.desktop /app/share/applications/com.tagban.ffxi-native.desktop
+      - install -Dm644 com.tagban.ffxi-native.metainfo.xml /app/share/metainfo/com.tagban.ffxi-native.metainfo.xml
