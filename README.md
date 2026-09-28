@@ -78,7 +78,7 @@ UI art.
 
 This project is built on **[xi-on-mac](https://github.com/rubymatrix/xi-on-mac)** by
 **rubymatrix**: the static recompiler, its runtime, the platform layer, the Metal back end, the game
-host and the original launcher are that project's work, used here with its author's permission. Its
+host and the original launcher are that project's work. Its
 README is the basis of this one, and much of what follows describes it.
 
 What this project adds: the launcher's first run (finding the install and making the game for it),
