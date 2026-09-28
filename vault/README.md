@@ -63,8 +63,10 @@ xi-vault serve site                                                         # ht
   A client older than it is refused with lobby error 331, which sends the launcher here.
 - `--packs` also writes one-file deltas between the versions listed (a player with the older one
   downloads a single compressed file).
-- Port **54080**, on the same host as the server, is where the launcher looks when a player gives no
-  address: nothing to configure on their side. Open it in the firewall. Any other address works too
+- When a player gives no address, the launcher looks on the game server itself at port **54080**,
+  then at **`update.<server>`** (port 54080, or HTTPS), then `updates.<server>`: host the versions
+  anywhere (a machine at home) and point `update.<server>` at it with a DNS record, and players
+  configure nothing. `install-server.sh` sets a Linux machine up. Open it in the firewall. Any other address works too
   (players put it in the account's **Game updates address**), including a CDN or `https://`.
 
 `site/` is plain static files, so any web server can serve it instead of `xi-vault serve`:

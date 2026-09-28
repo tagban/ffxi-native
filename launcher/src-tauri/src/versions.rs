@@ -204,26 +204,63 @@ pub struct ServerVersion {
     pub game_path: String,
 }
 
-/// Where the account's server publishes its game versions: the address it names, else the
-/// server itself on xi-vault's port, when something answers there (then remembered).
+/// Where a server's game versions are looked for when the account names no address, in order: the
+/// server itself on xi-vault's port, then its update. (or updates.) host, which an operator points
+/// at wherever they host them (a machine at home, say) with a DNS record alone.
+fn update_candidates(server: &str) -> Vec<String> {
+    let server = server.trim();
+    if server.is_empty() || server.contains('/') || server.matches(':').count() > 1 {
+        return Vec::new();
+    }
+    let host = server.split(':').next().unwrap_or(server);
+    let port = xi_vault::DEFAULT_PORT;
+    let mut out = vec![format!("http://{host}:{port}")];
+    if host.parse::<std::net::Ipv4Addr>().is_err() && host.contains('.') {
+        out.push(format!("http://update.{host}:{port}"));
+        out.push(format!("https://update.{host}"));
+        out.push(format!("http://updates.{host}:{port}"));
+        out.push(format!("https://updates.{host}"));
+    }
+    out
+}
+
+/// The first of these that answers as an xi-vault site (asked all at once).
+fn discover(candidates: &[String]) -> Option<(String, xi_vault::Index)> {
+    let answers: Vec<_> = candidates
+        .iter()
+        .map(|url| {
+            let url = url.clone();
+            std::thread::spawn(move || xi_vault::fetch_index_within(&url, std::time::Duration::from_millis(1500)).ok().map(|i| (url, i)))
+        })
+        .collect();
+    answers.into_iter().filter_map(|t| t.join().ok().flatten()).next()
+}
+
+/// Where the account's server publishes its game versions: the address it names, else the first
+/// place update_candidates finds one (then remembered). A remembered address that stops answering
+/// is looked for again: a server that moved its versions elsewhere.
 fn update_url(app: &AppHandle, account_id: &str) -> Result<(String, xi_vault::Index), String> {
     let cdir = config_dir(app)?;
     let mut cfg = config::load(&cdir);
     let account = cfg.accounts.iter_mut().find(|a| a.id == account_id).ok_or("No such account.")?;
-    if !account.update_url.is_empty() {
-        let index = xi_vault::fetch_index(&account.update_url)?;
-        return Ok((account.update_url.clone(), index));
+    let saved = account.update_url.clone();
+    let failed = if saved.is_empty() {
+        None
+    } else {
+        match xi_vault::fetch_index(&saved) {
+            Ok(index) => return Ok((saved, index)),
+            Err(e) => Some(e),
+        }
+    };
+    let candidates: Vec<String> = update_candidates(&account.server).into_iter().filter(|u| *u != saved).collect();
+    match discover(&candidates) {
+        Some((url, index)) => {
+            account.update_url = url.clone();
+            config::save(&cdir, &cfg)?;
+            Ok((url, index))
+        }
+        None => Err(failed.unwrap_or_else(|| "This server has no game updates address.".into())),
     }
-    let host = account.server.trim();
-    if host.is_empty() || host.contains('/') || host.matches(':').count() > 1 {
-        return Err("This server has no game updates address.".into());
-    }
-    let url = format!("http://{host}:{}", xi_vault::DEFAULT_PORT);
-    let index = xi_vault::fetch_index_within(&url, std::time::Duration::from_millis(1500))
-        .map_err(|_| "This server has no game updates address.".to_string())?;
-    account.update_url = url.clone();
-    config::save(&cdir, &cfg)?;
-    Ok((url, index))
 }
 
 /// What version the account's server wants, and whether the player has it.

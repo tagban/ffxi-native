@@ -224,7 +224,8 @@ It ships the game host (`xi-host`: the runtime, graphics, sound, input and the s
   and keeps the PlayOnline session up while the game runs). Passwords are kept in the system keychain
   (macOS Keychain, Windows Credential Manager, the Secret Service on Linux), never in the settings file.
 - **Game versions.** An account can name its server's game updates address (else the launcher looks
-  on the server itself, port 54080): on Play it brings the version the server wants, downloading only
+  on the server itself, port 54080, then at `update.<server>`, which an operator can point anywhere
+  with a DNS record): on Play it brings the version the server wants, downloading only
   what the player lacks, and plays it from beside their install, which is never changed. Game files
   (Launcher page) backs up the install, checks it and repairs it. See `vault/README.md`.
 - **Game settings.** Window mode and resolution, menu and background resolution, the graphics
