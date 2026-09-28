@@ -156,7 +156,15 @@ static void chat_window(void)
                          : kind == 5 ? ImVec4(0.6f, 1.0f, 0.8f, 1)   /* linkshell */
                          : kind == 1 ? ImVec4(1.0f, 0.75f, 0.45f, 1) /* shout */
                                      : ImVec4(1, 1, 1, 1);
-                ImGui::TextColored(c, "%s: %s", sender, text);
+                /* the mode, small, until the tabs sort by it */
+                ImGui::TextDisabled("%3d", kind & 0xFFFF);
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Text, c);
+                if (sender[0])
+                    ImGui::TextWrapped("%s: %s", sender, text);
+                else
+                    ImGui::TextWrapped("%s", text);
+                ImGui::PopStyleColor();
             }
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f)
             ImGui::SetScrollHereY(1.0f);

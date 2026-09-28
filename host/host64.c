@@ -318,8 +318,42 @@ static void packet_out(Guest* g)
         gamestate_feed_out(GUEST_PTR(buf), len);
 }
 
+#if defined(FFXI_HOOK_CHAT_ADD)
+extern GuestFn rt_hook_chat_add;
+#define CHAT_ADD_HOOK (&rt_hook_chat_add)
+#elif defined(XI_SPLIT)
+#define CHAT_ADD_HOOK (xi_game->size >= offsetof(XiGameModule, hook_chat_add) + sizeof(GuestFn*) ? xi_game->hook_chat_add : NULL)
+#else
+#define CHAT_ADD_HOOK ((GuestFn*)NULL)
+#endif
+
+/* The entry of the game's add-a-line-to-its-chat-log (a method: ecx the chat manager, five
+ * arguments): the first is the line as the log shows it (with the game's colour and control codes),
+ * the second a header before it whose first word is taken as its mode. Every line: chat, NPCs,
+ * the system, battle. Read only. */
+static void chat_add(Guest* g)
+{
+    uint32_t text = rd32(g->esp + 4), head = rd32(g->esp + 8);
+    if (!text || text >= 0xF0000000u)
+        return;
+    uint32_t mode = head && head < 0xF0000000u ? rd32(head) : 0xFFFFFFFFu;
+    static int told;
+    if (told < 40)
+    {
+        /* the header's bytes, to learn the modes */
+        ++told;
+        const uint8_t* h = head && head < 0xF0000000u ? GUEST_PTR(head) : NULL;
+        rt_log("[recomp] chat: mode %08x head %02x %02x %02x %02x %02x %02x %02x %02x\n", mode, h ? h[0] : 0,
+            h ? h[1] : 0, h ? h[2] : 0, h ? h[3] : 0, h ? h[4] : 0, h ? h[5] : 0, h ? h[6] : 0, h ? h[7] : 0);
+    }
+    gamestate_chat_line(mode, GUEST_PTR(text));
+}
+
 static void setup_packets(void)
 {
+    GuestFn* ca = CHAT_ADD_HOOK;
+    if (ca)
+        *ca = chat_add;
     GuestFn* out = PACKET_OUT_HOOK;
     if (out)
         *out = packet_out;

@@ -11,7 +11,7 @@ static uint32_t g_udp, g_by_id[512];
 static struct
 {
     int kind;
-    char sender[16], text[160];
+    char sender[16], text[400];
 } g_chat[CHAT_LINES];
 static int g_chat_next, g_chat_count;
 
@@ -69,8 +69,7 @@ void gamestate_feed(const uint8_t* buf, uint32_t len)
         if (size < 4 || at + size > len)
             break;
         ++g_by_id[id];
-        if (id == 0x017)
-            chat(buf + at, size);
+        (void)chat; /* the game's log (gamestate_chat_line) has every line, these too */
         at += size;
     }
 }
@@ -100,7 +99,7 @@ void gamestate_feed_out(const uint8_t* buf, uint32_t len)
         uint32_t id = (buf[at] | buf[at + 1] << 8) & 0x1FF, size = 2u * (buf[at + 1] & 0xFEu);
         if (size < 4 || at + size > len)
             break;
-        if (id == 0x0B5 && size > 6)
+        if (0 && id == 0x0B5 && size > 6) /* the game's log has the player's lines too */
         {
             int i = g_chat_next;
             g_chat[i].kind = buf[at + 4];
@@ -112,4 +111,41 @@ void gamestate_feed_out(const uint8_t* buf, uint32_t len)
         }
         at += size;
     }
+}
+
+/* the log's text as plain ASCII: its colour and control codes (0x1E, 0x1F, 0x7F, each with a byte)
+ * dropped, auto-translate phrases (0xFD ... 0xFD) as "[AT]", its two-byte characters as '?' */
+static void log_text(char* out, size_t n, const uint8_t* in)
+{
+    size_t o = 0;
+    for (size_t i = 0; in[i] && i < 1024 && o + 5 < n;)
+    {
+        uint8_t c = in[i];
+        if (c == 0x1E || c == 0x1F || c == 0x7F)
+            i += in[i + 1] ? 2 : 1;
+        else if (c == 0xFD)
+        {
+            size_t j = i + 1;
+            while (j < i + 8 && in[j] && in[j] != 0xFD)
+                ++j;
+            i = in[j] == 0xFD ? j + 1 : j;
+            memcpy(out + o, "[AT]", 4), o += 4;
+        }
+        else if ((c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC))
+            out[o++] = '?', i += in[i + 1] ? 2 : 1;
+        else
+            out[o++] = c >= 0x20 && c < 0x7F ? (char)c : ' ', ++i;
+    }
+    out[o] = 0;
+}
+
+void gamestate_chat_line(uint32_t mode, const uint8_t* text)
+{
+    int i = g_chat_next;
+    g_chat[i].kind = (int)mode;
+    g_chat[i].sender[0] = 0;
+    log_text(g_chat[i].text, sizeof g_chat[i].text, text);
+    g_chat_next = (i + 1) % CHAT_LINES;
+    if (g_chat_count < CHAT_LINES)
+        ++g_chat_count;
 }

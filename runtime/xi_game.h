@@ -51,6 +51,8 @@ typedef struct XiGameModule
     GuestFn* hook_packet_in;
     /* the entry of the game's encrypt of an outgoing packet ("packet_out"): the player's own chat */
     GuestFn* hook_packet_out;
+    /* the entry of the game's add-a-line-to-the-chat-log ("chat_add"): every line its log shows */
+    GuestFn* hook_chat_add;
 } XiGameModule;
 
 /* The one symbol a module exports. */

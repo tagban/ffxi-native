@@ -15,6 +15,9 @@ void gamestate_feed(const uint8_t* buf, uint32_t len);
 /* One outgoing UDP packet, in the clear (the same framing): the player's own chat. */
 void gamestate_feed_out(const uint8_t* buf, uint32_t len);
 
+/* A line the game's own chat log shows (host64: its add-a-line), with its mode. */
+void gamestate_chat_line(uint32_t mode, const uint8_t* text);
+
 /* For the overlay */
 uint32_t gamestate_udp_packets(void);
 uint32_t gamestate_packets(uint16_t id); /* how many of this id have come */

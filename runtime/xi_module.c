@@ -41,6 +41,9 @@ extern GuestFn rt_hook_packet_in;
 #ifdef FFXI_HOOK_PACKET_OUT
 extern GuestFn rt_hook_packet_out;
 #endif
+#ifdef FFXI_HOOK_CHAT_ADD
+extern GuestFn rt_hook_chat_add;
+#endif
 
 XI_EXPORT const XiGameModule xi_game_module = {
     XI_GAME_ABI,
@@ -78,6 +81,11 @@ XI_EXPORT const XiGameModule xi_game_module = {
 #endif
 #ifdef FFXI_HOOK_PACKET_OUT
     &rt_hook_packet_out,
+#else
+    NULL,
+#endif
+#ifdef FFXI_HOOK_CHAT_ADD
+    &rt_hook_chat_add,
 #else
     NULL,
 #endif
