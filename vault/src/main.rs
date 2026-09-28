@@ -10,6 +10,10 @@
 //!   xi-vault publish <out site> --current <v> <version>... [--packs] [--since v] static files
 //!   xi-vault serve <site> [--listen 0.0.0.0:54080]                   serve them over HTTP
 //!   xi-vault fetch <url> [--version v]                               a version from a site into the vault
+//!   xi-vault release [--game <folder>] [--server <url>] [--upload <ssh login>] [--current]
+//!                                                                    an updated install to a server (release.rs)
+//!   xi-vault apply <site> <bundle.tar> [--current]                   take a release's bundle into a site
+//!   xi-vault                                                         (no arguments: release, asking)
 //!
 //! The vault is --vault <dir>, else XI_VAULT, else ./xi-vault.
 
@@ -20,6 +24,8 @@ use std::sync::Mutex;
 use std::time::Instant;
 use xi_vault::*;
 
+mod release;
+
 #[derive(Parser)]
 #[command(name = "xi-vault", about = "FINAL FANTASY XI client versions: snapshots, diffs, delta packs, a file server")]
 struct Cli {
@@ -27,7 +33,7 @@ struct Cli {
     #[arg(long, global = true)]
     vault: Option<PathBuf>,
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -57,6 +63,26 @@ enum Cmd {
     Serve { site: PathBuf, #[arg(long, default_value = "0.0.0.0:54080")] listen: String },
     /// Bring a version from a published site into the vault (default: the one it wants)
     Fetch { url: String, #[arg(long)] version: Option<String> },
+    /// After PlayOnline updates the game: measure it against what the server hands out, make an
+    /// update bundle of what the server lacks, and upload it over SSH (the double-click tool)
+    Release {
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// the update server ("ffxi.cc", or a full address)
+        #[arg(long)]
+        server: Option<String>,
+        /// where the bundle goes (default: beside this program)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// the SSH login to upload with ("root@ffxi.cc"; "" not to)
+        #[arg(long)]
+        upload: Option<String>,
+        /// hand it out to players once it is on the server
+        #[arg(long)]
+        current: bool,
+    },
+    /// Take an update bundle (from release) into a published site; --current: hand it out
+    Apply { site: PathBuf, bundle: PathBuf, #[arg(long)] current: bool },
 }
 
 /// A one-line progress readout on stderr, at most ten times a second.
@@ -98,8 +124,18 @@ fn by_folder(list: &[Entry]) {
 
 fn main() {
     let cli = Cli::parse();
-    if let Err(e) = run(cli) {
-        eprintln!("xi-vault: {e}");
+    // no arguments: the double-clicked tool, which asks, and waits before its window closes
+    let interactive = cli.cmd.is_none();
+    let r = run(cli);
+    if let Err(e) = &r {
+        eprintln!("\nxi-vault: {e}");
+    }
+    if interactive {
+        print!("\nPress Enter to close.");
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stdin().read_line(&mut String::new());
+    }
+    if r.is_err() {
         std::process::exit(1);
     }
 }
@@ -109,7 +145,11 @@ fn run(cli: Cli) -> Result<()> {
     let vault = || Vault::open(&root);
     let p = progress();
     let t = Instant::now();
-    match cli.cmd {
+    let Some(cmd) = cli.cmd else {
+        let a = release::Args { game: None, server: None, out: None, upload: None, current: false };
+        return release::release(a, true, &p);
+    };
+    match cmd {
         Cmd::Snapshot { game, name } => {
             let v = vault()?;
             let m = v.snapshot(&game, name.as_deref(), &p)?;
@@ -202,6 +242,21 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Fetch { url, version } => {
             let m = fetch(&vault()?, &url, version.as_deref(), &p)?;
             println!("version {}: in the vault ({} files)", m.version, m.files.len());
+        }
+        Cmd::Release { game, server, out, upload, current } => {
+            release::release(release::Args { game, server, out, upload, current }, false, &p)?;
+        }
+        Cmd::Apply { site, bundle, current } => {
+            let f = std::fs::File::open(&bundle).map_err(|e| format!("{}: {e}", bundle.display()))?;
+            let (h, index) = apply_bundle(&site, std::io::BufReader::new(f), current, &p)?;
+            println!(
+                "{}: version {} published ({} new files{}); the server hands out {}",
+                site.display(),
+                h.version,
+                h.objects,
+                if h.base.is_empty() { String::new() } else { format!(", players bring the rest from {}", h.base) },
+                index.current
+            );
         }
     }
     Ok(())

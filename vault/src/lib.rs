@@ -175,6 +175,55 @@ pub fn install_files(game: &Path) -> Result<Vec<(String, u64)>> {
     Ok(out)
 }
 
+/// The client version an install was last patched to: the newest one PlayOnline's patch.cfg names.
+/// Each of its entries is a file and the versions it went through ("30260805_0 <size> ..."), so an
+/// update that changes only DATs still shows, where FFXiMain.dll's build would not.
+pub fn patched_version(game: &Path) -> Option<String> {
+    let data = fs::read(game.join("patch.cfg")).ok()?;
+    let key = |v: &str| {
+        let (date, n) = v.split_once('_')?;
+        Some((date.parse::<u64>().ok()?, n.parse::<u64>().ok()?))
+    };
+    data.split(|&b| b == b'\n')
+        .filter_map(|line| std::str::from_utf8(line.split(|&b| b == b' ').next()?).ok())
+        .filter(|v| v.len() >= 10 && v.as_bytes()[8] == b'_' && key(v).is_some())
+        .max_by_key(|v| key(v))
+        .map(str::to_string)
+}
+
+/// Every file of an install hashed into a manifest (and put in `store` when given). Its version is
+/// the one patch.cfg names, else the one meta/builds.json gives its FFXiMain.dll, else unknown-<hash>.
+pub fn hash_install(game: &Path, store: Option<&Vault>, what: &str, progress: Progress) -> Result<Manifest> {
+    let list = install_files(game)?;
+    let total: u64 = list.iter().map(|(_, s)| s).sum();
+    let done = AtomicU64::new(0);
+    let files = list
+        .par_iter()
+        .map(|(rel, size)| {
+            let src = game.join(rel);
+            let sha = sha256_file(&src)?;
+            if let Some(v) = store {
+                v.put_file(&src, &sha)?;
+            }
+            progress(what, done.fetch_add(*size, Ordering::Relaxed) + size, total);
+            Ok(Entry { path: rel.clone(), size: *size, sha256: sha })
+        })
+        .collect::<Result<Vec<Entry>>>()?;
+    let sha_of = |p: &str| files.iter().find(|e| e.path.eq_ignore_ascii_case(p)).map(|e| e.sha256.clone()).unwrap_or_default();
+    let (main, ffxi) = (sha_of("FFXiMain.dll"), sha_of("FFXi.dll"));
+    let (build, known) = known_build(&main).unwrap_or_default();
+    let version = patched_version(game).or((!known.is_empty()).then_some(known)).unwrap_or_else(|| format!("unknown-{}", &main[..12]));
+    Ok(Manifest {
+        format: FORMAT.into(),
+        version,
+        build,
+        ffximain_sha256: main,
+        ffxi_sha256: ffxi,
+        created: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+        files,
+    })
+}
+
 // --- the vault -----------------------------------------------------------------------------------
 
 pub struct Vault {
@@ -272,39 +321,12 @@ impl Vault {
     }
 
     /// Records the install as a version: every file hashed and stored, the manifest saved.
-    /// `name` overrides the version name (else the version meta/builds.json gives its FFXiMain.dll).
+    /// `name` overrides the version name (else scan's).
     pub fn snapshot(&self, game: &Path, name: Option<&str>, progress: Progress) -> Result<Manifest> {
-        let list = install_files(game)?;
-        let total: u64 = list.iter().map(|(_, s)| s).sum();
-        let done = AtomicU64::new(0);
-        let files = list
-            .par_iter()
-            .map(|(rel, size)| {
-                let src = game.join(rel);
-                let sha = sha256_file(&src)?;
-                self.put_file(&src, &sha)?;
-                let d = done.fetch_add(*size, Ordering::Relaxed) + size;
-                progress("snapshot", d, total);
-                Ok(Entry { path: rel.clone(), size: *size, sha256: sha })
-            })
-            .collect::<Result<Vec<Entry>>>()?;
-        let sha_of = |p: &str| files.iter().find(|e| e.path.eq_ignore_ascii_case(p)).map(|e| e.sha256.clone()).unwrap_or_default();
-        let (main, ffxi) = (sha_of("FFXiMain.dll"), sha_of("FFXi.dll"));
-        let (build, version) = known_build(&main).unwrap_or_default();
-        let version = match name {
-            Some(n) => n.to_string(),
-            None if !version.is_empty() => version,
-            None => format!("unknown-{}", &main[..12]),
-        };
-        let m = Manifest {
-            format: FORMAT.into(),
-            version,
-            build,
-            ffximain_sha256: main,
-            ffxi_sha256: ffxi,
-            created: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
-            files,
-        };
+        let mut m = hash_install(game, Some(self), "snapshot", progress)?;
+        if let Some(n) = name {
+            m.version = n.to_string();
+        }
         self.save(&m)?;
         Ok(m)
     }
@@ -579,6 +601,198 @@ pub fn unpack(vault: &Vault, r: impl Read, progress: Progress) -> Result<Manifes
     Ok(h.manifest)
 }
 
+// --- update bundles ------------------------------------------------------------------------------
+//
+// A server operator updates the game on one PC (PlayOnline) and the site lives on another machine.
+// A bundle carries a new version from the one to the other without a vault on either side: made
+// from the install against what the site already hosts, taken into the site where it is served.
+//   bundle.json                 BundleHeader
+//   versions/<version>.json     the new version's manifest
+//   objects/ab/<sha256>.zst     each file the site lacks, compressed as the site keeps it
+// (an uncompressed tar: the objects are zstd already)
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BundleHeader {
+    pub format: String,
+    pub version: String,
+    /// the recompiler's build label; empty when the launcher does not know this FFXiMain.dll yet
+    pub build: String,
+    /// as IndexVersion::base: the version whose files players bring themselves ("" when all hosted)
+    pub base: String,
+    /// the version the site wanted when this was made, which it was measured against
+    pub since: String,
+    pub objects: usize,
+    /// the objects' size uncompressed
+    pub bytes: u64,
+}
+
+/// A version name that is safe as a file name on a site.
+fn plain_name(v: &str) -> bool {
+    !v.is_empty() && v.len() <= 64 && v.chars().all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c)) && !v.starts_with('.')
+}
+
+fn tar_bytes<W: Write>(t: &mut tar::Builder<W>, path: &str, data: &[u8]) -> Result<()> {
+    let mut hd = tar::Header::new_gnu();
+    hd.set_size(data.len() as u64);
+    hd.set_mode(0o644);
+    hd.set_cksum();
+    t.append_data(&mut hd, path, data).map_err(err(path))
+}
+
+/// Writes a bundle of version `m` (hashed from the install `game`): its manifest, and every file of
+/// it whose content is not in `hosted` (what the site has: its current version, and that version's
+/// base, which players bring). `base` and `since` go in the header.
+pub fn make_bundle(game: &Path, m: &Manifest, hosted: &BTreeSet<String>, base: &str, since: &str, out: &Path, progress: Progress) -> Result<BundleHeader> {
+    if !plain_name(&m.version) {
+        return Err(format!("version name {:?}: letters, digits, _ - . only", m.version));
+    }
+    let mut objects: BTreeMap<&str, &Entry> = BTreeMap::new();
+    for e in m.files.iter().filter(|e| !hosted.contains(&e.sha256)) {
+        objects.entry(&e.sha256).or_insert(e);
+    }
+    let header = BundleHeader {
+        format: FORMAT.into(),
+        version: m.version.clone(),
+        build: m.build.clone(),
+        base: base.into(),
+        since: since.into(),
+        objects: objects.len(),
+        bytes: objects.values().map(|e| e.size).sum(),
+    };
+    // compressed side by side first (every core), then one after another into the tar
+    let parts = out.with_extension("parts");
+    fs::create_dir_all(&parts).map_err(err(parts.display()))?;
+    let done = AtomicU64::new(0);
+    objects.par_iter().try_for_each(|(sha, e)| -> Result<()> {
+        let dst = parts.join(format!("{sha}.zst"));
+        if !dst.exists() {
+            let data = fs::read(game.join(&e.path)).map_err(err(&e.path))?;
+            if hex(&Sha256::digest(&data)) != **sha {
+                return Err(format!("{} changed while this ran; run it again", e.path));
+            }
+            let z = zstd::bulk::compress(&data, 9).map_err(err("zstd"))?;
+            let tmp = dst.with_extension("tmp");
+            fs::write(&tmp, z).map_err(err(tmp.display()))?;
+            fs::rename(&tmp, &dst).map_err(err(dst.display()))?;
+        }
+        progress("compress", done.fetch_add(e.size, Ordering::Relaxed) + e.size, header.bytes);
+        Ok(())
+    })?;
+    let tmp = out.with_extension("tmp");
+    let mut t = tar::Builder::new(std::io::BufWriter::new(File::create(&tmp).map_err(err(tmp.display()))?));
+    tar_bytes(&mut t, "bundle.json", &serde_json::to_vec_pretty(&header).unwrap())?;
+    tar_bytes(&mut t, &format!("versions/{}.json", m.version), &serde_json::to_vec_pretty(m).unwrap())?;
+    for sha in objects.keys() {
+        let src = parts.join(format!("{sha}.zst"));
+        let mut f = File::open(&src).map_err(err(src.display()))?;
+        t.append_file(format!("objects/{}/{sha}.zst", &sha[..2]), &mut f).map_err(err(src.display()))?;
+    }
+    t.into_inner().map_err(err("bundle"))?.flush().map_err(err("bundle"))?;
+    fs::rename(&tmp, out).map_err(err(out.display()))?;
+    let _ = fs::remove_dir_all(&parts);
+    Ok(header)
+}
+
+/// Takes a bundle into a published site: every object (each checked against its hash), then, once
+/// the site has all the version needs (or its base does), its manifest and its entry in index.json.
+/// `make_current`: also the version the server wants. Nothing is listed when anything is missing.
+pub fn apply_bundle(site: &Path, r: impl Read, make_current: bool, progress: Progress) -> Result<(BundleHeader, Index)> {
+    let index_path = site.join("index.json");
+    let mut index: Index = serde_json::from_str(&fs::read_to_string(&index_path).map_err(err(index_path.display()))?)
+        .map_err(err(index_path.display()))?;
+    let mut t = tar::Archive::new(r);
+    let mut header: Option<BundleHeader> = None;
+    let mut manifest: Option<Manifest> = None;
+    let mut done = 0;
+    for entry in t.entries().map_err(err("bundle"))? {
+        let mut entry = entry.map_err(err("bundle"))?;
+        let path = entry.path().map_err(err("bundle"))?.to_string_lossy().into_owned();
+        let mut data = Vec::with_capacity(entry.size() as usize);
+        entry.read_to_end(&mut data).map_err(err(&path))?;
+        if path == "bundle.json" {
+            let h: BundleHeader = serde_json::from_slice(&data).map_err(err("bundle.json"))?;
+            if h.format != FORMAT || !plain_name(&h.version) || !(h.base.is_empty() || plain_name(&h.base)) {
+                return Err(format!("not a bundle this xi-vault reads ({} {})", h.format, h.version));
+            }
+            header = Some(h);
+        } else if let Some(name) = path.strip_prefix("versions/").and_then(|p| p.strip_suffix(".json")) {
+            let m: Manifest = serde_json::from_slice(&data).map_err(err(&path))?;
+            if Some(name) != header.as_ref().map(|h| h.version.as_str()) || m.version != name {
+                return Err(format!("{path}: not the version the bundle says"));
+            }
+            manifest = Some(m);
+        } else if let Some(sha) = path.strip_prefix("objects/").and_then(|p| p.get(3..)).and_then(|p| p.strip_suffix(".zst")) {
+            if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(format!("{path}: not an object"));
+            }
+            let mut h = Sha256::new();
+            let mut n = 0u64;
+            let mut z = zstd::Decoder::new(data.as_slice()).map_err(err(&path))?;
+            let mut buf = vec![0u8; 1 << 20];
+            loop {
+                let k = z.read(&mut buf).map_err(err(&path))?;
+                if k == 0 {
+                    break;
+                }
+                h.update(&buf[..k]);
+                n += k as u64;
+            }
+            if hex(&h.finalize()) != sha {
+                return Err(format!("{path}: damaged (its content does not hash to its name)"));
+            }
+            let dst = site.join("objects").join(&sha[..2]).join(format!("{sha}.zst"));
+            if !dst.exists() {
+                fs::create_dir_all(dst.parent().unwrap()).map_err(err(dst.display()))?;
+                let tmp = dst.with_extension("tmp");
+                fs::write(&tmp, &data).map_err(err(tmp.display()))?;
+                fs::rename(&tmp, &dst).map_err(err(dst.display()))?;
+            }
+            done += n;
+            if let Some(h) = &header {
+                progress("apply", done, h.bytes);
+            }
+        }
+    }
+    let h = header.ok_or("not a bundle: no bundle.json")?;
+    let m = manifest.ok_or("the bundle has no manifest")?;
+    // everything the version needs: hosted here, or in its base (the players')
+    let from_base: BTreeSet<String> = if h.base.is_empty() {
+        BTreeSet::new()
+    } else {
+        let p = site.join("versions").join(format!("{}.json", h.base));
+        let b: Manifest = serde_json::from_str(&fs::read_to_string(&p).map_err(|e| format!("its base {} is not on this site ({e})", h.base))?)
+            .map_err(err(p.display()))?;
+        b.files.into_iter().map(|e| e.sha256).collect()
+    };
+    let missing: Vec<&Entry> = m
+        .files
+        .iter()
+        .filter(|e| !from_base.contains(&e.sha256) && !site.join("objects").join(&e.sha256[..2]).join(format!("{}.zst", e.sha256)).exists())
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "{} files of {} are neither in the bundle nor on this site (the first: {}); it was made against {}, \
+             so make it again against what the site has now",
+            missing.len(),
+            h.version,
+            missing[0].path,
+            h.since
+        ));
+    }
+    let mp = site.join("versions").join(format!("{}.json", h.version));
+    fs::create_dir_all(mp.parent().unwrap()).map_err(err("versions"))?;
+    fs::write(&mp, serde_json::to_string_pretty(&m).unwrap()).map_err(err(mp.display()))?;
+    index.versions.retain(|v| v.version != h.version);
+    index.versions.push(IndexVersion { version: m.version.clone(), build: m.build.clone(), files: m.files.len(), bytes: m.bytes(), base: h.base.clone() });
+    if make_current || index.current.is_empty() {
+        index.current = h.version.clone();
+    }
+    let tmp = index_path.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(&index).unwrap()).map_err(err(tmp.display()))?;
+    fs::rename(&tmp, &index_path).map_err(err(index_path.display()))?;
+    Ok((h, index))
+}
+
 // --- publishing and fetching ---------------------------------------------------------------------
 
 /// Writes a static site for these versions: index.json, their manifests, every object they use
@@ -709,6 +923,13 @@ pub fn fetch_index_within(base: &str, timeout: std::time::Duration) -> Result<In
         return Err(format!("{base}: not an xi-vault site ({})", index.format));
     }
     Ok(index)
+}
+
+/// A published version's manifest.
+pub fn fetch_manifest(base: &str, version: &str) -> Result<Manifest> {
+    let mut s = String::new();
+    get(&url_join(base, &format!("versions/{version}.json")))?.read_to_string(&mut s).map_err(err("manifest"))?;
+    serde_json::from_str(&s).map_err(err(format!("versions/{version}.json")))
 }
 
 /// The port a server's game versions are looked for on when it names no address.

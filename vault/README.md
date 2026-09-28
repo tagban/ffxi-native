@@ -23,8 +23,29 @@ xi-vault diff 30260805_0 30260903_0 [--files] # what changed, by folder
 xi-vault pack 30260805_0 30260903_0 30260805_0..30260903_0.tar.zst   # only what's new, compressed
 ```
 
-The version name comes from `meta/builds.json` when the recompiler knows the build, else
-`unknown-<hash>` (give one with `--name`). `USER/` and `TEMP/` are the player's and are skipped.
+The version name is the newest one PlayOnline's `patch.cfg` names (the install's real client version,
+also for updates that change only DATs), else the one `meta/builds.json` gives its build, else
+`unknown-<hash>` (give one with `--name`). `USER/`, `TEMP/` and `SYS/` are the player's and are skipped.
+
+## Publishing an update from the PC that has it (the double-click tool)
+
+The game updates on a Windows PC (PlayOnline); the site is on the server. `ffxi-update-publisher.exe`
+(this program, built for Windows; with no arguments it asks what it needs) does the rest:
+
+1. finds the game (beside it, the registry, the usual folders, or asks) and the server (asks once);
+2. reads the version the server hands out (`index.json`) and the install's version (`patch.cfg`);
+   stops when the server has it already, or the install is older, or is that version with other files;
+3. hashes the install, shows what changed, and warns when `FFXiMain.dll` is a build the launcher
+   does not know yet (players cannot play it until a launcher update adds it: do not hand it out);
+4. writes `ffxi-update-<version>.tar` beside it: the manifest and only the files the site lacks;
+5. with an SSH login (asked once; Windows has `ssh`/`scp`), uploads it and runs on the server
+   `xi-vault apply /srv/xi-vault/site <file> [--current]`, asking whether to hand it out now.
+
+Its answers are kept in `xi-release.json` beside it (`game`, `server`, `upload`, `remote_site`,
+`remote_xi_vault`). Without SSH, copy the file to the server and run `xi-vault apply` there.
+`apply` checks every file against its hash and lists the version only once the site has all it
+needs (or its base does); `--current` also hands it out. Set `CLIENT_VER` to match.
+The same from a shell: `xi-vault release --game <folder> --server ffxi.cc [--upload root@ffxi.cc] [--current]`.
 
 ## Serving versions (a server operator)
 
