@@ -10,27 +10,79 @@
 > by, or supported by Square Enix. FINAL FANTASY XI and PlayOnline are trademarks of Square Enix;
 > you need your own legitimately obtained copy of the game's files.
 
-FINAL FANTASY XI running natively on macOS and Linux (Windows to follow), without Wine or Rosetta,
-behind a launcher that does the rest: point it at a `FINAL FANTASY XI` folder and it makes the game
-for that install and plays it on your private server.
+FINAL FANTASY XI running natively on **Windows, macOS and Linux**, without Wine or Rosetta, behind a
+launcher that does the rest: point it at a `FINAL FANTASY XI` folder, and it makes the game for that
+install, keeps it on the client version your server needs, and plays it. It is made for
+**MogHouse** (`ffxi.cc`) first, and works with other LandSandBoat servers too.
 
-The game's own code is statically recompiled from 32-bit x86 to C (`FFXiMain.dll` and `FFXi.dll`)
-and compiled on the player's machine into a module the launcher's game host loads. The host is the
-runtime and platform layer: Win32, Direct3D 8 on Metal (macOS) or OpenGL (Linux), audio, input,
-sockets, the sign-in screen drawn in the game's UI art.
+## Getting it
+
+From the [releases](https://github.com/tagban/ffxi-native/releases/latest):
+
+| Platform | Download |
+| --- | --- |
+| Windows 10 or 11 (64-bit) | `FFXI.Launcher_<version>_x64-setup.exe` |
+| macOS on Apple silicon | `FFXI-Launcher-macos-arm64.zip`: signed and notarized, unzip into Applications |
+| Linux, any distribution | `FFXI-Launcher-x86_64.flatpak` (or `-aarch64`): `flatpak install FFXI-Launcher-x86_64.flatpak` |
+| Linux, Debian and Ubuntu | `.deb`, or the AppImage (x86_64 and aarch64) |
+
+You need your own FINAL FANTASY XI install (the official installer, updated or not: the launcher
+brings it to the version your server needs).
+
+## Playing on MogHouse
+
+1. Open the launcher. It finds your `FINAL FANTASY XI` folder, or asks for it.
+2. Add an account: server `ffxi.cc`, **LandSandBoat**, your account name and password (kept in your
+   system's keychain).
+3. Press **Play**. The first time, it makes the game for your install (a minute or two; it downloads
+   a compiler once if your computer has none). If your client is not the version MogHouse wants, it
+   asks, downloads only the files you lack, and puts that version together beside your install,
+   which is never changed.
+
+In the game: **Alt+Enter** switches between a window and full screen, and **F12** brings up the
+settings (graphics, frame rate, window mode) while you play.
+
+## How updates work
+
+The launcher keeps each account on the client version its server wants. It looks, in order:
+
+1. **The game server itself.** A server can say which version it wants and where it publishes it
+   (a login server request, optional for servers); the launcher asks it first.
+2. **An address you give** the account (**Game updates address**). Players of a server that has no
+   update server of its own can use MogHouse's, `http://update.ffxi.cc:54080`, when their server wants
+   the same client version MogHouse does.
+3. **The server's own update server**, found by itself: port 54080 of the game server, then
+   `update.<server>` (for MogHouse, **`update.ffxi.cc`**), and remembered. Any server can run one:
+   [ffxi-update-server](https://github.com/tagban/ffxi-update-server) (public) sets one up on Windows
+   or Linux in a few minutes, and publishes each game update from the PC that has it.
+
+Whatever it finds, it brings exactly that version, up or down, checks every file against its
+SHA-256, and downloads only what you do not have: a monthly update is typically 100 to 500 MB, and a
+fresh official install gets everything it lacks (about 1.6 GB of files) in a download of around
+400 MB. Each server's version is kept apart, so accounts on servers that want different versions
+each play theirs; your macros and settings (`USER`) are shared by all of them. It also signs in the way each server expects
+(xiloader 2.1 or 2.2).
+
+The launcher runs the game itself: the game's own code is statically recompiled from 32-bit x86 to C
+(`FFXiMain.dll` and `FFXi.dll`) and compiled on your machine into a module the launcher's game host
+loads. The host is the runtime and platform layer: Win32, Direct3D 8 on Metal (macOS), OpenGL
+(Linux) or Direct3D 12 (Windows), audio, input, sockets, and the sign-in screen drawn in the game's
+UI art.
 
 ## Credits
 
-This project is built on **[xi-on-mac](https://github.com/rubymatrix/xi-on-mac)** by rubymatrix: the
-static recompiler, its runtime, the platform layer, the Metal back end, the game host and the
-original launcher are that project's work, used here with its author's permission. Its README is
-the basis of this one, and much of what follows describes it.
+This project is built on **[xi-on-mac](https://github.com/rubymatrix/xi-on-mac)** by
+**rubymatrix**: the static recompiler, its runtime, the platform layer, the Metal back end, the game
+host and the original launcher are that project's work, used here with its author's permission. Its
+README is the basis of this one, and much of what follows describes it.
 
 What this project adds: the launcher's first run (finding the install and making the game for it),
 the game as a module and a host that ships prebuilt (`runtime/xi_game.h`), the Rust translator
 (`recomp-rs`), making the module with no developer tools (clang or a downloaded zig), graphics
-settings while the game runs, window and full screen in the game, game versions for private servers
-(now [ffxi-update-server](https://github.com/tagban/ffxi-update-server), public), the OpenGL back end and the Linux build, and CI.
+settings while the game runs, window and full screen in the game, game versions and updates
+([ffxi-update-server](https://github.com/tagban/ffxi-update-server), public), signing in to
+xiloader 2.1 and 2.2 servers, the OpenGL back end, the Linux and Windows builds and packages
+(Flatpak, installer), and CI.
 
 ## Rules
 
@@ -228,11 +280,16 @@ It ships the game host (`xi-host`: the runtime, graphics, sound, input and the s
   version to use, roll back, custom DATs, and an updater for players without the launcher. Its
   [protocol](https://github.com/tagban/ffxi-update-server/blob/main/docs/PROTOCOL.md) is what this
   launcher does on Play.
-- **Game versions.** An account can name its server's game updates address (else the launcher looks
-  on the server itself, port 54080, then at `update.<server>`, which an operator can point anywhere
-  with a DNS record): on Play it brings the version the server wants, downloading only
-  what the player lacks, and plays it from beside their install, which is never changed. Game files
-  (Launcher page) backs up the install, checks it and repairs it. See [ffxi-update-server](https://github.com/tagban/ffxi-update-server).
+- **Game versions.** On Play it asks the game server which version it wants (LOGIN_VERSION_INFO,
+  when the server has it), finds its update server (the address the server or the account names,
+  else port 54080 of the server, else `update.<server>`), brings that version (up or down),
+  downloading only what the player lacks, and plays it from beside their install, which is never
+  changed; each version's `USER` is a link to the install's. Versions of the same name from
+  different servers are kept apart. Game files (Launcher page) backs up the install, checks it and
+  repairs it. The protocol: [ffxi-update-server/docs/PROTOCOL.md](https://github.com/tagban/ffxi-update-server/blob/main/docs/PROTOCOL.md).
+- **Signing in.** The host speaks the xiloader protocol the server wants: the one it names, else 2.2
+  (current LandSandBoat: TLS 1.3, mbedTLS on every platform), and 2.1 when the server's refusal asks
+  for it. The friend list and messages of 2.2 servers (`xi_profile`) are not supported yet.
 - **Game settings.** Window mode and resolution, menu and background resolution, the graphics
   options, sound, frame rate. They are written as `settings.reg` and given to the host with
   `--reg-final`. Those under *While playing* (frame rate, scene and interface shape, nameplates, the
@@ -247,8 +304,9 @@ Its settings file is `launcher.json` in the app's config folder
 (`~/Library/Application Support/com.tagban.ffxi-native` on macOS, `%APPDATA%\com.tagban.ffxi-native`
 on Windows, `~/.config/com.tagban.ffxi-native` on Linux), next to `settings.reg`, `saved.reg` and
 `live.txt`. The game's output is shown in the window and written to `host64.log` in the app's log
-folder. For a LandSandBoat account the password reaches the host in `FFXI_PASSWORD`, not on its
-command line.
+folder (`host64.previous.log` keeps the session before: `~/Library/Logs/com.tagban.ffxi-native` on
+macOS, `%LOCALAPPDATA%\com.tagban.ffxi-native\logs` on Windows). For a LandSandBoat account the
+password reaches the host in `FFXI_PASSWORD`, not on its command line.
 
 `build/pol-signin <PlayOnline ID> [password] [--host h]` signs in without the game and prints the
 session value, for testing a server.
