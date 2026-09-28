@@ -23,6 +23,7 @@
 #include "plat.h"
 #include "thunk.h"
 #include "user32.h"
+#include "overlay.h"
 
 int (*user32_key_hook)(int scancode, int mods, int down);
 
@@ -499,6 +500,8 @@ static void pump(void)
     SDL_Event e;
     while (SDL_PollEvent(&e))
     {
+        if (overlay_event(&e)) /* the overlay's first (a click on its windows, its key): not the game's */
+            continue;
         input_sdl_event(&e); /* DirectInput's view of the same events */
         Wnd* w = NULL;
         switch (e.type)

@@ -11,3 +11,5 @@ void dsound_setup(void);
 void dsound_set_volume(float in_world, float before_world);
 /* Whether the game talks to a zone server (ws2.c: its UDP): the volume to use. */
 void dsound_set_in_world(int on);
+/* Whether it is (the overlay's status). */
+int dsound_in_world(void);

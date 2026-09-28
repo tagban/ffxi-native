@@ -78,6 +78,7 @@
 #include "d3d8.h"
 #include "gfx.h"
 #include "dsound.h"
+#include "overlay.h"
 #include "dinput.h"
 #include "ws2.h"
 #include "plat.h"
@@ -578,7 +579,13 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--reg-final") && nfinals < 8)
             finals[nfinals++] = argv[i + 1];
         else if (!strcmp(argv[i], "--data-dir"))
+        {
             data_dir = argv[i + 1];
+            /* where the overlay's windows are kept */
+            static char ini[1024];
+            snprintf(ini, sizeof ini, "%s/overlay.ini", data_dir);
+            overlay_set_ini(ini);
+        }
         else if (!strcmp(argv[i], "--dats") && ndats < 8)
             dats[ndats++] = argv[i + 1];
         else if (!strcmp(argv[i], "--textures") && npacks < 8)

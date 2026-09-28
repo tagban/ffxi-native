@@ -50,14 +50,21 @@ GEN_WARNINGS = ['-Wno-unused-label', '-Wno-unused-variable', '-Wno-unused-but-se
 # the graphics back end, XI_GFX=metal|gl|null: Metal on macOS (the default there), OpenGL 4.1 elsewhere
 # (gfx_gl.c loads GL through SDL: nothing more to link), or none (gfx_null.c: draws nothing)
 GFX = os.environ.get('XI_GFX') or ('metal' if sys.platform == 'darwin' else 'gl')
+# the overlay (docs/OVERLAY.md): Dear ImGui on Metal; none yet on the others (overlay_none.c)
+IMGUI = ['third_party/imgui/imgui.cpp', 'third_party/imgui/imgui_draw.cpp', 'third_party/imgui/imgui_tables.cpp',
+         'third_party/imgui/imgui_widgets.cpp', 'third_party/imgui/backends/imgui_impl_sdl3.cpp']
 if GFX == 'metal':
-    GFX_SOURCES = ['runtime/portable/gfx_msl.c', 'runtime/portable/gfx_msl_shaders.c', 'runtime/portable/gfx_metal.m']
-    GFX_LIBS = ['-framework', 'Metal', '-weak_framework', 'MetalFX', '-framework', 'QuartzCore', '-framework', 'Foundation']
+    GFX_SOURCES = ['runtime/portable/gfx_msl.c', 'runtime/portable/gfx_msl_shaders.c', 'runtime/portable/gfx_metal.m',
+                   'runtime/portable/overlay.cpp', 'runtime/portable/overlay_metal.mm',
+                   'third_party/imgui/backends/imgui_impl_metal.mm'] + IMGUI
+    GFX_LIBS = ['-framework', 'Metal', '-weak_framework', 'MetalFX', '-framework', 'QuartzCore', '-framework', 'Foundation',
+                '-lc++']
 elif GFX == 'gl':
-    GFX_SOURCES = ['runtime/portable/gfx_glsl.c', 'runtime/portable/gfx_glsl_shaders.c', 'runtime/portable/gfx_gl.c']
+    GFX_SOURCES = ['runtime/portable/gfx_glsl.c', 'runtime/portable/gfx_glsl_shaders.c', 'runtime/portable/gfx_gl.c',
+                   'runtime/portable/overlay_none.c']
     GFX_LIBS = []
 elif GFX == 'null':
-    GFX_SOURCES = ['runtime/portable/gfx_null.c']
+    GFX_SOURCES = ['runtime/portable/gfx_null.c', 'runtime/portable/overlay_none.c']
     GFX_LIBS = []
 else:
     raise SystemExit('XI_GFX=%s: metal, gl or null' % GFX)
@@ -152,6 +159,10 @@ def compile_stale(sources, objdir, extra, cc=None, cflags=None):
             flags = (cflags or CFLAGS) + extra + (GEN_WARNINGS if s.startswith('generated/') else [])
             if s.endswith('.m'):  # Objective-C: references counted by hand (gfx_metal.m)
                 flags = [f for f in flags if f != '-std=c11'] + ['-fno-objc-arc']
+            elif s.endswith(('.cpp', '.mm')):  # the overlay's C++ (Dear ImGui); its Metal back end wants ARC
+                flags = [f for f in flags if f != '-std=c11'] + ['-std=c++17', '-I', 'third_party/imgui', '-Wno-deprecated-declarations']
+                if s.endswith('.mm'):
+                    flags += ['-fobjc-arc']
             jobs.append((cc or ['clang']) + ['-c'] + flags + [s, '-o', obj])
     if jobs:
         print('compiling %d of %d' % (len(jobs), len(sources)))

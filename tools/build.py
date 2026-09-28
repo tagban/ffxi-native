@@ -166,7 +166,8 @@ FFXI_IMAGE = os.path.join(ROOT, 'generated', 'FFXi.unpacked.dll')  # written by 
 FFXI_RETAIL = os.path.join(ROOT, 'generated', 'FFXi.retail.dll')
 SDL3 = os.environ.get('SDL3_DIR', r'C:\Dev\SDL3\SDL3-3.4.16')  # the SDL3 VC development package, unpacked
 # the graphics back end on Windows: Direct3D 12, its shaders generated as HLSL and compiled at run time
-GFX_SOURCES = ['runtime\\portable\\gfx_hlsl.c', 'runtime\\portable\\gfx_hlsl_shaders.c', 'runtime\\portable\\gfx_d3d12.c']
+GFX_SOURCES = ['runtime\\portable\\gfx_hlsl.c', 'runtime\\portable\\gfx_hlsl_shaders.c', 'runtime\\portable\\gfx_d3d12.c',
+               'runtime\\portable\\overlay_none.c']  # the overlay: none on Direct3D 12 yet (docs/OVERLAY.md)
 GFX_LIBS = ['d3d12.lib', 'dxgi.lib', 'd3dcompiler.lib', 'dxguid.lib']
 HOST_BASE = ['runtime\\portable\\user32.c', 'runtime\\portable\\d3d8.c', 'runtime\\portable\\dsound.c',
              'runtime\\portable\\input.c', 'runtime\\portable\\dinput.c', 'runtime\\portable\\ws2.c', 'host\\host64.c',

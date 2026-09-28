@@ -88,6 +88,8 @@ void dsound_set_volume(float in_world, float before_world)
     g_vol_title = before_world < 0.0f ? 0.0f : before_world > 1.0f ? 1.0f : before_world;
 }
 
+int dsound_in_world(void) { return g_in_world; }
+
 void dsound_set_in_world(int on)
 {
     if (g_in_world != (on != 0))

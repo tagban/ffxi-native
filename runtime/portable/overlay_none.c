@@ -1,0 +1,12 @@
+/* No overlay (a back end that has none yet, docs/OVERLAY.md phase 4): overlay.h as no-ops. */
+#include "overlay.h"
+
+void overlay_init(SDL_Window* window) { (void)window; }
+void overlay_set_ini(const char* path) { (void)path; }
+int overlay_event(const SDL_Event* e) { (void)e; return 0; }
+int overlay_shown(void) { return 0; }
+void overlay_note_present(int frame_w, int frame_h, int screen_w, int screen_h, int metalfx, float fps)
+{
+    (void)frame_w, (void)frame_h, (void)screen_w, (void)screen_h, (void)metalfx, (void)fps;
+}
+void overlay_build_frame(void) {}

@@ -29,6 +29,11 @@
 #include <string.h>
 
 #include "gfx.h"
+#include "overlay.h"
+
+/* overlay_metal.mm */
+void overlay_metal_init(void* device);
+void overlay_metal_draw(void* command_buffer, void* encoder, void* pass);
 #include "gfx_msl.h"
 
 #if __has_feature(objc_arc)
@@ -3222,6 +3227,9 @@ void gfx_present(GfxTex* bb)
                 [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
                 if (g_overlay && g_overlay_pipe)
                     draw_overlay(e, drawable.texture.width, drawable.texture.height);
+                overlay_note_present((int)bb->view.width, (int)bb->view.height, (int)drawable.texture.width,
+                    (int)drawable.texture.height, up != nil, (float)atof(g_fps_text));
+                overlay_metal_draw(cmd(), e, p);
                 [e endEncoding];
                 [cmd() presentDrawable:drawable];
                 bb->used = g_serial;
@@ -3326,6 +3334,9 @@ int gfx_init(void* window, int vsync)
                 SDL_GetWindowSizeInPixels(g_window, &pw, &ph);
                 if (pw > 0 && ph > 0)
                     g_layer.drawableSize = CGSizeMake(pw, ph);
+                /* the overlay (docs/OVERLAY.md): its windows are drawn in the present pass */
+                overlay_init(g_window);
+                overlay_metal_init(g_dev);
             }
             else
                 fprintf(stderr, "[recomp] gfx: no Metal layer for the window: %s\n", SDL_GetError());
