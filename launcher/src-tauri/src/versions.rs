@@ -263,22 +263,63 @@ fn update_url(app: &AppHandle, account_id: &str) -> Result<(String, xi_vault::In
     }
 }
 
+/// The account's server's game versions: where they are published, and the one its server wants.
+struct Site {
+    url: String,
+    index: xi_vault::Index,
+    want: String,
+}
+
+/// Asks the game server first (a LandSandBoat that answers LOGIN_VERSION_INFO): the version it
+/// wants (its CLIENT_VER, up or down from what the player has) and where it publishes it (its
+/// UPDATE_URL). Else the site found by update_url, and the version that site hands out.
+fn server_site(app: &AppHandle, account_id: &str) -> Result<Site, String> {
+    let cdir = config_dir(app)?;
+    let mut cfg = config::load(&cdir);
+    let account = cfg.accounts.iter_mut().find(|a| a.id == account_id).ok_or("No such account.")?;
+    let info = match account.kind {
+        config::AccountKind::Lsb if !account.server.trim().is_empty() => {
+            let port = if account.auth_port == 0 { xi_vault::LOGIN_PORT } else { account.auth_port };
+            xi_vault::server_info(&format!("{}:{port}", account.server.trim()), std::time::Duration::from_secs(2)).ok()
+        }
+        _ => None,
+    };
+    let named = info.as_ref().map(|i| i.update_url.trim().to_string()).filter(|u| !u.is_empty());
+    let (url, index) = match named {
+        Some(u) => {
+            let index = xi_vault::fetch_index(&u).map_err(|e| format!("The server's game updates address ({u}) did not answer: {e}"))?;
+            if account.update_url != u {
+                account.update_url = u.clone();
+                config::save(&cdir, &cfg)?;
+            }
+            (u, index)
+        }
+        None => update_url(app, account_id)?,
+    };
+    let want = match info.filter(|i| !i.client_ver.trim().is_empty()) {
+        Some(i) => xi_vault::pick_version(&index, i.client_ver.trim())
+            .ok_or(format!("The server wants version {}, which its game updates address does not publish.", i.client_ver.trim()))?,
+        None => index.current.clone(),
+    };
+    Ok(Site { url, index, want })
+}
+
 /// What version the account's server wants, and whether the player has it.
 pub fn check_server(app: &AppHandle, account_id: &str) -> Result<ServerVersion, String> {
-    let (_, index) = update_url(app, account_id)?;
+    let Site { index, want, .. } = server_site(app, account_id)?;
     let cfg = config::load(&config_dir(app)?);
-    let info = index.versions.iter().find(|v| v.version == index.current).ok_or("The server's index names no current version.")?;
+    let info = index.versions.iter().find(|v| v.version == want).ok_or("The server's index names no current version.")?;
     let dir = vault_dir(app, &cfg)?;
     let vault = Vault::open(&dir)?;
     // the player's own install, if it is that version; else one put together from the vault
     let own = Path::new(&cfg.game_path);
-    let (have, game_path) = if xi_vault::is_version(&vault, own, &index.current) {
+    let (have, game_path) = if xi_vault::is_version(&vault, own, &want) {
         (true, cfg.game_path.clone())
     } else {
         // one put together before (a server that went back to an older version, or another
         // server on it): all of it, not a copy cut short
-        let p = install_path(&dir, &index.current);
-        let whole = p.join("FFXiMain.dll").is_file() && xi_vault::is_version(&vault, &p, &index.current);
+        let p = install_path(&dir, &want);
+        let whole = p.join("FFXiMain.dll").is_file() && xi_vault::is_version(&vault, &p, &want);
         (whole, p.to_string_lossy().into_owned())
     };
     if have {
@@ -297,7 +338,7 @@ pub fn check_server(app: &AppHandle, account_id: &str) -> Result<ServerVersion, 
     Ok(ServerVersion {
         supported: !info.build.is_empty(),
         build: info.build.clone(),
-        current: index.current,
+        current: want,
         have,
         game_path,
     })
@@ -306,7 +347,7 @@ pub fn check_server(app: &AppHandle, account_id: &str) -> Result<ServerVersion, 
 /// Brings the version the account's server wants: only the files the vault lacks, then put
 /// together beside the player's install; the account plays from there from now on.
 pub fn update_for_server(app: AppHandle, tasks: Arc<Tasks>, account_id: String) -> Result<(), String> {
-    let (url, _) = update_url(&app, &account_id)?;
+    let Site { url, want, .. } = server_site(&app, &account_id)?;
     let cfg = config::load(&config_dir(&app)?);
     let account = cfg.accounts.iter().find(|a| a.id == account_id).cloned().ok_or("No such account.")?;
     let dir = vault_dir(&app, &cfg)?;
@@ -316,7 +357,7 @@ pub fn update_for_server(app: AppHandle, tasks: Arc<Tasks>, account_id: String) 
         if !cfg.game_path.is_empty() && version_of(&vault, Path::new(&cfg.game_path)).is_none() {
             vault.snapshot(Path::new(&cfg.game_path), None, progress)?;
         }
-        let m = xi_vault::fetch(&vault, &url, None, progress)?;
+        let m = xi_vault::fetch(&vault, &url, Some(&want), progress)?;
         let game_path = if xi_vault::is_version(&vault, Path::new(&cfg.game_path), &m.version) {
             cfg.game_path.clone()
         } else {

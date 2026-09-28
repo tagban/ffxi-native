@@ -22,6 +22,8 @@ zstd = { version = "0.13", features = ["zstdmt"] }
 tar = "0.4"
 tiny_http = "0.12"
 ureq = "2"
+# the login server's TLS (self-signed, as xiloader accepts): ureq's rustls, asked directly
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 clap = { version = "4", features = ["derive"] }
 
 [profile.release]

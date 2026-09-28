@@ -12,6 +12,7 @@
 //!   xi-vault fetch <url> [--version v]                               a version from a site into the vault
 //!   xi-vault release [--game <folder>] [--site <folder> | --server <url> [--upload <ssh login>]] [--current]
 //!                                                                    an updated install to a server (release.rs)
+//!   xi-vault server-info <server[:port]>                               a LandSandBoat server's CLIENT_VER, VER_LOCK, UPDATE_URL
 //!   xi-vault apply <site> <bundle.tar> [--current]                   take a release's bundle into a site
 //!   xi-vault                                                         (no arguments: release, asking)
 //!
@@ -84,6 +85,8 @@ enum Cmd {
         #[arg(long)]
         current: bool,
     },
+    /// Which client version a LandSandBoat server wants, and where it publishes it (its login server)
+    ServerInfo { server: String },
     /// Take an update bundle (from release) into a published site; --current: hand it out
     Apply { site: PathBuf, bundle: PathBuf, #[arg(long)] current: bool },
 }
@@ -248,6 +251,10 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Release { game, server, out, upload, site, current } => {
             release::release(release::Args { game, server, out, upload, site, current }, false, &p)?;
+        }
+        Cmd::ServerInfo { server } => {
+            let i = server_info(&server, std::time::Duration::from_secs(5))?;
+            println!("{}", serde_json::to_string_pretty(&i).unwrap());
         }
         Cmd::Apply { site, bundle, current } => {
             let f = std::fs::File::open(&bundle).map_err(|e| format!("{}: {e}", bundle.display()))?;

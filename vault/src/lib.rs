@@ -980,6 +980,123 @@ pub fn fetch_manifest(base: &str, version: &str) -> Result<Manifest> {
     serde_json::from_str(&s).map_err(err(format!("versions/{version}.json")))
 }
 
+// --- what a game server wants --------------------------------------------------------------------
+
+/// What a LandSandBoat server's login server says about the client it wants (xi_connect's
+/// LOGIN_VERSION_INFO, command 0x40: settings/default/login.lua CLIENT_VER, VER_LOCK, UPDATE_URL).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ServerInfo {
+    pub client_ver: String,
+    /// 0 any version, 1 exactly CLIENT_VER, 2 CLIENT_VER or newer (by year and month)
+    #[serde(default)]
+    pub ver_lock: u8,
+    /// its xi-vault site; empty when it names none
+    #[serde(default)]
+    pub update_url: String,
+}
+
+/// xi_connect's auth port.
+pub const LOGIN_PORT: u16 = 54231;
+
+#[derive(Debug)]
+struct AnyCertificate(Vec<rustls::SignatureScheme>);
+
+// As xiloader: private servers present self-signed certificates. What this learns is public, and a
+// version it names is still only ever taken whole and checked file by file from a site.
+impl rustls::client::danger::ServerCertVerifier for AnyCertificate {
+    fn verify_server_cert(
+        &self,
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &[rustls::pki_types::CertificateDer<'_>],
+        _: &rustls::pki_types::ServerName<'_>,
+        _: &[u8],
+        _: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        _: &[u8],
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+    fn verify_tls13_signature(
+        &self,
+        _: &[u8],
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.clone()
+    }
+}
+
+/// Asks a game server's login server which client version it wants and where it publishes it.
+/// `server` is a name or address, with ":port" when not 54231. Err when it does not answer, or is a
+/// LandSandBoat without LOGIN_VERSION_INFO (which says nothing and closes).
+pub fn server_info(server: &str, timeout: std::time::Duration) -> Result<ServerInfo> {
+    use std::net::ToSocketAddrs;
+    let server = server.trim();
+    let (host, port) = match server.rsplit_once(':') {
+        Some((h, p)) if !h.contains(':') => (h, p.parse::<u16>().map_err(err(server))?),
+        _ => (server, LOGIN_PORT),
+    };
+    let addr = (host, port).to_socket_addrs().map_err(err(host))?.next().ok_or(format!("{host}: no address"))?;
+    let tcp = std::net::TcpStream::connect_timeout(&addr, timeout).map_err(err(format!("{host}:{port}")))?;
+    tcp.set_read_timeout(Some(timeout)).ok();
+    tcp.set_write_timeout(Some(timeout)).ok();
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let schemes = provider.signature_verification_algorithms.supported_schemes();
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(err("TLS"))?
+        .dangerous()
+        .with_custom_certificate_verifier(std::sync::Arc::new(AnyCertificate(schemes)))
+        .with_no_client_auth();
+    let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(err(host))?;
+    let conn = rustls::ClientConnection::new(std::sync::Arc::new(config), name).map_err(err("TLS"))?;
+    let mut tls = rustls::StreamOwned::new(conn, tcp);
+    // the loader version as xiloader 2.1 sends it; an older xi_connect checks it before the command
+    tls.write_all(br#"{"command":64,"version":[2,1,2]}"#).map_err(err(format!("{host}:{port}")))?;
+    tls.flush().map_err(err(format!("{host}:{port}")))?;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match tls.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf);
+                let text = text.trim_end_matches('\0');
+                if let Ok(info) = serde_json::from_str::<ServerInfo>(text) {
+                    return Ok(info);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let text = String::from_utf8_lossy(&buf).trim_end_matches('\0').to_string();
+    Err(if text.is_empty() {
+        format!("{host}:{port} did not say which version it wants (a LandSandBoat without the version request)")
+    } else {
+        format!("{host}:{port}: {text}")
+    })
+}
+
+/// Which published version is the one a server's CLIENT_VER names: that very name, else the newest
+/// of the same year and month (LandSandBoat compares only those: "302608" of "30260805_0").
+pub fn pick_version(index: &Index, client_ver: &str) -> Option<String> {
+    if let Some(v) = index.versions.iter().find(|v| v.version == client_ver) {
+        return Some(v.version.clone());
+    }
+    let month = client_ver.get(..6)?;
+    index.versions.iter().filter(|v| v.version.get(..6) == Some(month)).map(|v| v.version.clone()).max()
+}
+
 /// The port a server's game versions are looked for on when it names no address.
 pub const DEFAULT_PORT: u16 = 54080;
 
