@@ -52,7 +52,7 @@ GEN_WARNINGS = ['-Wno-unused-label', '-Wno-unused-variable', '-Wno-unused-but-se
 GFX = os.environ.get('XI_GFX') or ('metal' if sys.platform == 'darwin' else 'gl')
 if GFX == 'metal':
     GFX_SOURCES = ['runtime/portable/gfx_msl.c', 'runtime/portable/gfx_msl_shaders.c', 'runtime/portable/gfx_metal.m']
-    GFX_LIBS = ['-framework', 'Metal', '-framework', 'QuartzCore', '-framework', 'Foundation']
+    GFX_LIBS = ['-framework', 'Metal', '-weak_framework', 'MetalFX', '-framework', 'QuartzCore', '-framework', 'Foundation']
 elif GFX == 'gl':
     GFX_SOURCES = ['runtime/portable/gfx_glsl.c', 'runtime/portable/gfx_glsl_shaders.c', 'runtime/portable/gfx_gl.c']
     GFX_LIBS = []

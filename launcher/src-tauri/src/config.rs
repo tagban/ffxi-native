@@ -82,6 +82,13 @@ pub struct GameSettings {
     pub menu_height: u32, // 0038
     pub background_width: u32, // 0003
     pub background_height: u32, // 0004
+    /// The 3D world's resolution (the game draws it at the background resolution, then shrinks it
+    /// into the window's): "performance" the window's, "balanced" 1.5 times it, "quality" twice it,
+    /// "maximum" 4096 x 4096, "custom" background_width x background_height.
+    pub render_quality: String,
+    /// The size the player last gave the game's window (points; host64 reports it, --window-size
+    /// opens it so next time); 0 x 0: the game's own.
+    pub window_points: (u32, u32),
     /// 0-6 (0000)
     pub mip_mapping: u32,
     /// 0 high, 1 low, 2 uncompressed (0018)
@@ -134,6 +141,8 @@ impl Default for GameSettings {
             menu_height: 540,
             background_width: 4096,
             background_height: 4096,
+            render_quality: "quality".into(),
+            window_points: (0, 0),
             mip_mapping: 6,
             texture_compression: 1,
             map_compression: 1,
@@ -164,7 +173,7 @@ impl Default for GameSettings {
 /// changes the keys its file names, so the launcher writes every one.
 pub const FX_DEFAULTS: &[(&str, f32)] = &[
     ("fx", 0.0), ("ao", 0.8), ("radius", 1.0), ("grade", 1.0), ("sat", 1.12), ("contrast", 0.2),
-    ("sharpen", 0.3), ("filter", 1.0), ("aniso", 16.0), ("fog", 0.004), ("fog_falloff", 0.08),
+    ("sharpen", 0.3), ("upscale", 1.0), ("filter", 1.0), ("aniso", 16.0), ("fog", 0.004), ("fog_falloff", 0.08),
     ("fog_height", 2.0), ("fog_max", 0.5), ("fog_sun", 0.5), ("fog_g", 0.6), ("bloom", 0.3),
     ("threshold", 0.75), ("rays", 0.6), ("rays_decay", 0.965), ("rays_length", 0.85), ("light", 1.0),
     ("shadow", 0.3), ("shadow_length", 0.6), ("sun", 0.5), ("sun_distance", 40.0), ("sun_soft", 0.03),
@@ -191,6 +200,21 @@ impl GameSettings {
         s
     }
 
+    /// The background (3D) resolution render_quality asks for. Drawing the world at 4096 x 4096
+    /// and shrinking it into a 1080p window costs eight times the pixels of the window for little
+    /// the eye sees; twice the window's is sharp and half that work.
+    pub fn background(&self) -> (u32, u32) {
+        let (w, h) = (self.window_width.max(640), self.window_height.max(480));
+        let times = |k: f32| (((w as f32 * k) as u32).min(4096), ((h as f32 * k) as u32).min(4096));
+        match self.render_quality.as_str() {
+            "performance" => times(1.0),
+            "balanced" => times(1.5),
+            "maximum" => (4096, 4096),
+            "custom" => (self.background_width, self.background_height),
+            _ => times(2.0),
+        }
+    }
+
     /// The settings as a REGEDIT4 file for host64 --reg-final (loaded after the game's own saves).
     pub fn to_reg(&self) -> String {
         let b = |v: bool| v as u32;
@@ -198,8 +222,8 @@ impl GameSettings {
             ("0000", self.mip_mapping.min(6)),
             ("0001", self.window_width),
             ("0002", self.window_height),
-            ("0003", self.background_width),
-            ("0004", self.background_height),
+            ("0003", self.background().0),
+            ("0004", self.background().1),
             ("0007", b(self.sound)),
             ("0011", self.environment_animation.min(2)),
             ("0017", b(self.bump_mapping)),

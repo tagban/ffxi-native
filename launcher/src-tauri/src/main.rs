@@ -420,6 +420,14 @@ fn main() {
                     let _ = w.set_focus();
                 }
             }
+            // While a game runs the launcher is hidden, and out of the Dock on macOS: an exit the
+            // system or the window layer asks for then (not the player's own quit) would take the
+            // game's log and its messages (the settings key, the window's size) with it
+            if let tauri::RunEvent::ExitRequested { api, code: None, .. } = &event {
+                if game::is_running(&app.state::<Arc<Running>>()) {
+                    api.prevent_exit();
+                }
+            }
             let _ = (app, event);
         });
 }

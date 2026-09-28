@@ -16,6 +16,7 @@
  * Built without ARC: every object here is retained and released by hand, and each entry point runs
  * in its own autorelease pool (the callers are guest threads with none). */
 #import <Metal/Metal.h>
+#import <MetalFX/MetalFX.h>
 #import <QuartzCore/CAMetalLayer.h>
 #include <SDL3/SDL.h>
 #include <mach/mach_time.h>
@@ -141,7 +142,7 @@ static id<MTLTexture> g_scratch_depth;
 static struct
 {
     float fx, ao, radius, grade, sat, contrast, sharpen, filter, aniso, fog, fog_falloff, fog_height, fog_max, fog_sun,
-        fog_g, bloom, threshold, rays, rays_decay, rays_length, light, shadow, shadow_length, sun, sun_distance, sun_soft, sun_face, sun_min, sun_direct, sun_casters, sun_near, temporal, debug;
+        fog_g, bloom, threshold, rays, rays_decay, rays_length, light, shadow, shadow_length, sun, sun_distance, sun_soft, sun_face, sun_min, sun_direct, sun_casters, sun_near, temporal, debug, upscale;
 } g_fxs;
 
 /* --- small hash maps (key bytes -> object) ------------------------------------------------------------- */
@@ -2202,6 +2203,8 @@ static const struct
     { "sun_near", offsetof(__typeof__(g_fxs), sun_near), 15.0f },
     { "temporal", offsetof(__typeof__(g_fxs), temporal), 0.85f },
     { "debug", offsetof(__typeof__(g_fxs), debug), 0.0f },
+    /* the frame to a larger screen by MetalFX, not a stretch (not a scene effect: fx = 0 keeps it) */
+    { "upscale", offsetof(__typeof__(g_fxs), upscale), 1.0f },
 };
 
 static float* fx_setting(const char* key)
@@ -3111,6 +3114,62 @@ static void draw_overlay(id<MTLRenderCommandEncoder> e, double w, double h)
     [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
 }
 
+/* The game's frame (the window's resolution: 1920 x 1080) onto a screen with more pixels (a 4K
+ * display's drawable) by MetalFX's spatial scaler, Apple's: sharper than a bilinear stretch, and far
+ * cheaper than the game drawing that many. NULL when it does not apply (not larger, more than twice,
+ * turned off, or a Mac without it); present stretches then, as before. */
+static id<MTLFXSpatialScaler> g_up_scaler API_AVAILABLE(macos(13.0));
+static id<MTLTexture> g_up_out;
+
+static id<MTLTexture> upscaled(id<MTLTexture> src, NSUInteger ow, NSUInteger oh)
+{
+    if (g_fxs.upscale == 0.0f || ow <= src.width || oh <= src.height || ow > src.width * 2 || oh > src.height * 2)
+        return nil;
+    if (@available(macOS 13.0, *))
+    {
+        if (!g_up_scaler || g_up_scaler.inputWidth != src.width || g_up_scaler.inputHeight != src.height ||
+            g_up_scaler.outputWidth != ow || g_up_scaler.outputHeight != oh || g_up_scaler.colorTextureFormat != src.pixelFormat)
+        {
+            [g_up_scaler release];
+            g_up_scaler = nil;
+            [g_up_out release];
+            g_up_out = nil;
+            if (![MTLFXSpatialScalerDescriptor supportsDevice:g_dev])
+                return nil;
+            MTLFXSpatialScalerDescriptor* d = [[MTLFXSpatialScalerDescriptor alloc] init];
+            d.inputWidth = src.width;
+            d.inputHeight = src.height;
+            d.outputWidth = ow;
+            d.outputHeight = oh;
+            d.colorTextureFormat = src.pixelFormat;
+            d.outputTextureFormat = src.pixelFormat;
+            d.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
+            g_up_scaler = [d newSpatialScalerWithDevice:g_dev];
+            [d release];
+            if (!g_up_scaler)
+                return nil;
+            MTLTextureDescriptor* t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:src.pixelFormat
+                                                                                         width:ow
+                                                                                        height:oh
+                                                                                     mipmapped:NO];
+            t.usage = g_up_scaler.outputTextureUsage | MTLTextureUsageShaderRead;
+            t.storageMode = MTLStorageModePrivate;
+            g_up_out = [g_dev newTextureWithDescriptor:t];
+            if (!g_up_out)
+                return nil;
+            fprintf(stderr, "[gfx] MetalFX: the frame %lux%lu to the screen's %lux%lu\n", (unsigned long)src.width,
+                (unsigned long)src.height, (unsigned long)ow, (unsigned long)oh);
+        }
+        g_up_scaler.colorTexture = src;
+        g_up_scaler.outputTexture = g_up_out;
+        g_up_scaler.inputContentWidth = src.width;
+        g_up_scaler.inputContentHeight = src.height;
+        [g_up_scaler encodeToCommandBuffer:cmd()];
+        return g_up_out;
+    }
+    return nil;
+}
+
 void gfx_present(GfxTex* bb)
 {
     if (!g_dev)
@@ -3133,15 +3192,30 @@ void gfx_present(GfxTex* bb)
                 g_prof.drawable_ns += gfx_now_ns() - t0;
             if (drawable)
             {
+                /* MetalFX first (its own pass), then the present pass draws what it made */
+                id<MTLTexture> up = upscaled(bb->view, drawable.texture.width, drawable.texture.height);
+                {
+                    /* what the present does, whenever it changes (a resize, full screen) */
+                    static NSUInteger said[5];
+                    NSUInteger now[5] = { bb->view.width, bb->view.height, drawable.texture.width, drawable.texture.height, up != nil };
+                    if (memcmp(said, now, sizeof now))
+                    {
+                        memcpy(said, now, sizeof now);
+                        fprintf(stderr, "[gfx] present: the frame %lux%lu to the screen's %lux%lu%s\n", (unsigned long)now[0],
+                            (unsigned long)now[1], (unsigned long)now[2], (unsigned long)now[3],
+                            up ? ", upscaled by MetalFX" : now[2] > now[0] ? ", stretched" : "");
+                    }
+                }
                 MTLRenderPassDescriptor* p = [MTLRenderPassDescriptor renderPassDescriptor];
                 p.colorAttachments[0].texture = drawable.texture;
                 p.colorAttachments[0].loadAction = MTLLoadActionDontCare;
                 p.colorAttachments[0].storeAction = MTLStoreActionStore;
                 id<MTLRenderCommandEncoder> e = [cmd() renderCommandEncoderWithDescriptor:p];
-                float sharpen = g_fxs.fx != 0.0f ? g_fxs.sharpen : 0.0f;
+                /* MetalFX sharpens as it scales: not twice */
+                float sharpen = g_fxs.fx != 0.0f && !up ? g_fxs.sharpen : 0.0f;
                 [e setRenderPipelineState:sharpen > 0.0f && g_present_cas_pipe ? g_present_cas_pipe : g_present_pipe];
                 [e setFragmentBytes:&sharpen length:sizeof sharpen atIndex:0];
-                [e setFragmentTexture:bb->view atIndex:0];
+                [e setFragmentTexture:up ? up : bb->view atIndex:0];
                 [e setFragmentSamplerState:g_present_samp atIndex:0];
                 [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
                 if (g_overlay && g_overlay_pipe)

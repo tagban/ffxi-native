@@ -451,6 +451,8 @@ static void note_shown(Wnd* w)
     w->sh = sw != w->w || sh != w->h ? sh : 0;
 }
 
+static void make_resizable(Wnd* w, int on);
+
 static void apply_display_request(void)
 {
     int r = g_display_request;
@@ -463,6 +465,7 @@ static void apply_display_request(void)
     int full = r == 2 ? !(SDL_GetWindowFlags(w->sdl) & SDL_WINDOW_FULLSCREEN) : r;
     if (full)
     {
+        make_resizable(w, 0);
         SDL_SetWindowFullscreenMode(w->sdl, NULL); /* the desktop's own mode: no mode change */
         SDL_SetWindowFullscreen(w->sdl, true);
     }
@@ -470,7 +473,7 @@ static void apply_display_request(void)
     {
         SDL_SetWindowFullscreen(w->sdl, false);
         SDL_SetWindowBordered(w->sdl, true);
-        SDL_SetWindowResizable(w->sdl, true);
+        make_resizable(w, 1);
         /* a window the size of the desktop is no window: the game's size, within 90% of the desktop */
         uint32_t dw, dh, hz;
         user32_desktop_mode(&dw, &dh, &hz);
@@ -607,7 +610,15 @@ static void pump(void)
         case SDL_EVENT_WINDOW_RESIZED:
             w = wnd_of_sdl(e.window.windowID);
             if (w)
+            {
                 note_shown(w);
+                /* a window the player sized: the launcher remembers it for next time */
+                if (w == main_wnd() && !(SDL_GetWindowFlags(w->sdl) & SDL_WINDOW_FULLSCREEN))
+                {
+                    printf("@launcher window-size %d %d\n", e.window.data1, e.window.data2);
+                    fflush(stdout);
+                }
+            }
             break;
         case SDL_EVENT_WINDOW_MOVED:
             w = wnd_of_sdl(e.window.windowID);
@@ -654,10 +665,51 @@ static void sh_AdjustWindowRect(Guest* g) { RET(1, 3); }
  * window is made): a WS_POPUP without a caption (FFXI's borderless modes) has none, and one covering
  * the desktop is full screen - the desktop's own mode, no mode change (SDL's fullscreen with no
  * display mode), not a macOS Space. */
+/* The size the player last gave the window (host64 --window-size, the launcher remembers it): the
+ * game's window opens at it; 0 for the game's own size. */
+static int g_window_pw, g_window_ph;
+
+void user32_set_window_size(int w, int h)
+{
+    g_window_pw = w;
+    g_window_ph = h;
+}
+
+/* A window with a frame can be resized, only at the game's shape: its frame is drawn at that shape
+ * anyway, so the picture neither stretches nor needs bars, and the mouse maps straight through. */
+static void make_resizable(Wnd* w, int on)
+{
+    if (!w->sdl)
+        return;
+    SDL_SetWindowResizable(w->sdl, on);
+    float a = on && w->h > 0 ? (float)w->w / (float)w->h : 0.0f;
+    SDL_SetWindowAspectRatio(w->sdl, a, a);
+}
+
+/* the window the game made, at the size the player last gave it (within the desktop) */
+static void restore_size(Wnd* w)
+{
+    if (g_window_pw < 320 || g_window_ph < 200 || w->h <= 0)
+        return;
+    uint32_t dw, dh, hz;
+    user32_desktop_mode(&dw, &dh, &hz);
+    int pw = g_window_pw, ph = (int)((float)pw * (float)w->h / (float)w->w + 0.5f); /* the game's shape */
+    if (dw && dh && (pw > (int)dw || ph > (int)dh))
+        return;
+    SDL_SetWindowSize(w->sdl, pw, ph);
+    SDL_SetWindowPosition(w->sdl, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+}
+
 static void apply_frame(Wnd* w)
 {
 #if defined(_WIN32)
-    (void)w; /* Windows: the window is made borderless when created, and placed where the game puts it */
+    /* Windows: the window is made borderless when created, and placed where the game puts it */
+    int popup = (w->style & 0x80000000u) && (w->style & 0x00C00000u) != 0x00C00000u;
+    if (w->sdl && !popup && !w->fullscreen)
+    {
+        make_resizable(w, 1);
+        restore_size(w);
+    }
     return;
 #else
     if (!w->sdl)
@@ -671,6 +723,9 @@ static void apply_frame(Wnd* w)
     SDL_SetWindowBordered(w->sdl, !popup || (full && spaces));
     SDL_SetWindowFullscreenMode(w->sdl, NULL);
     SDL_SetWindowFullscreen(w->sdl, full);
+    make_resizable(w, !popup && !full);
+    if (!popup && !full)
+        restore_size(w);
 #endif
 }
 

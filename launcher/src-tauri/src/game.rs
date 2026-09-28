@@ -117,6 +117,10 @@ fn host_args(cfg: &LauncherConfig, paths: &Paths, account: &Account, session: Op
             }
         }
     }
+    let (ww, wh) = cfg.game.window_points;
+    if ww >= 320 && wh >= 200 && cfg.game.window_mode == 1 {
+        a.extend(["--window-size".into(), format!("{ww}x{wh}")]);
+    }
     a
 }
 
@@ -268,6 +272,16 @@ fn host_message(app: &AppHandle, msg: &str, lobby_error: &Mutex<Option<u32>>) {
                 let _ = w.set_focus();
             }
             let _ = app.emit("open-page", "game");
+        }
+        Some("window-size") => {
+            // the size the player gave the window: it opens so next time
+            let n: Vec<u32> = words.filter_map(|w| w.parse().ok()).collect();
+            if let (Some(&w), Some(&h), Ok(dir)) = (n.first(), n.get(1), app.path().app_config_dir()) {
+                let mut cfg = crate::config::load(&dir);
+                cfg.game.window_points = (w, h);
+                let _ = crate::config::save(&dir, &cfg);
+                let _ = app.emit("window-size", (w, h));
+            }
         }
         Some("lobby-error") => {
             if let Some(code) = words.next().and_then(|c| c.parse::<u32>().ok()) {

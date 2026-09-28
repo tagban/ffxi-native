@@ -272,6 +272,18 @@ function fillSettings(form, obj) {
     if (el.type === "checkbox") el.checked = !!obj[el.name];
     else el.value = obj[el.name];
   }
+  if (form === gameForm) syncQuality();
+}
+
+// the size the player gave the game's window, saved by the launcher: kept here too, so a later save
+// of these settings does not put the old one back
+listen("window-size", (e) => {
+  if (cfg?.game) cfg.game.window_points = e.payload;
+});
+
+// the background resolution fields only for a custom 3D quality
+function syncQuality() {
+  $("#background-custom").hidden = (cfg.game?.render_quality ?? "quality") !== "custom";
 }
 
 gameForm.addEventListener("change", async (e) => {
@@ -279,6 +291,7 @@ gameForm.addEventListener("change", async (e) => {
   if (el.dataset.fx) return setFx(el.dataset.fx, el.type === "checkbox" ? (el.checked ? 1 : 0) : parseFloat(el.value), true);
   if (!el.name) return;
   cfg.game[el.name] = el.type === "checkbox" ? el.checked : "num" in el.dataset ? parseInt(el.value, 10) || 0 : el.value;
+  if (el.name === "render_quality") syncQuality();
   await save(gameForm);
 });
 
@@ -305,6 +318,7 @@ const FX_CONTROLS = [
   { key: "sat", label: "Color saturation", min: 0.8, max: 1.5, step: 0.01 },
   { key: "contrast", label: "Contrast", min: 0, max: 0.6, step: 0.01 },
   { key: "sharpen", label: "Sharpening", min: 0, max: 1, step: 0.05 },
+  { key: "upscale", label: "MetalFX upscaling (a sharp frame on a high-resolution screen: 0 off, 1 on)", min: 0, max: 1, step: 1 },
   { key: "aniso", label: "Texture filtering", min: 1, max: 16, step: 1 },
   { key: "temporal", label: "Temporal smoothing", min: 0, max: 0.95, step: 0.05 },
   { key: "light", label: "Per-pixel lighting", check: true },

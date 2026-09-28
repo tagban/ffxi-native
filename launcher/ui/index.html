@@ -233,7 +233,18 @@
           <label>&nbsp;<input name="menu_height" type="number" min="0" max="4320" data-num></label>
         </div>
         <p class="hint">0 × 0 draws the menus at the window's resolution.</p>
-        <div class="row">
+        <label>3D quality
+          <select name="render_quality">
+            <option value="performance">Performance: the window's resolution</option>
+            <option value="balanced">Balanced: 1.5 times the window's</option>
+            <option value="quality">Quality: twice the window's (recommended)</option>
+            <option value="maximum">Maximum: 4096 × 4096</option>
+            <option value="custom">Custom</option>
+          </select>
+        </label>
+        <p class="hint">The game draws the world at this size and fits it to the window. Lower is faster;
+          the menus stay as sharp either way.</p>
+        <div class="row" id="background-custom">
           <label>Background resolution <input name="background_width" type="number" min="512" max="8192" data-num></label>
           <span class="x">×</span>
           <label>&nbsp;<input name="background_height" type="number" min="512" max="8192" data-num></label>

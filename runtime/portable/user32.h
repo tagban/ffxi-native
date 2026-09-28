@@ -24,6 +24,9 @@ void user32_desktop_mode(uint32_t* w, uint32_t* h, uint32_t* hz);
 /* --ui-aspect: the game's screen-space draws (its interface) keep width / height = aspect, centered
  * in a wider window, and the mouse is mapped to match. 0 (the default) is off. */
 void user32_set_ui_aspect(float aspect);
+/* The window size the player last gave (points; 0 x 0: the game's): a framed window opens at it, at
+ * the game's shape. */
+void user32_set_window_size(int w, int h);
 /* The fraction of hwnd's width the interface keeps: 1 when off, or the window is not wider. */
 float user32_ui_squeeze(uint32_t hwnd);
 /* Set by the graphics layer: whether the interface covers this point of the window (0..1 across

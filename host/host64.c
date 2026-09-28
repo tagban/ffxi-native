@@ -650,6 +650,13 @@ int main(int argc, char** argv)
             }
             *(argv[i][2] == 'a' ? &lsb.auth_port : argv[i][2] == 'd' ? &lsb.data_port : &lsb.view_port) = (uint16_t)port;
         }
+        else if (!strcmp(argv[i], "--window-size"))
+        {
+            /* the size the player last gave the window (the launcher remembers it) */
+            int ww = 0, wh = 0;
+            if (sscanf(argv[i + 1], "%dx%d", &ww, &wh) == 2)
+                user32_set_window_size(ww, wh);
+        }
         else if (!strcmp(argv[i], "--loader"))
         {
             /* the xiloader protocol the server named (2.2.0); else negotiated */
