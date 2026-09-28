@@ -45,6 +45,41 @@ server and never presses keys for the player.** No automation, by design, on eve
 | 4. Other back ends | the same on OpenGL (Linux) and Direct3D 12 (Windows) | the testers' machines |
 | 5. Addons | a read-only scripting layer (Lua) for community windows: game state in, ImGui out, nothing sent | an addon written by someone else |
 
+## Where it stands (2026-09-28)
+
+- **Phase 1 done**: ImGui over the game on Metal, after MetalFX, crisp at 4K; Cmd+U / Ctrl+Shift+U;
+  clicks and keys routed; layout kept. The Status window.
+- **Phase 2 underway**: three read-only hooks, found in each build by the byte patterns Ashita
+  publishes (Ashita's own file is not copied; the addresses go in meta/builds.json):
+  - `packet_in`: the success return of the game's decrypt-and-decompress: every server packet,
+    readable. Parsed now: zone-in (0x00A), party (0x0DD, 0x0DF, 0x0C8).
+  - `packet_out`: the entry of its encrypt: the player's own packets in the clear.
+  - `chat_add`: the entry of its add-a-line-to-the-log: every line the log shows (NPCs, system,
+    battle, chat), with its mode. The game's own event-script interpreter was also found
+    (0x100bc290), for dialogue later.
+- **Windows**: Chat (tabs by kind, words, the game's colours changeable, auto-translate phrases
+  from the install's dictionary), Party (HP, MP, TP, jobs).
+
+## Menus: the decision to make
+
+The game's menus (equipment, inventory, status, magic, the auction house...) are the harder part,
+and the rule above matters most there. Three ways, which can be combined:
+
+1. **The game's menus, looking better.** They stay the game's (all their logic, nothing new sent),
+   drawn sharper: higher-resolution interface textures and fonts (the host's `--textures` packs and
+   DAT overlays already do this), the interface at its own scale (the menu resolution). No risk.
+2. **Companion windows, display only.** New windows beside the game's menus that only show:
+   inventory across every bag with search and sort, equipment sets, what a piece of gear does,
+   status effects with their time left, the party's buffs. The game's menus stay for doing things.
+   Within the rules as they are.
+3. **Replacement menus that act.** New windows that also do things (equip this, use that, move
+   an item). Every action would go through the game itself, as the player's own command
+   (the same as typing `/equip` in the game's input line), one per click, never on its own: no
+   automation. But it is no longer display only, so it needs the rule changed for it, and servers
+   told what it does.
+
+The suggestion: 1 and 2 now; 3 only after deciding it, menu by menu.
+
 ## Rules
 
 - Display only: no packet is sent, no key pressed, no game memory written, by the overlay or any
