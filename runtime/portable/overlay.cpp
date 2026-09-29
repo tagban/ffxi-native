@@ -82,7 +82,7 @@ static void (*g_hide_game)(int log, int party, int target); /* host64: the game'
 static const char* (*g_game_focus)(void);         /* host64: the game's window with the keyboard */
 static int (*g_close_game)(const char* name8);    /* host64: the game's own close of one of its windows */
 static void (*g_open_settings)(void);             /* host64: the launcher's settings */
-static int g_send_open;                           /* 1 the box asked to open (Space), 2 with "/" */
+static int g_send_open;                           /* the box asked to open: 1 empty, 2 with "/", 3 with "!" */
 static bool g_swallow_text;                        /* the key's own character, not to be typed */
 
 /* The names over heads this frame, as the game placed them (host64's nameplate hook) */
@@ -450,10 +450,15 @@ static bool typing_is_ours(const SDL_KeyboardEvent& k)
         return false;
     if (k.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI))
         return false;
-    if (k.key != SDLK_SPACE && k.key != SDLK_SLASH)
+    bool bang = k.key == SDLK_EXCLAIM || (k.key == SDLK_1 && (k.mod & SDL_KMOD_SHIFT));
+    bool enter = k.key == SDLK_RETURN || k.key == SDLK_KP_ENTER;
+    if (k.key != SDLK_SPACE && k.key != SDLK_SLASH && !bang && !enter)
         return false;
     const char* focus = g_game_focus ? g_game_focus() : "";
-    return !focus[0] || !strncmp(focus, "logwin", 6) || !strncmp(focus, "fulllog", 7);
+    if (focus[0] && strncmp(focus, "logwin", 6) && strncmp(focus, "fulllog", 7))
+        return false;
+    /* Enter only with nothing targeted: with a target it is the game's (talk, attack, confirm) */
+    return !enter || !gamestate_targeting();
 }
 
 extern "C" void overlay_set_line_runner(int (*run)(const char* line))
@@ -492,8 +497,9 @@ extern "C" int overlay_event(const SDL_Event* e)
     }
     if (e->type == SDL_EVENT_KEY_DOWN && !ImGui::GetIO().WantTextInput && typing_is_ours(e->key))
     {
-        g_send_open = e->key.key == SDLK_SLASH ? 2 : 1;
-        g_swallow_text = true;
+        SDL_Keycode key = e->key.key;
+        g_send_open = key == SDLK_SLASH ? 2 : key == SDLK_EXCLAIM || key == SDLK_1 ? 3 : 1;
+        g_swallow_text = key != SDLK_RETURN && key != SDLK_KP_ENTER; /* Enter types nothing */
         return 1;
     }
     ImGui_ImplSDL3_ProcessEvent(e);
@@ -1107,6 +1113,8 @@ static void chat_box(void)
         /* opened by the game's own keys: Space empty, "/" with it typed */
         if (g_send_open == 2)
             snprintf(g_send, sizeof g_send, "/");
+        else if (g_send_open == 3)
+            snprintf(g_send, sizeof g_send, "!");
         g_send_open = 0;
         g_send_refocus = true;
     }
@@ -1116,7 +1124,7 @@ static void chat_box(void)
         g_send_refocus = false;
         g_send_fresh = true;
     }
-    const char* hint = g_send_to == 6 ? "name, then the message" : "Space or / to type; Enter sends, Esc leaves";
+    const char* hint = g_send_to == 6 ? "name, then the message" : "Space, Enter, / or ! to type; Enter sends, Esc leaves";
     /* the cursor at the end of what is there (a "/"), not all of it selected */
     auto to_end = [](ImGuiInputTextCallbackData* d) -> int {
         if (g_send_fresh)
@@ -1132,7 +1140,9 @@ static void chat_box(void)
         if (*t)
         {
             char line[300];
-            snprintf(line, sizeof line, "%s%s", *t == '/' ? "" : SEND_TO[g_send_to].prefix, t);
+            /* a /command, or a server's own ! command (a GM's, say), goes as it is: as if typed in
+             * the game's own input line */
+            snprintf(line, sizeof line, "%s%s", *t == '/' || *t == '!' ? "" : SEND_TO[g_send_to].prefix, t);
             g_run_line(line);
         }
         g_send[0] = 0; /* and the box closes, as the game's input line does */

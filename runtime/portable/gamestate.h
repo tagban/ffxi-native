@@ -120,6 +120,9 @@ void gamestate_set_zone_files(const char* game_dir, uint32_t keys_addr);
 void gamestate_set_target_ptr(uint32_t addr);
 /* The player's target now (from the game's own), as an entity: 0 when none. is_self: themselves. */
 int gamestate_target(GameEntity* out, int* is_self);
+/* Whether the player has anything targeted at all (the game's target window naming someone):
+ * 1 when it does, or when that cannot be told yet (so Enter is left to the game). */
+int gamestate_targeting(void);
 
 #ifdef __cplusplus
 }

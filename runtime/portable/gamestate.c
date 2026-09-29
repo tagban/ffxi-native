@@ -536,6 +536,16 @@ static int who_is(uint32_t v, int as_ptr)
     return -1;
 }
 
+int gamestate_targeting(void)
+{
+    if (!g_target_ptr || g_tgt_off < 0 || !gwin_is_committed(g_target_ptr))
+        return 1;
+    uint32_t t = rd32(g_target_ptr);
+    if (!t || !gwin_is_committed(t + (uint32_t)g_tgt_off))
+        return 0;
+    return rd32(t + (uint32_t)g_tgt_off) != 0;
+}
+
 int gamestate_target(GameEntity* out, int* is_self)
 {
     *is_self = 0;
