@@ -121,3 +121,20 @@ projection, which the host sees in its Direct3D calls), then equipment and inven
 - It adds nothing when hidden: the game runs as without it.
 - No Square Enix bytes in the repository, as everywhere: fonts are open-licensed, map data comes
   from the player's own install at run time.
+
+## For later: controller play (Steam Deck) as its own way of using the interface
+
+When the windows are designed further, controller play is a first-class choice beside keyboard and
+mouse, not an afterthought (the player's wish, 2026-09-29). Steam Deck players in particular:
+
+- A setting, **Controller** or **Keyboard and mouse** (or following the last input used), that
+  changes how the overlay behaves, not only how it looks.
+- Controller: every overlay window reachable and usable with the pad alone (ImGui's gamepad
+  navigation, focus that moves predictably, bigger targets, button hints like the game's own), the
+  Actions menu (magic, abilities, trust, items) laid out for a pad the way FFXI's own menus are, and
+  the chat usable without a keyboard (auto-translate lists and canned phrases before typing; Steam's
+  on-screen keyboard when typing is needed).
+- The Deck's screen: 1280x800 at arm's length, so text and windows larger by default there, and
+  layouts that fit 16:10.
+- FFXI's own pad scheme stays the reference (its menu button, cancel, the target cycle), so the
+  overlay never fights what the game does with the same buttons.
