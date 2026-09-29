@@ -2866,7 +2866,9 @@ static void plate_depths(GfxTex* color, const GfxScene* s)
     [b endEncoding];
     g_plate_rb[slot].cmd = [cmd() retain];
     g_plate_rb[slot].n = n, g_plate_rb[slot].token = token;
-    g_plate_rb[slot].p10 = s->proj[10], g_plate_rb[slot].p14 = s->proj[14];
+    /* depth = hand * p10 + p14 / distance, hand the sign of p11 (the game's is right-handed, -1):
+     * the overlay is given hand * p10, so distance = p14 / (depth - it) either way */
+    g_plate_rb[slot].p10 = s->proj[11] < 0.0f ? -s->proj[10] : s->proj[10], g_plate_rb[slot].p14 = s->proj[14];
 }
 
 void gfx_scene_done(GfxTex* color, const GfxScene* s)

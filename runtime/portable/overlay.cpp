@@ -257,7 +257,7 @@ extern "C" void overlay_plate_depths(int token, const float* depths, int n, floa
     auto& a = g_plate_asked[token & 3];
     if (a.token != token || n > a.n)
         return;
-    /* a depth to a distance: the projection gives z = p10 + p14 / distance */
+    /* a depth to a distance: the projection gives z = p10 + p14 / distance (p10 signed by gfx) */
     auto dist = [&](float z) { return z - p10 != 0.0f ? p14 / (z - p10) : 1e9f; };
     static int told;
     for (int i = 0; i < n; ++i)
