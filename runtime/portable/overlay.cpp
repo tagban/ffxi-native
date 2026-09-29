@@ -113,7 +113,17 @@ static struct
 } g_plate_asked[4];
 static int g_plate_token;
 static bool g_plates_depth_wrong; /* the depths turned out not as expected: nothing is hidden */
-static std::unordered_map<std::string, int> g_plate_hidden; /* name -> frames it has been hidden */
+/* name -> whether it is hidden now, and how many readings running have said otherwise: hidden after
+ * two, seen again only after eight (a gap between bricks, a building's edge, is not a way through) */
+struct PlateSeen
+{
+    bool hidden;
+    int against;
+};
+static std::unordered_map<std::string, PlateSeen> g_plate_hidden;
+/* each name's depth is read at five points: where it is, and a little to each side, above and below;
+ * it is behind something when most of them are */
+static const float PLATE_TAPS[5][2] = { { 0, 0 }, { -0.012f, 0 }, { 0.012f, 0 }, { 0, -0.008f }, { 0, 0.008f } };
 
 /* The player's choices, kept in overlay.ini ([Overlay][Settings]) */
 static struct
@@ -242,23 +252,25 @@ extern "C" int overlay_plate_points(float* xy, int max, int* token)
 {
     if (!g_set.plates || !g_set.plates_occlude || !g_nlast_plates)
         return 0;
-    int n = g_nlast_plates < max ? g_nlast_plates : max;
+    int n = g_nlast_plates < max / 5 ? g_nlast_plates : max / 5;
     int t = ++g_plate_token;
     auto& a = g_plate_asked[t & 3];
     a.token = t, a.n = n;
     for (int i = 0; i < n; ++i)
     {
-        xy[2 * i] = g_last_plates[i].x, xy[2 * i + 1] = g_last_plates[i].y;
+        for (int k = 0; k < 5; ++k)
+            xy[10 * i + 2 * k] = g_last_plates[i].x + PLATE_TAPS[k][0], xy[10 * i + 2 * k + 1] = g_last_plates[i].y + PLATE_TAPS[k][1];
         memcpy(a.text[i], g_last_plates[i].text, sizeof a.text[i]);
         a.z[i] = g_last_plates[i].z;
     }
     *token = t;
-    return n;
+    return 5 * n;
 }
 
 extern "C" void overlay_plate_depths(int token, const float* depths, int n, float p10, float p14)
 {
     auto& a = g_plate_asked[token & 3];
+    n /= 5; /* five readings a name */
     if (a.token != token || n > a.n)
         return;
     /* a depth to a distance: the projection gives z = p10 + p14 / distance (p10 signed by gfx) */
@@ -266,17 +278,26 @@ extern "C" void overlay_plate_depths(int token, const float* depths, int n, floa
     static int told;
     for (int i = 0; i < n; ++i)
     {
-        float scene = dist(depths[i]), name = dist(a.z[i]);
-        bool hidden = depths[i] > 0.0f && depths[i] < 1.0f && scene < name - 0.75f;
+        float name = dist(a.z[i]), scene = dist(depths[5 * i]);
+        int behind = 0;
+        for (int k = 0; k < 5; ++k)
+        {
+            float d = depths[5 * i + k];
+            behind += d > 0.0f && d < 1.0f && dist(d) < name - 0.75f;
+        }
+        bool hidden = behind >= 3;
         if (told < 12)
         {
             ++told;
             extern void rt_log(const char* fmt, ...);
-            rt_log("[recomp] nameplate %s: depth %.5f (%.1f away), the scene's there %.5f (%.1f): %s\n", a.text[i], a.z[i], name, depths[i], scene,
+            rt_log("[recomp] nameplate %s: %.1f away, the scene's %.1f there, %d of 5 points in front: %s\n", a.text[i], name, scene, behind,
                 hidden ? "hidden" : "seen");
         }
-        int& h = g_plate_hidden[a.text[i]];
-        h = hidden ? h + 1 : 0;
+        PlateSeen& h = g_plate_hidden[a.text[i]];
+        if (hidden == h.hidden)
+            h.against = 0;
+        else if (++h.against >= (hidden ? 2 : 8))
+            h.hidden = hidden, h.against = 0;
         /* if nearly every name reads as hidden, the depths are not what they are taken to be: the
          * hiding stops (and says so) rather than taking every name away */
         static int seen_n, hidden_n;
@@ -484,8 +505,8 @@ static void draw_nameplates(void)
         if (g_set.plates_occlude && !g_plates_depth_wrong)
         {
             auto h = g_plate_hidden.find(p.text);
-            if (h != g_plate_hidden.end() && h->second >= 2)
-                continue; /* behind something the game drew (two readings running: no flicker) */
+            if (h != g_plate_hidden.end() && h->second.hidden)
+                continue; /* behind something the game drew */
         }
         ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, p.text);
         uint16_t marks = 0;
@@ -1164,6 +1185,45 @@ static void color_editor(void)
     ImGui::End();
 }
 
+/* A chat line, wrapped, with its auto-translate phrases' braces as the game shows them: the opening
+ * one red, the closing one green */
+static void phrase_line(const char* s)
+{
+    ImFont* f = ImGui::GetFont();
+    float fs = ImGui::GetFontSize(), lh = ImGui::GetTextLineHeight();
+    float width = ImMax(40.0f, ImGui::GetContentRegionAvail().x);
+    ImVec2 o = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImU32 base = ImGui::GetColorU32(ImGuiCol_Text), open = ImGui::GetColorU32(ImVec4(0.95f, 0.3f, 0.25f, 1)),
+          close = ImGui::GetColorU32(ImVec4(0.35f, 0.85f, 0.35f, 1));
+    float x = 0, y = 0;
+    for (const char* p = s; *p;)
+    {
+        const char* w = p; /* a word and the spaces after it */
+        while (*p && *p != ' ')
+            ++p;
+        while (*p == ' ')
+            ++p;
+        const char* end = p;
+        while (end > w && end[-1] == ' ')
+            --end;
+        if (x > 0 && x + f->CalcTextSizeA(fs, FLT_MAX, 0, w, end).x > width)
+            x = 0, y += lh;
+        for (const char* q = w; q < p;)
+        {
+            const char* e = q + 1;
+            ImU32 c = *q == '{' ? open : *q == '}' ? close : base;
+            if (*q != '{' && *q != '}')
+                while (e < p && *e != '{' && *e != '}')
+                    ++e;
+            dl->AddText(f, fs, ImVec2(o.x + x, o.y + y), c, q, e);
+            x += f->CalcTextSizeA(fs, FLT_MAX, 0, q, e).x;
+            q = e;
+        }
+    }
+    ImGui::Dummy(ImVec2(width, y + lh));
+}
+
 static void chat_lines(const Tab& t)
 {
     float box = g_run_line ? ImGui::GetFrameHeightWithSpacing() : 0.0f;
@@ -1193,7 +1253,13 @@ static void chat_lines(const Tab& t)
                 ImGui::SameLine(0, 2);
             }
             ImGui::PushStyleColor(ImGuiCol_Text, g_kind_col[k]);
-            if (sender[0])
+            if (strchr(text, '{'))
+            {
+                char line[1200];
+                snprintf(line, sizeof line, "%s%s%s", sender, sender[0] ? ": " : "", text);
+                phrase_line(line);
+            }
+            else if (sender[0])
                 ImGui::TextWrapped("%s: %s", sender, text);
             else
                 ImGui::TextWrapped("%s", text);
@@ -1479,9 +1545,10 @@ static void chat_window(void)
      * at the bottom left): the chat stays where it is and the game's window sits on it. */
     static bool placing;
     static char joined[9]; /* the window placed (it stays placed while it asks, though no longer under) */
-    bool join = g_question;
-    if (!join && g_asking && cw)
-        join = !strcmp(joined, g_asker) || (cw->Pos.x < g_ask1.x && cw->Pos.x + size.x > g_ask0.x && cw->Pos.y < g_ask1.y && cw->Pos.y + size.y > g_ask0.y);
+    /* not for now: the game measures some of its windows from the bottom of the screen and some from
+     * the top, which is not yet known from the window, so a question moved "above the chat" could land
+     * at the top of the screen. Until it is, the chat fades while the game asks (below). */
+    bool join = false;
     snprintf(joined, sizeof joined, "%s", join ? g_asker : "");
     if (join && g_place_focus && cw)
     {
@@ -1495,7 +1562,7 @@ static void chat_window(void)
             g_place_focus(-1, -1);
         placing = false;
     }
-    auto under_other = [&](ImVec2 pos) { return !join && under_question(pos); };
+    auto under_other = [&](ImVec2 pos) { return false && under_question(pos); }; /* likewise: where it is is not known */
     if (g_set.chat_pinned)
     {
         /* the bottom left corner, where the game's own log was */
@@ -1528,7 +1595,11 @@ static void chat_window(void)
     /* while the game asks, the rest of the overlay fades; the chat stays readable, all of it to its
      * End (an NPC's words are in it, the game's log being hidden, and it waits on Enter for the
      * next line), since it has moved out of the way */
-    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f);
+    /* an NPC talking (rem4...) keeps it at full strength; anything else the game asks (a question, a
+     * menu) and the chat all but goes, so nothing of the game's is hidden behind it (the mouse goes
+     * through it then too) */
+    bool talk = !strncmp(g_asker, "rem4", 4);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, g_asker[0] && !talk ? 0.15f : 1.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     bool shown = ImGui::Begin("Chat", NULL, flags);
