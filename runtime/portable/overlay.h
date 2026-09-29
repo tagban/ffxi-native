@@ -39,6 +39,11 @@ void overlay_set_nameplates_available(int yes);
 int overlay_nameplates_wanted(void);
 void overlay_nameplate(float fx, float fy, const char* text, uint32_t color); /* fx, fy: 0-1 across the 3D view */
 
+/* The game's own close of one of its windows by its 8-character name (host64), and the launcher's
+ * settings (host64: asks the launcher to show them), for the overlay's bar. */
+void overlay_set_game_window_closer(int (*close)(const char* name8));
+void overlay_set_settings_opener(void (*open)(void));
+
 /* The back end's part: overlay.cpp builds the frame, the back end draws it (overlay_metal.mm). */
 void overlay_build_frame(void);
 

@@ -85,6 +85,24 @@ const GameSlot* gamestate_slot(int bag, int slot);
  * 8 feet, 9 neck, 10 waist, 11-12 ears, 13-14 rings, 15 back): where it is kept; 0 when nothing */
 int gamestate_equipped(int equip_slot, int* bag, int* slot);
 
+/* The player's own stats (the server's 0x061): jobs, max HP and MP, the seven attributes (base, and
+ * what gear and the rest add: STR DEX VIT AGI INT MND CHR), attack, defense, elemental resistances
+ * (fire ice wind earth lightning water light dark). */
+typedef struct
+{
+    int known;
+    uint8_t mjob, mjob_lv, sjob, sjob_lv;
+    int32_t hp_max, mp_max;
+    uint16_t base[7];
+    int16_t add[7];
+    int16_t attack, defense;
+    int16_t resist[8];
+    uint16_t exp_now, exp_next;
+} GameStats;
+const GameStats* gamestate_stats(void);
+/* the player's own HP, MP and TP now (from the party's 0x0DF / 0x0DD): 0 before known */
+int gamestate_self_vitals(uint32_t* hp, uint32_t* mp, uint32_t* tp);
+
 /* A player's marks by name (the player too, from their own status): 0 when unknown */
 int gamestate_marks(const char* name, uint16_t* marks, uint8_t* gm, uint32_t* ls);
 int gamestate_entities(GameEntity* out, int max);

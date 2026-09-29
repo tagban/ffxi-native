@@ -132,4 +132,9 @@ XI_EXPORT const XiGameModule xi_game_module = {
 #else
     0,
 #endif
+#ifdef FFXI_MENU_CLOSE
+    FFXI_MENU_CLOSE,
+#else
+    0,
+#endif
 };

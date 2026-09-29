@@ -500,8 +500,15 @@ bool place_art(int zone, const std::vector<std::pair<float, float>>& edges, std:
                 }
         rt_log("[recomp] map: zone %d's map %02x (%s): scale %.3f, origin at %.0f,%.0f (the file's %.0f,%.0f), fit %.2f\n", zone, mf.map,
             mf.path.c_str() + g_game.size() + 1, s_best, fx, fy, ox, oy, v_best);
-        if (v_best < best)
-            best = v_best, best_art.swap(art), bs = s_best, bx = fx, by = fy;
+        /* the zone's main map (the lowest number, 00 mostly) unless another fits clearly better: the
+         * others are floors, or a different era's drawing of the same place */
+        bool main_map = true;
+        for (const MapFile& other : found->second)
+            if (other.map < mf.map)
+                main_map = false;
+        float weigh = main_map ? 0.85f : 1.0f;
+        if (v_best * weigh < best)
+            best = v_best * weigh, best_art.swap(art), bs = s_best, bx = fx, by = fy;
     }
     return best < 30.0f; /* a fit this poor is a map of somewhere else, or not a map of it at all */
 }

@@ -50,6 +50,7 @@ static void group_table(const uint8_t* p, uint32_t size);
 static void entity_update(const uint8_t* p, uint32_t size, int pc);
 static void self_status(const uint8_t* p, uint32_t size);
 static void bags(uint32_t id, const uint8_t* p, uint32_t size);
+static void stats(const uint8_t* p, uint32_t size);
 
 /* every so often, to the log: what has come (the ids seen most) */
 static void summary(void)
@@ -93,6 +94,7 @@ void gamestate_feed(const uint8_t* buf, uint32_t len)
         case 0x00E: entity_update(buf + at, size, 0); break;
         case 0x037: self_status(buf + at, size); break;
         case 0x01C: case 0x01E: case 0x01F: case 0x020: case 0x050: bags(id, buf + at, size); break;
+        case 0x061: stats(buf + at, size); break;
         default: break;
         }
         at += size;
@@ -409,6 +411,39 @@ static void bags(uint32_t id, const uint8_t* p, uint32_t size)
         }
         break;
     }
+}
+
+/* 0x061 (LandSandBoat's s2c/0x061_clistatus.h): max HP 0x04, max MP 0x08, jobs 0x0C-0x0F, experience
+ * 0x10, the attributes' base 0x14 and what is added 0x22 (seven each), attack 0x30, defense 0x32,
+ * resistances 0x34 (eight) */
+static GameStats g_stats;
+
+static void stats(const uint8_t* p, uint32_t size)
+{
+    if (size < 0x44)
+        return;
+    g_stats.hp_max = (int32_t)u32(p + 0x04), g_stats.mp_max = (int32_t)u32(p + 0x08);
+    g_stats.mjob = p[0x0C], g_stats.mjob_lv = p[0x0D], g_stats.sjob = p[0x0E], g_stats.sjob_lv = p[0x0F];
+    g_stats.exp_now = u16(p + 0x10), g_stats.exp_next = u16(p + 0x12);
+    for (int i = 0; i < 7; ++i)
+        g_stats.base[i] = u16(p + 0x14 + 2 * i), g_stats.add[i] = (int16_t)u16(p + 0x22 + 2 * i);
+    g_stats.attack = (int16_t)u16(p + 0x30), g_stats.defense = (int16_t)u16(p + 0x32);
+    for (int i = 0; i < 8; ++i)
+        g_stats.resist[i] = (int16_t)u16(p + 0x34 + 2 * i);
+    g_stats.known = 1;
+}
+
+const GameStats* gamestate_stats(void) { return &g_stats; }
+
+int gamestate_self_vitals(uint32_t* hp, uint32_t* mp, uint32_t* tp)
+{
+    for (int i = 0; i < MEMBERS; ++i)
+        if (g_members[i].id && g_members[i].id == g_self)
+        {
+            *hp = g_members[i].hp, *mp = g_members[i].mp, *tp = g_members[i].tp;
+            return 1;
+        }
+    return 0;
 }
 
 int gamestate_bag_size(int bag) { return bag >= 0 && bag < BAGS ? g_bag_size[bag] : 0; }

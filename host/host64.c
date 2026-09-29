@@ -419,14 +419,14 @@ static void chat_add(Guest* g)
 typedef struct
 {
     const char* name;
-    int group; /* 0 the chat log, 1 the party list, 2 the target box */
+    int group; /* 0 the chat log, 1 the party list, 2 the target box, 3 the log's typing line */
     uint32_t win;
     int16_t x, y;
     int moved;
     int dropped; /* its draws dropped (a window the game lays out every frame cannot be moved) */
 } GameWindow;
 static GameWindow g_game_windows[] = {
-    { "logwindo", 0 }, { "logwin2 ", 0 }, { "inline  ", 0 }, /* the log, and the game's own typing line */
+    { "logwindo", 0 }, { "logwin2 ", 0 }, { "inline  ", 3 }, /* the log, and the game's own typing line */
     { "partywin", 1 }, { "ptw0    ", 1 }, { "ptw1    ", 1 }, { "ptw2    ", 1 },
     { "targetwi", 2 },
 };
@@ -476,6 +476,31 @@ static void find_game_windows(void)
     }
 }
 
+#if defined(FFXI_MENU_CLOSE)
+#define MENU_CLOSE FFXI_MENU_CLOSE
+#elif defined(XI_SPLIT)
+#define MENU_CLOSE (xi_game->size >= offsetof(XiGameModule, menu_close) + sizeof(uint32_t) ? xi_game->menu_close : 0u)
+#else
+#define MENU_CLOSE 0u
+#endif
+
+static void open_launcher_settings(void);
+
+/* the game's own close of one of its windows, by name (its input line, when the overlay's chat box
+ * takes the typing): on the game's thread */
+static int close_game_window(const char* name8)
+{
+    static uint32_t buf;
+    if (!MENU_MGR || !MENU_CLOSE || (!buf && !(buf = gheap_alloc(32, 1))))
+        return 0;
+    memcpy(GUEST_PTR(buf), "menu    ", 8);
+    memcpy(GUEST_PTR(buf + 8), name8, 8);
+    GUEST_PTR(buf)[16] = 0;
+    uint32_t arg = buf;
+    guest_thiscall(MENU_CLOSE, MENU_MGR, 1, &arg);
+    return 1;
+}
+
 #if defined(FFXI_PARTY_DISPLAY)
 #define PARTY_DISPLAY FFXI_PARTY_DISPLAY
 #elif defined(XI_SPLIT)
@@ -484,35 +509,22 @@ static void find_game_windows(void)
 #define PARTY_DISPLAY 0u
 #endif
 
-/* The party display (the bars at the bottom right, the player's alone when not in a party): not the
- * partywin window, which only holds its place, but an object of its own, which the game shows
- * while +0x40 is set (its party window's open sets it, close clears it). Cleared every frame while
- * the overlay's Party stands in for it, and put back as it was. */
-static void hide_party_display(int hide)
+/* The party display (the bars at the bottom right, the player's alone when not in a party) is not the
+ * partywin window, which only holds a place, but an object of its own ("party_display", a pointer),
+ * whose place (+0x3C, +0x3E) the window manager sets every frame in the same pass as it goes over
+ * its windows: moved off the screen there (menu_draw, after), while the overlay's Party stands in. */
+static int g_party_hidden;
+
+static void party_display_off_screen(void)
 {
-    static int hidden, was;
     uint32_t at = PARTY_DISPLAY;
-    if (!at || !gwin_is_committed(at))
+    if (!g_party_hidden || !at || !gwin_is_committed(at))
         return;
     uint32_t obj = rd32(at);
     if (!obj || !gwin_is_committed(obj + 0x40))
         return;
-    uint8_t* shown = GUEST_PTR(obj + 0x40);
-    if (hide)
-    {
-        if (!hidden)
-        {
-            was = *shown, hidden = 1;
-            rt_log("[recomp] the game's party display: hidden (it was %s)\n", was ? "showing" : "not showing");
-        }
-        *shown = 0;
-    }
-    else if (hidden)
-    {
-        *shown = (uint8_t)was;
-        hidden = 0;
-        rt_log("[recomp] the game's party display: back\n");
-    }
+    int16_t* pos = (int16_t*)GUEST_PTR(obj + 0x3C);
+    pos[0] = -8000, pos[1] = -8000;
 }
 
 #if defined(FFXI_HOOK_MENU_DRAW)
@@ -545,6 +557,7 @@ static void off_screen(uint32_t win)
 static void menu_draw(Guest* g)
 {
     g_dropping = 0;
+    party_display_off_screen();
     {
         /* which windows the manager's pass reaches, once each (the first few dozen) */
         static uint32_t seen[48];
@@ -596,7 +609,7 @@ static void hide_game_windows(int log, int party, int target)
 {
     static unsigned frame;
     static int any_moved;
-    hide_party_display(party);
+    g_party_hidden = party;
     if (!log && !party && !target && !any_moved)
         return;
     if (frame++ % 10 == 0) /* the game makes and remakes its windows (the target box on each target) */
@@ -621,7 +634,7 @@ static void hide_game_windows(int log, int party, int target)
         GameWindow* w = &g_game_windows[i];
         if (!game_window_name(w->win))
             continue;
-        int hide = w->group == 0 ? log : w->group == 1 ? party : target;
+        int hide = w->group == 0 || w->group == 3 ? log : w->group == 1 ? party : target;
         int16_t* pos = (int16_t*)GUEST_PTR(w->win + 0x3A);
         if (w->group >= 1 && MENU_DRAW_HOOK && MENU_DRAWN_HOOK)
         {
@@ -692,6 +705,9 @@ static void setup_packets(void)
     gamestate_set_target_ptr(TARGET_PTR);
     if (MENU_MGR)
         overlay_set_game_windows(hide_game_windows, game_focus);
+    if (MENU_MGR && MENU_CLOSE)
+        overlay_set_game_window_closer(close_game_window);
+    overlay_set_settings_opener(open_launcher_settings);
     if (MENU_DRAW_HOOK && MENU_DRAWN_HOOK)
         *MENU_DRAW_HOOK = menu_draw, *MENU_DRAWN_HOOK = menu_drawn;
     GuestFn* ca = CHAT_ADD_HOOK;
@@ -866,6 +882,15 @@ static int host_key(int scancode, int mods, int down)
         fflush(stdout);
     }
     return display || settings;
+}
+
+/* the launcher's settings, from the overlay's bar */
+static void open_launcher_settings(void)
+{
+    if (!g_live_file[0])
+        return;
+    printf("@launcher settings\n");
+    fflush(stdout);
 }
 
 /* the lobby turned the game away: the launcher says why (331: the server wants another version) */

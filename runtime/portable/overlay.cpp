@@ -80,6 +80,8 @@ static void overlay_register(void);
 static int (*g_run_line)(const char* line); /* host64: the game's parser of a typed line */
 static void (*g_hide_game)(int log, int party, int target); /* host64: the game's own windows hidden */
 static const char* (*g_game_focus)(void);         /* host64: the game's window with the keyboard */
+static int (*g_close_game)(const char* name8);    /* host64: the game's own close of one of its windows */
+static void (*g_open_settings)(void);             /* host64: the launcher's settings */
 static int g_send_open;                           /* 1 the box asked to open (Space), 2 with "/" */
 static bool g_swallow_text;                        /* the key's own character, not to be typed */
 
@@ -106,7 +108,9 @@ static struct
     float chat_size = 15.0f; /* the chat's lines */
     float map_range = 50.0f; /* yalms from the middle to the edge */
     bool map_north_up = false, map_names = false;
-    bool map_art = true; /* the game's own map under the radar, where there is one */
+    bool map_art = false; /* the game's own map under the radar, where there is one (a choice: its
+                           * placement is not right in every zone yet) */
+    bool bar = true, settings_open = false; /* the bar of icons; the Overlay window */
     bool equip = false, items = false; /* the equipment and item windows */
 } g_set;
 static char g_ini[1024];
@@ -120,6 +124,8 @@ static struct
  * Desktop), Ctrl+Shift+U elsewhere (the game's macros are Ctrl or Alt with a digit). */
 static bool is_toggle(const SDL_KeyboardEvent& k)
 {
+    if (k.key == SDLK_F12)
+        return !(k.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI | SDL_KMOD_SHIFT)); /* F12, alone */
     if (k.key != SDLK_U)
         return false;
 #if defined(__APPLE__)
@@ -129,9 +135,9 @@ static bool is_toggle(const SDL_KeyboardEvent& k)
 #endif
 }
 #if defined(__APPLE__)
-static const char* const TOGGLE_NAME = "Cmd+U";
+static const char* const TOGGLE_NAME = "F12 (or Cmd+U)";
 #else
-static const char* const TOGGLE_NAME = "Ctrl+Shift+U";
+static const char* const TOGGLE_NAME = "F12 (or Ctrl+Shift+U)";
 #endif
 
 extern "C" void overlay_set_ini(const char* path)
@@ -420,6 +426,16 @@ static void draw_nameplates(void)
     g_nplates = 0; /* the next frame's come as the game draws them */
 }
 
+extern "C" void overlay_set_game_window_closer(int (*close)(const char* name8))
+{
+    g_close_game = close;
+}
+
+extern "C" void overlay_set_settings_opener(void (*open)(void))
+{
+    g_open_settings = open;
+}
+
 extern "C" void overlay_set_game_windows(void (*hide)(int log, int party, int target), const char* (*focus)(void))
 {
     g_hide_game = hide;
@@ -467,7 +483,7 @@ extern "C" int overlay_event(const SDL_Event* e)
             g_shown = !g_shown;
         return 1;
     }
-    if (e->type == SDL_EVENT_KEY_UP && e->key.key == SDLK_U && (e->key.mod & (SDL_KMOD_GUI | SDL_KMOD_CTRL)))
+    if (e->type == SDL_EVENT_KEY_UP && ((e->key.key == SDLK_U && (e->key.mod & (SDL_KMOD_GUI | SDL_KMOD_CTRL))) || e->key.key == SDLK_F12))
         return 1;
     if (e->type == SDL_EVENT_TEXT_INPUT && g_swallow_text)
     {
@@ -564,7 +580,8 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "map_range=%f", &f) == 1 && f >= 10 && f <= 250) g_set.map_range = f;
     else if (sscanf(line, "map_north_up=%d", &v) == 1) g_set.map_north_up = v != 0;
     else if (sscanf(line, "map_names=%d", &v) == 1) g_set.map_names = v != 0;
-    else if (sscanf(line, "map_art=%d", &v) == 1) g_set.map_art = v != 0;
+    else if (sscanf(line, "map_art2=%d", &v) == 1) g_set.map_art = v != 0;
+    else if (sscanf(line, "bar=%d", &v) == 1) g_set.bar = v != 0;
     else if (sscanf(line, "equip=%d", &v) == 1) g_set.equip = v != 0;
     else if (sscanf(line, "items=%d", &v) == 1) g_set.items = v != 0;
 }
@@ -574,7 +591,7 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("[%s][Settings]\n", h->TypeName);
     out->appendf("chat=%d\nparty=%d\nmap=%d\nstatus=%d\n", g_set.chat, g_set.party, g_set.map, g_set.status);
     out->appendf("ui_size=%g\nchat_size=%g\nmap_range=%g\n", g_set.ui_size, g_set.chat_size, g_set.map_range);
-    out->appendf("map_north_up=%d\nmap_names=%d\nmap_art=%d\n", g_set.map_north_up, g_set.map_names, g_set.map_art);
+    out->appendf("map_north_up=%d\nmap_names=%d\nmap_art2=%d\nbar=%d\n", g_set.map_north_up, g_set.map_names, g_set.map_art, g_set.bar);
     out->appendf("equip=%d\nitems=%d\n", g_set.equip, g_set.items);
     out->appendf("target=%d\nhide_game_log=%d\nhide_game_party=%d\nhide_game_target=%d\n", g_set.target, g_set.hide_game_log,
         g_set.hide_game_party, g_set.hide_game_target);
@@ -604,8 +621,7 @@ static void overlay_window(void)
 {
     ImGui::SetNextWindowPos(ImVec2(24, 24), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowCollapsed(true, ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Overlay"))
+    if (ImGui::Begin("Overlay", &g_set.settings_open, ImGuiWindowFlags_AlwaysAutoResize))
     {
         bool dirty = false;
         ImGui::TextDisabled("Windows");
@@ -656,6 +672,129 @@ static void overlay_window(void)
             ImGui::MarkIniSettingsDirty();
     }
     ImGui::End();
+}
+
+/* --- the bar: an icon for each window, and the launcher's settings ----------------------------------- */
+enum BarIcon { BI_ITEMS, BI_EQUIP, BI_CHAT, BI_PARTY, BI_MAP, BI_TARGET, BI_QUESTS, BI_SETTINGS, BI_OVERLAY, BI_COUNT };
+
+static void bar_icon(ImDrawList* dl, int kind, ImVec2 a, float h, ImU32 c)
+{
+    ImVec2 m(a.x + h * 0.5f, a.y + h * 0.5f);
+    float t = ImMax(1.5f, h * 0.08f), r = h * 0.36f;
+    switch (kind)
+    {
+    case BI_ITEMS: /* a bag: its body and a handle */
+        dl->AddRectFilled(ImVec2(a.x + h * 0.2f, a.y + h * 0.38f), ImVec2(a.x + h * 0.8f, a.y + h * 0.86f), c, h * 0.12f);
+        dl->PathArcTo(ImVec2(m.x, a.y + h * 0.38f), h * 0.17f, IM_PI, IM_PI * 2, 10);
+        dl->PathStroke(c, 0, t);
+        break;
+    case BI_EQUIP: /* a sword: blade, guard, grip */
+        dl->AddLine(ImVec2(a.x + h * 0.78f, a.y + h * 0.18f), ImVec2(a.x + h * 0.36f, a.y + h * 0.6f), c, t * 1.6f);
+        dl->AddLine(ImVec2(a.x + h * 0.25f, a.y + h * 0.5f), ImVec2(a.x + h * 0.46f, a.y + h * 0.71f), c, t * 1.3f);
+        dl->AddLine(ImVec2(a.x + h * 0.36f, a.y + h * 0.6f), ImVec2(a.x + h * 0.2f, a.y + h * 0.78f), c, t * 1.3f);
+        break;
+    case BI_CHAT: /* a speech bubble */
+        dl->AddRectFilled(ImVec2(a.x + h * 0.15f, a.y + h * 0.2f), ImVec2(a.x + h * 0.85f, a.y + h * 0.66f), c, h * 0.14f);
+        dl->AddTriangleFilled(ImVec2(a.x + h * 0.3f, a.y + h * 0.64f), ImVec2(a.x + h * 0.48f, a.y + h * 0.64f), ImVec2(a.x + h * 0.26f, a.y + h * 0.84f), c);
+        break;
+    case BI_PARTY: /* two people */
+        for (int k = 0; k < 2; ++k)
+        {
+            float x = a.x + h * (k ? 0.64f : 0.36f);
+            dl->AddCircleFilled(ImVec2(x, a.y + h * 0.34f), h * 0.12f, c, 12);
+            dl->PathArcTo(ImVec2(x, a.y + h * 0.8f), h * 0.2f, IM_PI, IM_PI * 2, 10);
+            dl->PathFillConvex(c);
+        }
+        break;
+    case BI_MAP: /* a compass: its ring and needle */
+        dl->AddCircle(m, r, c, 20, t);
+        dl->AddTriangleFilled(ImVec2(m.x, m.y - r * 0.8f), ImVec2(m.x - r * 0.28f, m.y), ImVec2(m.x + r * 0.28f, m.y), IM_COL32(230, 80, 70, 255));
+        dl->AddTriangleFilled(ImVec2(m.x, m.y + r * 0.8f), ImVec2(m.x - r * 0.28f, m.y), ImVec2(m.x + r * 0.28f, m.y), c);
+        break;
+    case BI_TARGET: /* a crosshair */
+        dl->AddCircle(m, r * 0.75f, c, 20, t);
+        dl->AddLine(ImVec2(m.x - r, m.y), ImVec2(m.x - r * 0.35f, m.y), c, t);
+        dl->AddLine(ImVec2(m.x + r * 0.35f, m.y), ImVec2(m.x + r, m.y), c, t);
+        dl->AddLine(ImVec2(m.x, m.y - r), ImVec2(m.x, m.y - r * 0.35f), c, t);
+        dl->AddLine(ImVec2(m.x, m.y + r * 0.35f), ImVec2(m.x, m.y + r), c, t);
+        break;
+    case BI_QUESTS: /* a scroll */
+        dl->AddRectFilled(ImVec2(a.x + h * 0.26f, a.y + h * 0.2f), ImVec2(a.x + h * 0.74f, a.y + h * 0.8f), c, h * 0.04f);
+        dl->AddCircleFilled(ImVec2(a.x + h * 0.26f, a.y + h * 0.24f), h * 0.08f, c, 10);
+        dl->AddCircleFilled(ImVec2(a.x + h * 0.74f, a.y + h * 0.76f), h * 0.08f, c, 10);
+        for (int k = 0; k < 3; ++k)
+            dl->AddLine(ImVec2(a.x + h * 0.34f, a.y + h * (0.36f + 0.13f * k)), ImVec2(a.x + h * 0.66f, a.y + h * (0.36f + 0.13f * k)),
+                IM_COL32(40, 30, 20, 200), ImMax(1.0f, t * 0.7f));
+        break;
+    case BI_SETTINGS: /* a gear */
+        for (int k = 0; k < 8; ++k)
+        {
+            float g = k * IM_PI / 4;
+            dl->AddLine(ImVec2(m.x + cosf(g) * r * 0.55f, m.y + sinf(g) * r * 0.55f), ImVec2(m.x + cosf(g) * r * 1.0f, m.y + sinf(g) * r * 1.0f), c,
+                t * 2.0f);
+        }
+        dl->AddCircleFilled(m, r * 0.68f, c, 20);
+        dl->AddCircleFilled(m, r * 0.3f, IM_COL32(30, 30, 38, 255), 14);
+        break;
+    case BI_OVERLAY: /* sliders */
+        for (int k = 0; k < 3; ++k)
+        {
+            float y = a.y + h * (0.28f + 0.22f * k), x = a.x + h * (k == 1 ? 0.62f : k ? 0.4f : 0.3f);
+            dl->AddLine(ImVec2(a.x + h * 0.18f, y), ImVec2(a.x + h * 0.82f, y), c, t);
+            dl->AddCircleFilled(ImVec2(x, y), h * 0.08f, c, 10);
+        }
+        break;
+    default: break;
+    }
+}
+
+static void bar_window(void)
+{
+    struct
+    {
+        int icon;
+        const char* tip;
+        bool* open; /* the window it shows and hides (NULL: an action) */
+    } items[] = {
+        { BI_ITEMS, "Items", &g_set.items },          { BI_EQUIP, "Equipment", &g_set.equip },
+        { BI_CHAT, "Chat", &g_set.chat },             { BI_PARTY, "Party", &g_set.party },
+        { BI_MAP, "Map", &g_set.map },                { BI_TARGET, "Target", &g_set.target },
+        { BI_QUESTS, "Quests and missions (to come)", NULL }, { BI_SETTINGS, "Graphics settings", NULL },
+        { BI_OVERLAY, "Overlay settings", &g_set.settings_open },
+    };
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, 8), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0));
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
+    if (ImGui::Begin("Bar", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
+    {
+        float h = ImGui::GetFontSize() * 1.9f;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        for (int i = 0; i < (int)(sizeof items / sizeof *items); ++i)
+        {
+            if (i)
+                ImGui::SameLine(0, 4);
+            ImGui::PushID(i);
+            ImVec2 a = ImGui::GetCursorScreenPos();
+            bool clicked = ImGui::InvisibleButton("icon", ImVec2(h, h));
+            bool on = items[i].open && *items[i].open, hover = ImGui::IsItemHovered();
+            bool future = items[i].icon == BI_QUESTS;
+            dl->AddRectFilled(a, ImVec2(a.x + h, a.y + h), on ? IM_COL32(70, 110, 160, 200) : hover ? IM_COL32(70, 70, 85, 200) : IM_COL32(35, 35, 45, 160), 6);
+            bar_icon(dl, items[i].icon, ImVec2(a.x + h * 0.08f, a.y + h * 0.08f), h * 0.84f,
+                future ? IM_COL32(120, 120, 120, 200) : IM_COL32(235, 225, 200, 255));
+            if (hover)
+                ImGui::SetTooltip("%s", items[i].tip);
+            if (clicked)
+            {
+                if (items[i].open)
+                    *items[i].open = !*items[i].open, ImGui::MarkIniSettingsDirty();
+                else if (items[i].icon == BI_SETTINGS && g_open_settings)
+                    g_open_settings();
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
 }
 
 /* What the host knows now: the frame rate and sizes */
@@ -1333,6 +1472,7 @@ static void equipment_window(void)
     static const int ORDER[EQUIP_SLOTS] = { 0, 1, 2, 3, 4, 9, 11, 12, 5, 6, 13, 14, 15, 10, 7, 8 };
     float size = ImGui::GetFontSize() * 2.6f;
     static int choosing = -1;
+    ImGui::BeginGroup();
     for (int i = 0; i < EQUIP_SLOTS; ++i)
     {
         int slot = ORDER[i], bag, at;
@@ -1351,6 +1491,42 @@ static void equipment_window(void)
             else
                 ImGui::SetTooltip("%s: nothing", EQUIP_LABEL[slot]);
         }
+    }
+    ImGui::EndGroup();
+    /* what the player is: jobs, HP, MP, TP, and the attributes with what gear adds */
+    {
+        const GameStats* st = gamestate_stats();
+        uint32_t hp = 0, mp = 0, tp = 0;
+        bool vit = gamestate_self_vitals(&hp, &mp, &tp) != 0;
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        if (st->known)
+        {
+            if (st->sjob)
+                ImGui::Text("%s %u / %s %u", job_name(st->mjob), st->mjob_lv, job_name(st->sjob), st->sjob_lv);
+            else
+                ImGui::Text("%s %u", job_name(st->mjob), st->mjob_lv);
+            ImGui::TextColored(ImVec4(0.55f, 0.9f, 0.6f, 1), "HP %u / %d", vit ? hp : 0, st->hp_max);
+            ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.85f, 1), "MP %u / %d", vit ? mp : 0, st->mp_max);
+            ImGui::TextColored(ImVec4(0.55f, 0.8f, 1, 1), "TP %u", vit ? tp : 0);
+            ImGui::Separator();
+            static const char* const ATTR[7] = { "STR", "DEX", "VIT", "AGI", "INT", "MND", "CHR" };
+            for (int i = 0; i < 7; ++i)
+            {
+                ImGui::Text("%s %3u", ATTR[i], st->base[i]);
+                if (st->add[i])
+                {
+                    ImGui::SameLine();
+                    ImGui::TextColored(st->add[i] > 0 ? ImVec4(0.5f, 0.85f, 1, 1) : ImVec4(1, 0.5f, 0.45f, 1), "%+d", st->add[i]);
+                }
+            }
+            ImGui::Separator();
+            ImGui::Text("Attack %d", st->attack);
+            ImGui::Text("Defense %d", st->defense);
+        }
+        else
+            ImGui::TextDisabled("Stats come\nas the server\nsends them");
+        ImGui::EndGroup();
     }
     if (ImGui::BeginPopup("choose"))
     {
@@ -1442,6 +1618,7 @@ static void items_window(void)
                     ImGui::SameLine();
                 char id[16];
                 snprintf(id, sizeof id, "%d.%d", b, k);
+                ImGui::PushID(b * 100 + k); /* each item its own menu */
                 item_button(id, s->item, s->count, cell, s->locked && (it && (it->type == ITEM_WEAPON || it->type == ITEM_ARMOR)));
                 if (ImGui::IsItemHovered())
                     item_tooltip(s->item);
@@ -1472,6 +1649,7 @@ static void items_window(void)
                         ImGui::TextDisabled("Nothing to do with it here");
                     ImGui::EndPopup();
                 }
+                ImGui::PopID();
             }
             if (!n)
                 ImGui::TextDisabled(find[0] ? "Nothing by that name here" : "Empty");
@@ -1814,6 +1992,42 @@ extern "C" void overlay_build_frame(void)
 {
     ImGui::GetStyle().FontScaleMain = g_set.ui_size / 16.0f;
     ImGui::GetIO().FontDefault = font_named(g_set.ui_font);
+    /* One of the game's own windows asking something (a question, a menu): the overlay fades and
+     * lets the mouse through, so the game's window is never hidden behind it. The log, its typing
+     * line and nothing at all do not count. */
+    {
+        const char* f = g_game_focus ? g_game_focus() : "";
+        static const char* const PASSIVE[] = { "logwin", "inline", "fulllog", "playermo", "partywin", "netstat", "buff", "helpwind",
+                                               "titlewin", "targetwi" };
+        bool game_asks = f[0] && dsound_in_world();
+        for (const char* p : PASSIVE)
+            if (!strncmp(f, p, strlen(p)))
+                game_asks = false;
+        {
+            /* which of the game's windows take the keyboard, while this is learned */
+            static char last[9];
+            static int told;
+            if (told < 40 && strncmp(last, f, 8))
+            {
+                ++told;
+                snprintf(last, sizeof last, "%.8s", f);
+                extern void rt_log(const char* fmt, ...);
+                rt_log("[recomp] the game's keyboard: %s%s\n", f[0] ? last : "(none)", game_asks ? " (the overlay fades)" : "");
+            }
+        }
+        ImGui::GetStyle().Alpha = game_asks ? 0.3f : 1.0f;
+        if (game_asks)
+            ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
+        else
+            ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+        /* the game's own typing line opened (by a key the overlay does not take): closed by the game's
+         * own close, and the overlay's chat box opened instead */
+        if (!strncmp(f, "inline", 6) && g_shown && g_set.chat && g_set.hide_game_log && g_close_game && !ImGui::GetIO().WantTextInput)
+        {
+            g_close_game("inline  ");
+            g_send_open = 1;
+        }
+    }
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
     bool was[7] = { g_set.chat, g_set.party, g_set.map, g_set.status, g_set.target, g_set.equip, g_set.items };
@@ -1823,7 +2037,10 @@ extern "C" void overlay_build_frame(void)
         g_nplates = 0;
     if (g_shown)
     {
-        overlay_window();
+        if (g_set.bar)
+            bar_window();
+        if (g_set.settings_open || !g_set.bar)
+            overlay_window();
         if (g_set.status)
             status_window();
         if (g_set.chat)

@@ -21,7 +21,8 @@
         "menu_mgr": "0x105eed58",
         "menu_find": "0x1015dc20",
         "target_ptr": "0x105784b8",
-        "party_display": "0x106318c8"
+        "party_display": "0x106318c8",
+        "menu_close": "0x1015e920"
       },
       "hooks": {
         "packet_in": "0x100dd803",
@@ -67,7 +68,8 @@
         "menu_mgr": "0x10621838",
         "menu_find": "0x1015dc10",
         "target_ptr": "0x10578478",
-        "party_display": "0x106643a8"
+        "party_display": "0x106643a8",
+        "menu_close": "0x1015e910"
       },
       "hooks": {
         "nameplate_scale": "0x100863d6",

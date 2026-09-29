@@ -13,6 +13,8 @@ void overlay_build_frame(void) {}
 void overlay_set_line_runner(int (*run)(const char* line)) { (void)run; }
 void overlay_set_game_windows(void (*hide)(int log, int party, int target), const char* (*focus)(void)) { (void)hide, (void)focus; }
 void overlay_set_nameplates_available(int yes) { (void)yes; }
+void overlay_set_game_window_closer(int (*close)(const char* name8)) { (void)close; }
+void overlay_set_settings_opener(void (*open)(void)) { (void)open; }
 int overlay_nameplates_wanted(void) { return 0; }
 void overlay_nameplate(float x, float y, const char* text, uint32_t color) { (void)x, (void)y, (void)text, (void)color; }
 

@@ -70,6 +70,8 @@ typedef struct XiGameModule
     GuestFn* hook_menu_drawn;
     /* where the game keeps its party display ("party_display": a pointer; +0x40 whether it shows) */
     uint32_t party_display;
+    /* the window manager's close-a-window-by-name ("menu_close", thiscall, the 16-character name) */
+    uint32_t menu_close;
 } XiGameModule;
 
 /* The one symbol a module exports. */
