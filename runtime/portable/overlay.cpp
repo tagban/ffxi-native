@@ -1248,8 +1248,8 @@ static void chat_box(void)
     }
 }
 
-/* The chat: no frame, just its tabs, lines and box. Pinned, it keeps to the bottom right corner
- * (its top and left edges still size it); either way, while the game asks something in a window
+/* The chat: no frame, just its tabs, lines and box. Pinned, it keeps to the bottom left corner
+ * (its top and right edges still size it); either way, while the game asks something in a window
  * that would be under it, it moves up out of the way, and back after. */
 static void chat_window(void)
 {
@@ -1280,11 +1280,12 @@ static void chat_window(void)
     auto under_other = [&](ImVec2 pos) { return !g_question && under_question(pos); };
     if (g_set.chat_pinned)
     {
-        ImVec2 at(disp.x - margin - size.x, disp.y - margin - size.y);
+        /* the bottom left corner, where the game's own log was */
+        ImVec2 at(margin, disp.y - margin - size.y);
         float bottom = disp.y - margin;
         if (under_other(at))
             bottom = ImMax(size.y + margin, g_ask0.y - margin);
-        ImGui::SetNextWindowPos(ImVec2(disp.x - margin, bottom), ImGuiCond_Always, ImVec2(1, 1));
+        ImGui::SetNextWindowPos(ImVec2(margin, bottom), ImGuiCond_Always, ImVec2(0, 1));
         moved = false;
     }
     else
@@ -1352,7 +1353,7 @@ static void chat_window(void)
                 dl->AddCircleFilled(ImVec2(c.x, c.y - r * 0.6f), r, col, 12);                                  /* its head */
                 dl->AddLine(ImVec2(c.x, c.y - r * 0.2f), ImVec2(c.x, c.y + r * 1.9f), col, ImMax(1.5f, r * 0.35f)); /* its point */
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip(g_set.chat_pinned ? "Pinned to the corner: click to move it freely" : "Click to pin it to the corner");
+                    ImGui::SetTooltip(g_set.chat_pinned ? "Pinned to the bottom left: click to move it freely" : "Click to pin it to the bottom left");
             }
             if (g_ntabs < 16 && ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip))
             {
