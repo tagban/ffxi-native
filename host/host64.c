@@ -604,6 +604,24 @@ static const char* game_focus(void)
     return name ? name : "";
 }
 
+/* where that window is: its rectangle (+0x3A: x, y, width, height) in the game's own units (its
+ * back buffer's pixels), as fractions of the screen; 0 when none has the keyboard */
+static int game_focus_rect(float* x, float* y, float* w, float* h)
+{
+    uint32_t bw = 0, bh = 0;
+    d3d8_backbuffer_size(&bw, &bh);
+    if (!MENU_MGR || !bw || !bh || !gwin_is_committed(MENU_MGR + 0x54))
+        return 0;
+    uint32_t win = rd32(MENU_MGR + 0x54);
+    if (!game_window_name(win))
+        return 0;
+    const int16_t* r = (const int16_t*)GUEST_PTR(win + 0x3A);
+    if (r[2] <= 0 || r[3] <= 0)
+        return 0;
+    *x = (float)r[0] / bw, *y = (float)r[1] / bh, *w = (float)r[2] / bw, *h = (float)r[3] / bh;
+    return 1;
+}
+
 /* each frame (the overlay's): which of the game's windows the overlay stands in for now */
 static void hide_game_windows(int log, int party, int target)
 {
@@ -707,6 +725,8 @@ static void setup_packets(void)
         overlay_set_game_windows(hide_game_windows, game_focus);
     if (MENU_MGR && MENU_CLOSE)
         overlay_set_game_window_closer(close_game_window);
+    if (MENU_MGR)
+        overlay_set_focus_rect(game_focus_rect);
     overlay_set_settings_opener(open_launcher_settings);
     if (MENU_DRAW_HOOK && MENU_DRAWN_HOOK)
         *MENU_DRAW_HOOK = menu_draw, *MENU_DRAWN_HOOK = menu_drawn;

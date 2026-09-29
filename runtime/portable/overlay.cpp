@@ -83,6 +83,9 @@ static void (*g_hide_game)(int log, int party, int target); /* host64: the game'
 static const char* (*g_game_focus)(void);         /* host64: the game's window with the keyboard */
 static int (*g_close_game)(const char* name8);    /* host64: the game's own close of one of its windows */
 static void (*g_open_settings)(void);             /* host64: the launcher's settings */
+static int (*g_focus_rect)(float* x, float* y, float* w, float* h); /* host64: where the game's window with the keyboard is */
+static bool g_asking;                              /* one of the game's own windows is asking something */
+static ImVec2 g_ask0, g_ask1;                      /* where, on the screen (the overlay's units) */
 static int g_send_open;                           /* the box asked to open: 1 empty, 2 with "/", 3 with "!" */
 static bool g_swallow_text;                        /* the key's own character, not to be typed */
 
@@ -124,6 +127,7 @@ static struct
     bool map_art = false; /* the game's own map under the radar, where there is one (a choice: its
                            * placement is not right in every zone yet) */
     bool bar = true, settings_open = false; /* the bar of icons; the Overlay window */
+    bool chat_pinned = true; /* the chat held to the bottom right corner */
     bool equip = false, items = false; /* the equipment and item windows */
 } g_set;
 static char g_ini[1024];
@@ -507,6 +511,11 @@ extern "C" void overlay_set_game_window_closer(int (*close)(const char* name8))
     g_close_game = close;
 }
 
+extern "C" void overlay_set_focus_rect(int (*rect)(float* x, float* y, float* w, float* h))
+{
+    g_focus_rect = rect;
+}
+
 extern "C" void overlay_set_settings_opener(void (*open)(void))
 {
     g_open_settings = open;
@@ -665,6 +674,7 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "map_names=%d", &v) == 1) g_set.map_names = v != 0;
     else if (sscanf(line, "map_art2=%d", &v) == 1) g_set.map_art = v != 0;
     else if (sscanf(line, "bar=%d", &v) == 1) g_set.bar = v != 0;
+    else if (sscanf(line, "chat_pinned=%d", &v) == 1) g_set.chat_pinned = v != 0;
     else if (sscanf(line, "equip=%d", &v) == 1) g_set.equip = v != 0;
     else if (sscanf(line, "items=%d", &v) == 1) g_set.items = v != 0;
 }
@@ -675,7 +685,7 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("chat=%d\nparty=%d\nmap=%d\nstatus=%d\n", g_set.chat, g_set.party, g_set.map, g_set.status);
     out->appendf("ui_size=%g\nchat_size=%g\nmap_range=%g\n", g_set.ui_size, g_set.chat_size, g_set.map_range);
     out->appendf("map_north_up=%d\nmap_names=%d\nmap_art2=%d\nbar=%d\n", g_set.map_north_up, g_set.map_names, g_set.map_art, g_set.bar);
-    out->appendf("equip=%d\nitems=%d\n", g_set.equip, g_set.items);
+    out->appendf("equip=%d\nitems=%d\nchat_pinned=%d\n", g_set.equip, g_set.items, g_set.chat_pinned);
     out->appendf("target=%d\nhide_game_log=%d\nhide_game_party=%d\nhide_game_target=%d\n", g_set.target, g_set.hide_game_log,
         g_set.hide_game_party, g_set.hide_game_target);
     out->appendf("plates=%d\nplate_size=%g\nplate_outline=%d\nplates_occlude=%d\n", g_set.plates, g_set.plate_size, g_set.plate_outline,
@@ -1228,14 +1238,57 @@ static void chat_box(void)
     }
 }
 
+/* The chat: no frame, just its tabs, lines and box. Pinned, it keeps to the bottom right corner
+ * (its top and left edges still size it); either way, while the game asks something in a window
+ * that would be under it, it moves up out of the way, and back after. */
 static void chat_window(void)
 {
     chat_defaults();
-    ImGui::SetNextWindowPos(ImVec2(24, 220), ImGuiCond_FirstUseEver);
+    ImVec2 disp = ImGui::GetIO().DisplaySize;
+    const float margin = 8.0f;
+    ImGuiWindow* cw = ImGui::FindWindowByName("Chat");
+    ImVec2 size = cw ? cw->SizeFull : ImVec2(560, 280);
+    static bool moved;
+    static ImVec2 home;
+    auto under_question = [&](ImVec2 pos) {
+        return g_asking && pos.x < g_ask1.x && pos.x + size.x > g_ask0.x && pos.y < g_ask1.y && pos.y + size.y > g_ask0.y;
+    };
+    if (g_set.chat_pinned)
+    {
+        ImVec2 at(disp.x - margin - size.x, disp.y - margin - size.y);
+        float bottom = disp.y - margin;
+        if (under_question(at))
+            bottom = ImMax(size.y + margin, g_ask0.y - margin);
+        ImGui::SetNextWindowPos(ImVec2(disp.x - margin, bottom), ImGuiCond_Always, ImVec2(1, 1));
+        moved = false;
+    }
+    else
+    {
+        ImGui::SetNextWindowPos(ImVec2(24, 220), ImGuiCond_FirstUseEver);
+        if (cw && !moved && under_question(cw->Pos))
+        {
+            home = cw->Pos, moved = true;
+            ImGui::SetNextWindowPos(ImVec2(cw->Pos.x, ImMax(margin, g_ask0.y - margin - size.y)), ImGuiCond_Always);
+        }
+        else if (moved && !g_asking)
+        {
+            ImGui::SetNextWindowPos(home, ImGuiCond_Always); /* back where the player had it */
+            moved = false;
+        }
+    }
     ImGui::SetNextWindowSize(ImVec2(560, 280), ImGuiCond_FirstUseEver);
-    if (g_send_open)
-        ImGui::SetNextWindowCollapsed(false); /* typing opens it */
-    if (ImGui::Begin("Chat", &g_set.chat))
+    ImGui::SetNextWindowSizeConstraints(ImVec2(240, 120), ImVec2(FLT_MAX, FLT_MAX));
+    ImGui::SetNextWindowBgAlpha(0.45f);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+                             (g_set.chat_pinned ? ImGuiWindowFlags_NoMove : 0);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    /* while the game asks, the rest of the overlay fades; the chat stays readable (the question's
+     * words are in it, the game's log being hidden), since it has moved out of the way */
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f);
+    bool shown = ImGui::Begin("Chat", NULL, flags);
+    ImGui::PopStyleVar(3);
+    if (shown)
     {
         if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_FittingPolicyScroll))
         {
@@ -1258,6 +1311,23 @@ static void chat_window(void)
                     ImGui::EndTabItem();
                 }
                 ImGui::PopID();
+            }
+            /* the pin: held to the bottom right corner, or free to move */
+            if (ImGui::TabItemButton("##pin", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip))
+            {
+                g_set.chat_pinned = !g_set.chat_pinned;
+                ImGui::MarkIniSettingsDirty();
+            }
+            {
+                ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+                float r = (b.y - a.y) * 0.22f;
+                ImU32 col = g_set.chat_pinned ? IM_COL32(255, 210, 90, 255) : IM_COL32(190, 190, 190, 200);
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                dl->AddCircleFilled(ImVec2(c.x, c.y - r * 0.6f), r, col, 12);                                  /* its head */
+                dl->AddLine(ImVec2(c.x, c.y - r * 0.2f), ImVec2(c.x, c.y + r * 1.9f), col, ImMax(1.5f, r * 0.35f)); /* its point */
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(g_set.chat_pinned ? "Pinned to the corner: click to move it freely" : "Click to pin it to the corner");
             }
             if (g_ntabs < 16 && ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip))
             {
@@ -2103,6 +2173,14 @@ extern "C" void overlay_build_frame(void)
                 extern void rt_log(const char* fmt, ...);
                 rt_log("[recomp] the game's keyboard: %s%s\n", f[0] ? last : "(none)", game_asks ? " (the overlay fades)" : "");
             }
+        }
+        g_asking = false;
+        float ax, ay, aw, ah;
+        if (game_asks && g_focus_rect && g_focus_rect(&ax, &ay, &aw, &ah))
+        {
+            ImVec2 d = ImGui::GetIO().DisplaySize;
+            g_ask0 = ImVec2(ax * d.x, ay * d.y), g_ask1 = ImVec2((ax + aw) * d.x, (ay + ah) * d.y);
+            g_asking = true;
         }
         ImGui::GetStyle().Alpha = game_asks ? 0.3f : 1.0f;
         if (game_asks)

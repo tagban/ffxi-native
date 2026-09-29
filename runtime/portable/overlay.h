@@ -50,6 +50,9 @@ void overlay_plate_depths(int token, const float* depths, int n, float proj10, f
  * settings (host64: asks the launcher to show them), for the overlay's bar. */
 void overlay_set_game_window_closer(int (*close)(const char* name8));
 void overlay_set_settings_opener(void (*open)(void));
+/* where the game's window with the keyboard is (host64: its rectangle in the game's back buffer
+ * pixels), so the overlay's windows can keep out of its way */
+void overlay_set_focus_rect(int (*rect)(float* x, float* y, float* w, float* h)); /* fractions of the screen */
 
 /* The back end's part: overlay.cpp builds the frame, the back end draws it (overlay_metal.mm). */
 void overlay_build_frame(void);

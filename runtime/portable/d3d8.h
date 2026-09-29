@@ -16,6 +16,8 @@ void d3d8_screen_size(uint32_t* w, uint32_t* h);
 void d3d8_viewport(uint32_t* x, uint32_t* y, uint32_t* w, uint32_t* h);
 /* While on, the game's draws are dropped (one of its windows the overlay stands in for, drawing) */
 void d3d8_drop_draws(int on);
+/* the game's back buffer, in its own units (what its interface lays out in) */
+void d3d8_backbuffer_size(uint32_t* w, uint32_t* h);
 /* Adds a texture pack: <dir>/<hash>_<w>x<h>.dds replacements for the game's textures (see d3d8.c,
  * tools/make_texpack.py). Before the device is created. */
 void d3d8_texture_pack(const char* dir);
