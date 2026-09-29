@@ -66,16 +66,34 @@ and its own menus use), exactly as if they had typed it.
 - **Windows**: Overlay (which windows, text sizes, fonts), Chat (tabs by kind, words, the game's
   colors changeable, auto-translate phrases, a box to send from), Party (compact, like the game's),
   Target, Map, Performance.
-- **Map**: a radar on the zone's own map, made when the player zones in from the zone's collision
-  mesh in the install (runtime/portable/zonemap.cpp, adapted from the MogHouse client): walkable
-  ground from above, shaded by height, its edges drawn, the ground reachable from the player bright
-  and the rest dimmed. The layouts' key table is read from the game's memory ("mzb_keys").
+- **Map**: a radar on the zone's map, made when the player zones in (runtime/portable/zonemap.cpp,
+  adapted from the MogHouse client). Two styles, switched with a right-click:
+  - **The game's own map art**, where the install has one: DATs with a texture named
+    `menumap m_<zone>_<map>` (512x512, 8-bit with a palette rows bottom-up, or DXT1/DXT3 blocks
+    top-down) and a 0x31 chunk whose quad gives the pixel of the world's origin (minus its first
+    corner, plus 6 in x on every map checked) and a byte saying whether it is a field's map. Fields
+    are 0.2 pixels a yalm and the rest 0.8, checked by fitting the zone's collision edges to the
+    map's ink (Bastok Markets, Port Bastok, Port Jeuno, Southern San d'Oria, East and West
+    Ronfaure). 210 maps of 115 zones in the base install; expansion zones' maps use other names,
+    not yet found. Zones with several maps (floors) take the best-fitting one for now; choosing by
+    where the player is, is to come.
+  - **Drawn from the zone's collision mesh**: walkable ground from above, shaded by height, a
+    paper's grain, its edges, the ground reachable from the player bright and the rest dimmed;
+    tinted with the map colors (papyrus by default).
   Positions and facing come from the game's own entities every frame ("entity_map": position at
-  +0x04, facing at +0x18, the server's id at +0x78, the name at +0x7C), so it turns smoothly.
-  Entities the game does not draw (status, flags and look, as MogHouse reads them) are left off.
-- **The game's own windows**: its window manager ("menu_mgr") keeps them in a list; the overlay's
-  Chat and Party can move the game's log and party list off the screen (and back). Whether the
-  game lays them out again every frame is logged; if it does, this needs another way.
+  +0x04, facing at +0x18, the server's id at +0x78, the name at +0x7C). Entities the game does
+  not draw (status, flags and look, as MogHouse reads them) are left off. Colors for everything on
+  it are the player's (right-click, Colors).
+- **The game's own windows**: its window manager ("menu_mgr") keeps them in a list (nodes: next,
+  the window at +0x10, removed at +0x14; a window's rectangle at +0x3A, its name in [+4]+0x46;
+  the one with the keyboard at the manager's +0x54). The log is moved off the screen (the game
+  leaves it there); the party list is laid out again every frame, so its draws are dropped
+  instead: hooks on the manager's draw of each window ("menu_draw", "menu_drawn").
+- **Typing**: with the game's log hidden, Space and "/" open the overlay's chat box while none of
+  the game's menus has the keyboard.
+- **Marks**: GM (and level), mentor, new adventurer, seeking a party, away, bazaar, and the
+  linkshell's pearl in its color, from the players' flags (0x00D; the player's own 0x037), drawn
+  as vector shapes by names over heads and in the Target and Party windows.
 - **Target**: the game's target window ("target_ptr") holds who it shows; which word is found by
   matching while something is targeted.
 - **Nameplates**: the game's nameplate routine (the nameplate_scale hook) hands each name, as the
