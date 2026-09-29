@@ -63,9 +63,24 @@ and its own menus use), exactly as if they had typed it.
 - **The player's commands**: `input_line` ("addresses"), the game's parser of a typed line
   (cdecl: the line, and 1 for typed). Its own menus build lines such as `/magic "%s" %d` and run
   them through it; the overlay's chat box does the same.
-- **Windows**: Overlay (which windows, text sizes), Chat (tabs by kind, words, the game's colors
-  changeable, auto-translate phrases, a box to send from), Party (compact, like the game's), Map
-  (a radar: who is around, a compass, facing up or north up), Performance.
+- **Windows**: Overlay (which windows, text sizes, fonts), Chat (tabs by kind, words, the game's
+  colors changeable, auto-translate phrases, a box to send from), Party (compact, like the game's),
+  Target, Map, Performance.
+- **Map**: a radar on the zone's own map, made when the player zones in from the zone's collision
+  mesh in the install (runtime/portable/zonemap.cpp, adapted from the MogHouse client): walkable
+  ground from above, shaded by height, its edges drawn, the ground reachable from the player bright
+  and the rest dimmed. The layouts' key table is read from the game's memory ("mzb_keys").
+  Positions and facing come from the game's own entities every frame ("entity_map": position at
+  +0x04, facing at +0x18, the server's id at +0x78, the name at +0x7C), so it turns smoothly.
+  Entities the game does not draw (status, flags and look, as MogHouse reads them) are left off.
+- **The game's own windows**: its window manager ("menu_mgr") keeps them in a list; the overlay's
+  Chat and Party can move the game's log and party list off the screen (and back). Whether the
+  game lays them out again every frame is logged; if it does, this needs another way.
+- **Target**: the game's target window ("target_ptr") holds who it shows; which word is found by
+  matching while something is targeted.
+- **Nameplates**: the game's nameplate routine (the nameplate_scale hook) hands each name, as the
+  game placed and colored it, to the overlay, which draws it in its own font; the game's glyphs
+  are drawn at no size. Fonts are the system's own (nothing shipped) or the built-in Roboto.
 
 ## Menus: decided
 
