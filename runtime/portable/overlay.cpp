@@ -1337,13 +1337,14 @@ static void chat_window(void)
     ImGui::SetNextWindowBgAlpha(0.45f);
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
                              (g_set.chat_pinned ? ImGuiWindowFlags_NoMove : 0);
+    /* while the game asks, the rest of the overlay fades; the chat stays readable, all of it to its
+     * End (an NPC's words are in it, the game's log being hidden, and it waits on Enter for the
+     * next line), since it has moved out of the way */
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    /* while the game asks, the rest of the overlay fades; the chat stays readable (the question's
-     * words are in it, the game's log being hidden), since it has moved out of the way */
-    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f);
     bool shown = ImGui::Begin("Chat", NULL, flags);
-    ImGui::PopStyleVar(3);
+    ImGui::PopStyleVar(2);
     if (shown)
     {
         if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_FittingPolicyScroll))
@@ -1398,6 +1399,7 @@ static void chat_window(void)
         tab_editor();
     }
     ImGui::End();
+    ImGui::PopStyleVar();
     color_editor();
 }
 
