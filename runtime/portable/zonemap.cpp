@@ -7,6 +7,8 @@
  * are in it too (x east, z north, y down), so nothing is turned. */
 #include "zonemap.h"
 
+#include <ctype.h>
+#include <dirent.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -218,7 +220,9 @@ struct MapFile
 std::unordered_map<int, std::vector<MapFile>> g_map_files;
 bool g_map_files_ready;
 
-/* every map in the install, once: the name is in the first chunk's header */
+/* every map in the install, once: the name is in the first chunk's header. The original game's are
+ * "menumap m_<zone>_<map>"; the expansions' the same with their own prefix ("ex2_datam_026_01":
+ * ex_data, ex2_data to ex5_data, dl_data, gf_data); "eventmap" ones are cutscenes' and left out. */
 void index_maps()
 {
     if (g_map_files_ready)
@@ -227,34 +231,47 @@ void index_maps()
     for (int rom = 1; rom <= 9; ++rom)
     {
         std::string base = g_game + (rom == 1 ? "/ROM" : "/ROM" + std::to_string(rom));
-        for (int dir = 0; dir < 1000; ++dir)
+        DIR* top = opendir(base.c_str());
+        if (!top)
+            continue;
+        while (struct dirent* sub = readdir(top))
         {
-            std::string d = base + "/" + std::to_string(dir) + "/";
-            int misses = 0;
-            for (int f = 0; f < 128 && misses < 8; ++f)
+            if (sub->d_name[0] < '0' || sub->d_name[0] > '9')
+                continue;
+            std::string d = base + "/" + sub->d_name + "/";
+            DIR* in = opendir(d.c_str());
+            if (!in)
+                continue;
+            while (struct dirent* f = readdir(in))
             {
-                FILE* fh = fopen((d + std::to_string(f) + ".DAT").c_str(), "rb");
-                if (!fh)
-                {
-                    ++misses;
+                if (f->d_name[0] < '0' || f->d_name[0] > '9')
                     continue;
-                }
-                misses = 0;
+                FILE* fh = fopen((d + f->d_name).c_str(), "rb");
+                if (!fh)
+                    continue;
                 char h[0x60] = { 0 };
                 size_t n = fread(h, 1, sizeof h, fh);
                 fclose(fh);
-                for (size_t i = 0; i + 16 <= n; ++i)
-                    if (!memcmp(h + i, "menumap m_", 10))
+                for (size_t i = 8; i + 10 <= n; ++i)
+                {
+                    int zone = 0, map = 0;
+                    /* exactly m_ddd_xx, after an eight-character prefix */
+                    if (h[i] != 'm' || h[i + 1] != '_' || h[i + 5] != '_' || !isdigit((unsigned char)h[i + 2]) ||
+                        !isdigit((unsigned char)h[i + 3]) || !isdigit((unsigned char)h[i + 4]) || !memcmp(h + i - 8, "eventmap", 8))
+                        continue;
+                    bool named = true;
+                    for (size_t k = i - 8; k < i && named; ++k)
+                        named = h[k] >= 0x20 && h[k] < 0x7F;
+                    if (named && sscanf(h + i + 2, "%3d_%2x", &zone, &map) == 2)
                     {
-                        int zone = 0, map = 0;
-                        if (sscanf(h + i + 10, "%d_%x", &zone, &map) == 2)
-                            g_map_files[zone].push_back(MapFile{ map, d + std::to_string(f) + ".DAT" });
+                        g_map_files[zone].push_back(MapFile{ map, d + f->d_name });
                         break;
                     }
+                }
             }
-            if (misses >= 8 && dir > 200)
-                break;
+            closedir(in);
         }
+        closedir(top);
     }
     size_t n = 0;
     for (auto& z : g_map_files)
@@ -486,7 +503,7 @@ bool place_art(int zone, const std::vector<std::pair<float, float>>& edges, std:
         if (v_best < best)
             best = v_best, best_art.swap(art), bs = s_best, bx = fx, by = fy;
     }
-    return best < 22.0f; /* a fit this poor is a map of somewhere else (a floor below, say) */
+    return best < 30.0f; /* a fit this poor is a map of somewhere else, or not a map of it at all */
 }
 
 /* From above: each texel the highest floor over it (y points down, so the least y). Then the
