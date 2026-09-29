@@ -554,10 +554,13 @@ static void off_screen(uint32_t win)
     }
 }
 
+static void placed_again(uint32_t win);
+
 static void menu_draw(Guest* g)
 {
     g_dropping = 0;
     party_display_off_screen();
+    placed_again(g->eax);
     {
         /* which windows the manager's pass reaches, once each (the first few dozen) */
         static uint32_t seen[48];
@@ -620,6 +623,36 @@ static int game_focus_rect(float* x, float* y, float* w, float* h)
         return 0;
     *x = (float)r[0] / bw, *y = (float)r[1] / bh, *w = (float)r[2] / bw, *h = (float)r[3] / bh;
     return 1;
+}
+
+/* The game's question, placed where the overlay wants it (on top of its chat): the window with the
+ * keyboard moved there, and kept there in the window manager's pass too (menu_draw), since some
+ * are laid out again every frame. x, y: its top left, as fractions of the screen; < 0 lets go. */
+static uint32_t g_place_win;
+static int16_t g_place_x, g_place_y;
+
+static void place_game_focus(float x, float y)
+{
+    uint32_t bw = 0, bh = 0;
+    d3d8_backbuffer_size(&bw, &bh);
+    g_place_win = 0;
+    if (x < 0 || !MENU_MGR || !bw || !gwin_is_committed(MENU_MGR + 0x54))
+        return;
+    uint32_t win = rd32(MENU_MGR + 0x54);
+    if (!game_window_name(win))
+        return;
+    g_place_win = win, g_place_x = (int16_t)(x * bw), g_place_y = (int16_t)(y * bh);
+    int16_t* pos = (int16_t*)GUEST_PTR(win + 0x3A);
+    pos[0] = g_place_x, pos[1] = g_place_y;
+}
+
+static void placed_again(uint32_t win)
+{
+    if (win && win == g_place_win && game_window_name(win))
+    {
+        int16_t* pos = (int16_t*)GUEST_PTR(win + 0x3A);
+        pos[0] = g_place_x, pos[1] = g_place_y;
+    }
 }
 
 /* each frame (the overlay's): which of the game's windows the overlay stands in for now */
@@ -726,7 +759,7 @@ static void setup_packets(void)
     if (MENU_MGR && MENU_CLOSE)
         overlay_set_game_window_closer(close_game_window);
     if (MENU_MGR)
-        overlay_set_focus_rect(game_focus_rect);
+        overlay_set_focus_rect(game_focus_rect, place_game_focus);
     overlay_set_settings_opener(open_launcher_settings);
     if (MENU_DRAW_HOOK && MENU_DRAWN_HOOK)
         *MENU_DRAW_HOOK = menu_draw, *MENU_DRAWN_HOOK = menu_drawn;

@@ -84,6 +84,8 @@ static const char* (*g_game_focus)(void);         /* host64: the game's window w
 static int (*g_close_game)(const char* name8);    /* host64: the game's own close of one of its windows */
 static void (*g_open_settings)(void);             /* host64: the launcher's settings */
 static int (*g_focus_rect)(float* x, float* y, float* w, float* h); /* host64: where the game's window with the keyboard is */
+static void (*g_place_focus)(float x, float y);   /* host64: and moves it */
+static bool g_question;                            /* the one asking is a question (yes/no, a choice): it joins the chat */
 static bool g_asking;                              /* one of the game's own windows is asking something */
 static ImVec2 g_ask0, g_ask1;                      /* where, on the screen (the overlay's units) */
 static int g_send_open;                           /* the box asked to open: 1 empty, 2 with "/", 3 with "!" */
@@ -511,9 +513,10 @@ extern "C" void overlay_set_game_window_closer(int (*close)(const char* name8))
     g_close_game = close;
 }
 
-extern "C" void overlay_set_focus_rect(int (*rect)(float* x, float* y, float* w, float* h))
+extern "C" void overlay_set_focus_rect(int (*rect)(float* x, float* y, float* w, float* h), void (*place)(float x, float y))
 {
     g_focus_rect = rect;
+    g_place_focus = place;
 }
 
 extern "C" void overlay_set_settings_opener(void (*open)(void))
@@ -1253,11 +1256,26 @@ static void chat_window(void)
     auto under_question = [&](ImVec2 pos) {
         return g_asking && pos.x < g_ask1.x && pos.x + size.x > g_ask0.x && pos.y < g_ask1.y && pos.y + size.y > g_ask0.y;
     };
+    /* a question joins the chat: the game's window put on top of it, its left edge with the chat's */
+    static bool placing;
+    if (g_question && g_place_focus && cw)
+    {
+        float qh = g_ask1.y - g_ask0.y;
+        g_place_focus(cw->Pos.x / disp.x, ImMax(0.0f, cw->Pos.y - qh - 2.0f) / disp.y);
+        placing = true;
+    }
+    else if (placing)
+    {
+        if (g_place_focus)
+            g_place_focus(-1, -1);
+        placing = false;
+    }
+    auto under_other = [&](ImVec2 pos) { return !g_question && under_question(pos); };
     if (g_set.chat_pinned)
     {
         ImVec2 at(disp.x - margin - size.x, disp.y - margin - size.y);
         float bottom = disp.y - margin;
-        if (under_question(at))
+        if (under_other(at))
             bottom = ImMax(size.y + margin, g_ask0.y - margin);
         ImGui::SetNextWindowPos(ImVec2(disp.x - margin, bottom), ImGuiCond_Always, ImVec2(1, 1));
         moved = false;
@@ -1265,7 +1283,7 @@ static void chat_window(void)
     else
     {
         ImGui::SetNextWindowPos(ImVec2(24, 220), ImGuiCond_FirstUseEver);
-        if (cw && !moved && under_question(cw->Pos))
+        if (cw && !moved && under_other(cw->Pos))
         {
             home = cw->Pos, moved = true;
             ImGui::SetNextWindowPos(ImVec2(cw->Pos.x, ImMax(margin, g_ask0.y - margin - size.y)), ImGuiCond_Always);
@@ -2175,6 +2193,12 @@ extern "C" void overlay_build_frame(void)
             }
         }
         g_asking = false;
+        /* a question: yes/no windows (their names end yn, yesn, yesno), a choice (query), a notice (ok) */
+        size_t fl = strnlen(f, 8);
+        while (fl && f[fl - 1] == ' ')
+            --fl;
+        g_question = game_asks && ((fl >= 2 && !strncmp(f + fl - 2, "yn", 2)) || (fl >= 4 && !strncmp(f + fl - 4, "yesn", 4)) ||
+                                   (fl >= 5 && !strncmp(f + fl - 5, "yesno", 5)) || !strncmp(f, "query", 5) || !strncmp(f, "ok  ", 4));
         float ax, ay, aw, ah;
         if (game_asks && g_focus_rect && g_focus_rect(&ax, &ay, &aw, &ah))
         {
