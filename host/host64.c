@@ -639,6 +639,69 @@ static const char* game_focus(void)
     return name ? name : "";
 }
 
+/* Learning a window that asks (an NPC's choices, "query"): while it has the keyboard, its object and
+ * what three of its pointers lead to (+0x14, +0x18, +0x88) are compared four times a second, and what
+ * changed is logged (the cursor moving shows where the choice is kept), with the text found in them
+ * once (where its choices' words are). A few hundred lines at most, for working out an overlay
+ * window in its place. */
+static void study_asking(uint32_t win, const char* name)
+{
+    static uint32_t last_win;
+    static uint8_t before[4][0x400];
+    static int lines;
+    static uint64_t next;
+    if (lines > 400 || !win)
+        return;
+    uint64_t now = rt_monotonic_ns();
+    if (win == last_win && now < next)
+        return;
+    next = now + 250000000ull;
+    uint32_t at[4] = { win, rd32(win + 0x14), rd32(win + 0x18), rd32(win + 0x88) };
+    for (int k = 0; k < 4; ++k)
+    {
+        uint8_t cur[0x400];
+        if (!at[k] || !gwin_is_committed(at[k]) || !gwin_is_committed(at[k] + 0x3FF))
+        {
+            memset(before[k], 0, sizeof before[k]);
+            continue;
+        }
+        memcpy(cur, GUEST_PTR(at[k]), sizeof cur);
+        if (win != last_win)
+        {
+            /* the words in it: runs of 4 or more printable characters */
+            char out[900];
+            int o = 0;
+            for (int i = 0; i < 0x400 && o < 800;)
+            {
+                int j = i;
+                while (j < 0x400 && cur[j] >= 0x20 && cur[j] < 0x7F)
+                    ++j;
+                if (j - i >= 4)
+                    o += snprintf(out + o, sizeof out - (size_t)o, " +%03x \"%.*s\"", i, j - i, (const char*)cur + i);
+                i = j + 1;
+            }
+            rt_log("[recomp] study %.8s [%d] at %08x:%s\n", name, k, at[k], o ? out : " (no text)");
+            ++lines;
+        }
+        else
+        {
+            char out[900];
+            int o = 0, n = 0;
+            for (int i = 0; i + 4 <= 0x400 && o < 800; i += 4)
+                if (memcmp(cur + i, before[k] + i, 4))
+                {
+                    uint32_t a, b;
+                    memcpy(&a, before[k] + i, 4), memcpy(&b, cur + i, 4);
+                    o += snprintf(out + o, sizeof out - (size_t)o, " +%03x %x>%x", i, a, b), ++n;
+                }
+            if (n && n < 40)
+                rt_log("[recomp] study %.8s [%d] changed:%s\n", name, k, out), ++lines;
+        }
+        memcpy(before[k], cur, sizeof cur);
+    }
+    last_win = win;
+}
+
 /* where that window is: its rectangle (+0x3A: left, top, right, bottom, shorts) in the game's own
  * units (its back buffer's pixels), as fractions of the screen; 0 when none has the keyboard */
 static int game_focus_rect(float* x, float* y, float* w, float* h)
@@ -651,6 +714,7 @@ static int game_focus_rect(float* x, float* y, float* w, float* h)
     if (!game_window_name(win))
         return 0;
     const int16_t* r = (const int16_t*)GUEST_PTR(win + 0x3A);
+    study_asking(win, game_window_name(win));
     if (r[2] <= r[0] || r[3] <= r[1])
         return 0;
     *x = (float)r[0] / bw, *y = (float)r[1] / bh, *w = (float)(r[2] - r[0]) / bw, *h = (float)(r[3] - r[1]) / bh;
