@@ -68,6 +68,8 @@ typedef struct XiGameModule
      * ("menu_drawn"); NULL when the build has none */
     GuestFn* hook_menu_draw;
     GuestFn* hook_menu_drawn;
+    /* where the game keeps its party display ("party_display": a pointer; +0x40 whether it shows) */
+    uint32_t party_display;
 } XiGameModule;
 
 /* The one symbol a module exports. */

@@ -20,7 +20,8 @@
         "mzb_keys": "0x10376ad0",
         "menu_mgr": "0x105eed58",
         "menu_find": "0x1015dc20",
-        "target_ptr": "0x105784b8"
+        "target_ptr": "0x105784b8",
+        "party_display": "0x106318c8"
       },
       "hooks": {
         "packet_in": "0x100dd803",
@@ -65,7 +66,8 @@
         "mzb_keys": "0x10376ac0",
         "menu_mgr": "0x10621838",
         "menu_find": "0x1015dc10",
-        "target_ptr": "0x10578478"
+        "target_ptr": "0x10578478",
+        "party_display": "0x106643a8"
       },
       "hooks": {
         "nameplate_scale": "0x100863d6",

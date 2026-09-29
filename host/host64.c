@@ -476,6 +476,45 @@ static void find_game_windows(void)
     }
 }
 
+#if defined(FFXI_PARTY_DISPLAY)
+#define PARTY_DISPLAY FFXI_PARTY_DISPLAY
+#elif defined(XI_SPLIT)
+#define PARTY_DISPLAY (xi_game->size >= offsetof(XiGameModule, party_display) + sizeof(uint32_t) ? xi_game->party_display : 0u)
+#else
+#define PARTY_DISPLAY 0u
+#endif
+
+/* The party display (the bars at the bottom right, the player's alone when not in a party): not the
+ * partywin window, which only holds its place, but an object of its own, which the game shows
+ * while +0x40 is set (its party window's open sets it, close clears it). Cleared every frame while
+ * the overlay's Party stands in for it, and put back as it was. */
+static void hide_party_display(int hide)
+{
+    static int hidden, was;
+    uint32_t at = PARTY_DISPLAY;
+    if (!at || !gwin_is_committed(at))
+        return;
+    uint32_t obj = rd32(at);
+    if (!obj || !gwin_is_committed(obj + 0x40))
+        return;
+    uint8_t* shown = GUEST_PTR(obj + 0x40);
+    if (hide)
+    {
+        if (!hidden)
+        {
+            was = *shown, hidden = 1;
+            rt_log("[recomp] the game's party display: hidden (it was %s)\n", was ? "showing" : "not showing");
+        }
+        *shown = 0;
+    }
+    else if (hidden)
+    {
+        *shown = (uint8_t)was;
+        hidden = 0;
+        rt_log("[recomp] the game's party display: back\n");
+    }
+}
+
 #if defined(FFXI_HOOK_MENU_DRAW)
 extern GuestFn rt_hook_menu_draw, rt_hook_menu_drawn;
 #define MENU_DRAW_HOOK (&rt_hook_menu_draw)
@@ -557,6 +596,7 @@ static void hide_game_windows(int log, int party, int target)
 {
     static unsigned frame;
     static int any_moved;
+    hide_party_display(party);
     if (!log && !party && !target && !any_moved)
         return;
     if (frame++ % 10 == 0) /* the game makes and remakes its windows (the target box on each target) */

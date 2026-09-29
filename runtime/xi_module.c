@@ -127,4 +127,9 @@ XI_EXPORT const XiGameModule xi_game_module = {
     NULL,
     NULL,
 #endif
+#ifdef FFXI_PARTY_DISPLAY
+    FFXI_PARTY_DISPLAY,
+#else
+    0,
+#endif
 };
