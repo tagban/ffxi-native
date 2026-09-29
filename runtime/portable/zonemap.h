@@ -23,13 +23,20 @@ typedef struct
     float cx, cz;    /* the world point at its middle (x east, z north) */
     float half;      /* world units from the middle to an edge */
     uint8_t* rgba;   /* NULL once taken */
+    /* the game's own map of the zone, where it has one and it could be placed: 512 x 512 RGBA
+     * (row 0 the top), and where the world lands on it: pixel = (ox + scale*x, oy - scale*z) */
+    uint8_t* art;    /* NULL when there is none (or once taken) */
+    float art_scale, art_ox, art_oy;
 } ZoneMap;
 
 /* Starts making the map for a zone (in the background), if it is not the one made or being made:
  * the ground reachable from where the player stands (x, height, z) is the map, the rest dimmed. */
 void zonemap_want(int zone, float x, float y, float z);
-/* The finished map for a zone, once: the caller takes its pixels (and frees them with free()). */
+/* The finished map for a zone, once: the caller takes its pixels (and frees them with free()). The
+ * game's own map comes after (it is found and placed after), by zonemap_take_art, with the same
+ * fields filled (art, art_scale, art_ox, art_oy). */
 int zonemap_take(int zone, ZoneMap* out);
+int zonemap_take_art(int zone, ZoneMap* out);
 
 #ifdef __cplusplus
 }

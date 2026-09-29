@@ -21,3 +21,4 @@ void overlay_nameplate(float x, float y, const char* text, uint32_t color) { (vo
 void zonemap_init(const char* game_dir, const uint8_t keys[256]) { (void)game_dir, (void)keys; }
 void zonemap_want(int zone, float x, float y, float z) { (void)zone, (void)x, (void)y, (void)z; }
 int zonemap_take(int zone, ZoneMap* out) { (void)zone, (void)out; return 0; }
+int zonemap_take_art(int zone, ZoneMap* out) { (void)zone, (void)out; return 0; }

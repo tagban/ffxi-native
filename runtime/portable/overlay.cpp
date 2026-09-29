@@ -104,6 +104,7 @@ static struct
     float chat_size = 15.0f; /* the chat's lines */
     float map_range = 50.0f; /* yalms from the middle to the edge */
     bool map_north_up = false, map_names = false;
+    bool map_art = true; /* the game's own map under the radar, where there is one */
 } g_set;
 static char g_ini[1024];
 static struct
@@ -538,6 +539,7 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "map_range=%f", &f) == 1 && f >= 10 && f <= 250) g_set.map_range = f;
     else if (sscanf(line, "map_north_up=%d", &v) == 1) g_set.map_north_up = v != 0;
     else if (sscanf(line, "map_names=%d", &v) == 1) g_set.map_names = v != 0;
+    else if (sscanf(line, "map_art=%d", &v) == 1) g_set.map_art = v != 0;
 }
 
 static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextBuffer* out)
@@ -545,7 +547,7 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("[%s][Settings]\n", h->TypeName);
     out->appendf("chat=%d\nparty=%d\nmap=%d\nstatus=%d\n", g_set.chat, g_set.party, g_set.map, g_set.status);
     out->appendf("ui_size=%g\nchat_size=%g\nmap_range=%g\n", g_set.ui_size, g_set.chat_size, g_set.map_range);
-    out->appendf("map_north_up=%d\nmap_names=%d\n", g_set.map_north_up, g_set.map_names);
+    out->appendf("map_north_up=%d\nmap_names=%d\nmap_art=%d\n", g_set.map_north_up, g_set.map_names, g_set.map_art);
     out->appendf("target=%d\nhide_game_log=%d\nhide_game_party=%d\n", g_set.target, g_set.hide_game_log, g_set.hide_game_party);
     out->appendf("plates=%d\nplate_size=%g\nplate_outline=%d\n", g_set.plates, g_set.plate_size, g_set.plate_outline);
     out->appendf("ui_font=%s\nplate_font=%s\n", g_set.ui_font, g_set.plate_font);
@@ -1249,38 +1251,50 @@ static void map_colors_window(void)
 
 /* --- the zone map under the radar (zonemap.h): one texture, filled again on each new zone ------- */
 static ImTextureData* g_map_tex;
-static ZoneMap g_map; /* its placement in the world (the pixels are the texture's) */
+static ImTextureData* g_art_tex; /* the game's own map of the zone, where there is one */
+static ZoneMap g_map; /* its placement in the world (the pixels are the textures') */
+
+/* a texture, made or filled again with these pixels */
+static void fill_texture(ImTextureData*& tex, const uint8_t* px, int size)
+{
+    if (tex && tex->Width != size)
+        tex = NULL; /* a size it was not made for: a new one (the old is left, once) */
+    if (!tex)
+    {
+        tex = IM_NEW(ImTextureData)();
+        tex->Create(ImTextureFormat_RGBA32, size, size);
+        tex->UseColors = true;
+        memcpy(tex->GetPixels(), px, (size_t)size * size * 4);
+        ImGui::RegisterUserTexture(tex);
+        return;
+    }
+    memcpy(tex->GetPixels(), px, (size_t)size * size * 4);
+    if (tex->Status == ImTextureStatus_OK)
+    {
+        ImTextureRect all = { 0, 0, (unsigned short)size, (unsigned short)size };
+        tex->Updates.resize(0);
+        tex->Updates.push_back(all);
+        tex->UpdateRect = all;
+        tex->SetStatus(ImTextureStatus_WantUpdates);
+    }
+}
 
 static void map_texture_update(void)
 {
     ZoneMap zm;
-    if (!zonemap_take(gamestate_zone(), &zm))
-        return;
-    if (g_map_tex && g_map_tex->Width != zm.size)
-        g_map_tex = NULL; /* a size it was not made for: a new one (the old is left, once) */
-    if (!g_map_tex)
+    if (zonemap_take(gamestate_zone(), &zm))
     {
-        g_map_tex = IM_NEW(ImTextureData)();
-        g_map_tex->Create(ImTextureFormat_RGBA32, zm.size, zm.size);
-        g_map_tex->UseColors = true;
-        memcpy(g_map_tex->GetPixels(), zm.rgba, (size_t)zm.size * zm.size * 4);
-        ImGui::RegisterUserTexture(g_map_tex);
+        fill_texture(g_map_tex, zm.rgba, zm.size);
+        free(zm.rgba);
+        zm.rgba = NULL;
+        g_map = zm; /* art_scale 0 until the game's own map comes, if it does */
     }
-    else
+    if (zonemap_take_art(gamestate_zone(), &zm))
     {
-        memcpy(g_map_tex->GetPixels(), zm.rgba, (size_t)zm.size * zm.size * 4);
-        if (g_map_tex->Status == ImTextureStatus_OK)
-        {
-            ImTextureRect all = { 0, 0, (unsigned short)zm.size, (unsigned short)zm.size };
-            g_map_tex->Updates.resize(0);
-            g_map_tex->Updates.push_back(all);
-            g_map_tex->UpdateRect = all;
-            g_map_tex->SetStatus(ImTextureStatus_WantUpdates);
-        }
+        fill_texture(g_art_tex, zm.art, 512);
+        free(zm.art);
+        g_map.art_scale = zm.art_scale, g_map.art_ox = zm.art_ox, g_map.art_oy = zm.art_oy;
     }
-    free(zm.rgba);
-    zm.rgba = NULL;
-    g_map = zm;
 }
 
 /* --- the map ------------------------------------------------------------------------------------- */
@@ -1317,6 +1331,8 @@ static void map_window(void)
             ImGui::MarkIniSettingsDirty();
         if (ImGui::MenuItem("Names", NULL, &g_set.map_names))
             ImGui::MarkIniSettingsDirty();
+        if (ImGui::MenuItem("The game's map", NULL, &g_set.map_art, g_art_tex && g_map.art_scale > 0))
+            ImGui::MarkIniSettingsDirty();
         ImGui::Separator();
         if (ImGui::MenuItem("Colors..."))
             g_map_colors_open = true;
@@ -1327,6 +1343,7 @@ static void map_window(void)
     dl->AddCircleFilled(c, r, mapcol(MC_BACK), 64);
     map_texture_update();
     bool have_map = known && g_map_tex && g_map.zone == gamestate_zone() && g_map.half > 0;
+    bool art = have_map && g_set.map_art && g_art_tex && g_map.art_scale > 0;
 
     /* the world (x east, z north) to the radar: facing up, or north up. Facing 0 is east and grows
      * clockwise (64 south), so facing t looks along (cos t, -sin t). */
@@ -1356,17 +1373,20 @@ static void map_window(void)
                 dz = -fwd * st - right * ct;
             }
             float wx = me_x + dx, wz = me_z + dz;
+            if (art) /* the game's map: its pixel for the point, of 512 */
+                return ImVec2((g_map.art_ox + g_map.art_scale * wx) / 512.0f, (g_map.art_oy - g_map.art_scale * wz) / 512.0f);
             return ImVec2((wx - (g_map.cx - g_map.half)) / (2.0f * g_map.half), ((g_map.cz + g_map.half) - wz) / (2.0f * g_map.half));
         };
-        dl->PushTexture(g_map_tex->GetTexRef());
+        ImU32 tint = art ? IM_COL32_WHITE : mapcol(MC_GROUND); /* the game's art as it is; ours tinted */
+        dl->PushTexture(art ? g_art_tex->GetTexRef() : g_map_tex->GetTexRef());
         dl->PrimReserve(SEG * 3, SEG + 1);
         ImDrawIdx base = (ImDrawIdx)dl->_VtxCurrentIdx;
-        dl->PrimWriteVtx(c, uv_at(0, 0), mapcol(MC_GROUND)); /* the grey map, tinted the ground's color */
+        dl->PrimWriteVtx(c, uv_at(0, 0), tint);
         for (int i = 0; i < SEG; ++i)
         {
             float a = (float)i / SEG * IM_PI * 2.0f;
             float sx = cosf(a) * r, sy = sinf(a) * r;
-            dl->PrimWriteVtx(ImVec2(c.x + sx, c.y + sy), uv_at(sx, sy), mapcol(MC_GROUND));
+            dl->PrimWriteVtx(ImVec2(c.x + sx, c.y + sy), uv_at(sx, sy), tint);
         }
         for (int i = 0; i < SEG; ++i)
         {
