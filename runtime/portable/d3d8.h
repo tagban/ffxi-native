@@ -16,6 +16,9 @@ void d3d8_screen_size(uint32_t* w, uint32_t* h);
 void d3d8_viewport(uint32_t* x, uint32_t* y, uint32_t* w, uint32_t* h);
 /* While on, the game's draws are dropped (one of its windows the overlay stands in for, drawing) */
 void d3d8_drop_draws(int on);
+/* while on, the interface's draws wholly inside rectangle i (0-3; the game's units) are dropped */
+void d3d8_drop_rect(int i, int on, float x0, float y0, float x1, float y1);
+uint32_t d3d8_dropped_rect_draws(void);
 /* the game's back buffer, in its own units (what its interface lays out in) */
 void d3d8_backbuffer_size(uint32_t* w, uint32_t* h);
 /* Adds a texture pack: <dir>/<hash>_<w>x<h>.dds replacements for the game's textures (see d3d8.c,

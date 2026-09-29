@@ -579,6 +579,19 @@ static void menu_draw(Guest* g)
         if (g_game_windows[i].dropped && g_game_windows[i].win == g->eax)
         {
             g_dropping = g->eax;
+            if (g_game_windows[i].group == 1 && gwin_is_committed(g_dropping + 0x42))
+            {
+                /* the party list, as the game has just laid it out: whatever draws in it (the bars are
+                 * not all drawn by the window itself) is dropped there */
+                const int16_t* r = (const int16_t*)GUEST_PTR(g_dropping + 0x3A);
+                if (r[0] > -4000 && r[2] > 0 && r[3] > 0)
+                {
+                    d3d8_drop_rect(0, 1, (float)r[0] - 4, (float)r[1] - 4, (float)(r[0] + r[2]) + 4, (float)(r[1] + r[3]) + 4);
+                    static int told;
+                    if (!told++)
+                        rt_log("[recomp] game window partywin: its rectangle %d,%d %dx%d, the interface drawn in it dropped\n", r[0], r[1], r[2], r[3]);
+                }
+            }
             static int seen[16];
             if (!seen[i]++)
                 rt_log("[recomp] game window %.8s: the manager's pass seen, moved off the screen there\n", g_game_windows[i].name);
@@ -661,6 +674,13 @@ static void hide_game_windows(int log, int party, int target)
     static unsigned frame;
     static int any_moved;
     g_party_hidden = party;
+    if (!party)
+        d3d8_drop_rect(0, 0, 0, 0, 0, 0);
+    {
+        static unsigned frames;
+        if (party && ++frames == 600)
+            rt_log("[recomp] the party list: %u interface draws dropped in its rectangle in 600 frames\n", d3d8_dropped_rect_draws());
+    }
     if (!log && !party && !target && !any_moved)
         return;
     if (frame++ % 10 == 0) /* the game makes and remakes its windows (the target box on each target) */

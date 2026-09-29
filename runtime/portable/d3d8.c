@@ -1714,10 +1714,74 @@ static void draw(uint32_t prim, uint32_t count, uint32_t start, uint32_t indices
 static int g_drop_draws;
 void d3d8_drop_draws(int on) { g_drop_draws = on; }
 
+/* The interface's draws inside a rectangle (the game's own units, its back buffer's pixels) dropped
+ * while set: a window of the game's the overlay stands in for, whatever draws it. Only screen-space
+ * vertices (XYZRHW, the interface's), and only a draw that lies wholly inside. */
+static int g_drop_rects;
+static float g_drop_rect[4][4];
+static uint32_t g_dropped_rect_draws;
+void d3d8_drop_rect(int i, int on, float x0, float y0, float x1, float y1)
+{
+    if (i < 0 || i >= 4)
+        return;
+    g_drop_rect[i][0] = x0, g_drop_rect[i][1] = y0, g_drop_rect[i][2] = x1, g_drop_rect[i][3] = y1;
+    if (on)
+        g_drop_rects |= 1 << i;
+    else
+        g_drop_rects &= ~(1 << i);
+}
+uint32_t d3d8_dropped_rect_draws(void) { return g_dropped_rect_draws; }
+
+static uint32_t prim_vertices(uint32_t type, uint32_t n)
+{
+    switch (type)
+    {
+    case 1: return n;           /* points */
+    case 2: return 2 * n;       /* line list */
+    case 3: return n + 1;       /* line strip */
+    case 4: return 3 * n;       /* triangle list */
+    case 5: case 6: return n + 2; /* strip, fan */
+    default: return 0;
+    }
+}
+
+/* whether these vertices (guest memory, from first, count of them) all lie in one dropped rectangle */
+static int in_dropped_rect(uint32_t data, uint32_t stride, uint32_t count)
+{
+    if (!g_drop_rects || !data || !count || count > 4096 || stride < 16 || (g_dev.cur.vs & 1) || (g_dev.cur.vs & 0xE) != 4)
+        return 0;
+    for (int r = 0; r < 4; ++r)
+    {
+        if (!(g_drop_rects >> r & 1))
+            continue;
+        const float* q = g_drop_rect[r];
+        uint32_t i = 0;
+        for (; i < count; ++i)
+        {
+            float x = u2f(rd32(data + i * stride)), y = u2f(rd32(data + i * stride + 4));
+            if (x < q[0] || x > q[2] || y < q[1] || y > q[3])
+                break;
+        }
+        if (i == count)
+        {
+            ++g_dropped_rect_draws;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void IDirect3DDevice8_DrawPrimitive(Guest* g)
 {
     if (g_drop_draws)
         RET(D3D_OK, 4);
+    if (g_drop_rects)
+    {
+        Obj* vb = obj(g_dev.cur.stream[0]);
+        uint32_t stride = g_dev.cur.stride[0];
+        if (vb && vb->mem && in_dropped_rect(vb->mem + ARG(2) * stride, stride, prim_vertices(ARG(1), ARG(3))))
+            RET(D3D_OK, 4);
+    }
     g_cap_esp = g->esp;
     draw(ARG(1), ARG(3), ARG(2), 0, 0, 0, 0);
     RET(D3D_OK, 4);
@@ -1820,7 +1884,7 @@ static uint32_t widen_quad(uint32_t data, const Obj* t)
 
 static void IDirect3DDevice8_DrawPrimitiveUP(Guest* g)
 {
-    if (g_drop_draws)
+    if (g_drop_draws || in_dropped_rect(ARG(3), ARG(4), prim_vertices(ARG(1), ARG(2))))
     {
         bind(&g_dev.cur.stream[0], 0);
         g_dev.cur.stride[0] = 0;
@@ -1848,7 +1912,7 @@ static void IDirect3DDevice8_DrawPrimitiveUP(Guest* g)
  * IndexDataFormat, pVertexStreamZeroData, VertexStreamZeroStride) */
 static void IDirect3DDevice8_DrawIndexedPrimitiveUP(Guest* g)
 {
-    if (g_drop_draws)
+    if (g_drop_draws || in_dropped_rect(ARG(7) + ARG(2) * ARG(8), ARG(8), ARG(3)))
     {
         bind(&g_dev.cur.stream[0], 0);
         g_dev.cur.stride[0] = 0;
