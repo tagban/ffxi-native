@@ -90,6 +90,7 @@ static bool g_asking;                              /* one of the game's own wind
 static ImVec2 g_ask0, g_ask1;                      /* where, on the screen (the overlay's units) */
 static int g_send_open;                           /* the box asked to open: 1 empty, 2 with "/", 3 with "!" */
 static bool g_swallow_text;                        /* the key's own character, not to be typed */
+static SDL_Scancode g_swallow_up = SDL_SCANCODE_UNKNOWN; /* and its release (the game opens its own line on /'s) */
 
 /* The names over heads this frame, as the game placed them (host64's nameplate hook) */
 static bool g_plates_available;
@@ -578,6 +579,11 @@ extern "C" int overlay_event(const SDL_Event* e)
     }
     if (e->type == SDL_EVENT_KEY_UP && ((e->key.key == SDLK_U && (e->key.mod & (SDL_KMOD_GUI | SDL_KMOD_CTRL))) || e->key.key == SDLK_F12))
         return 1;
+    if (e->type == SDL_EVENT_KEY_UP && g_swallow_up != SDL_SCANCODE_UNKNOWN && e->key.scancode == g_swallow_up)
+    {
+        g_swallow_up = SDL_SCANCODE_UNKNOWN; /* the release of a key that opened the chat box */
+        return 1;
+    }
     if (e->type == SDL_EVENT_TEXT_INPUT && g_swallow_text)
     {
         g_swallow_text = false; /* the Space or / that opened the box */
@@ -588,6 +594,7 @@ extern "C" int overlay_event(const SDL_Event* e)
         SDL_Keycode key = e->key.key;
         g_send_open = key == SDLK_SLASH ? 2 : key == SDLK_EXCLAIM || key == SDLK_1 ? 3 : 1;
         g_swallow_text = key != SDLK_RETURN && key != SDLK_KP_ENTER; /* Enter types nothing */
+        g_swallow_up = e->key.scancode;
         return 1;
     }
     ImGui_ImplSDL3_ProcessEvent(e);
@@ -2216,7 +2223,8 @@ extern "C" void overlay_build_frame(void)
         if (!strncmp(f, "inline", 6) && g_shown && g_set.chat && g_set.hide_game_log && g_close_game && !ImGui::GetIO().WantTextInput)
         {
             g_close_game("inline  ");
-            g_send_open = 1;
+            if (!g_send_open)
+                g_send_open = 1; /* not over a box already opening with its "/" or "!" */
         }
     }
     ImGui_ImplSDL3_NewFrame();
