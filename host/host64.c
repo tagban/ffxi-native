@@ -426,7 +426,7 @@ typedef struct
     int dropped; /* its draws dropped (a window the game lays out every frame cannot be moved) */
 } GameWindow;
 static GameWindow g_game_windows[] = {
-    { "logwindo", 0 }, { "logwin2 ", 0 },
+    { "logwindo", 0 }, { "logwin2 ", 0 }, { "inline  ", 0 }, /* the log, and the game's own typing line */
     { "partywin", 1 }, { "ptw0    ", 1 }, { "ptw1    ", 1 }, { "ptw2    ", 1 },
     { "targetwi", 2 },
 };
@@ -461,18 +461,17 @@ static void find_game_windows(void)
         const char* name = game_window_name(win);
         if (!name)
             continue;
-        if (!told && strlen(all) + 24 < sizeof all)
-        {
-            const int16_t* r = (const int16_t*)GUEST_PTR(win + 0x3A);
-            snprintf(all + strlen(all), sizeof all - strlen(all), " %.8s(%d,%d)", name, r[0], r[1]);
-        }
+        if (told < 30 && strlen(all) + 12 < sizeof all)
+            snprintf(all + strlen(all), sizeof all - strlen(all), " %.8s", name);
         for (size_t i = 0; i < sizeof g_game_windows / sizeof *g_game_windows; ++i)
             if (!memcmp(name, g_game_windows[i].name, 8))
                 g_game_windows[i].win = win;
     }
-    if (!told && all[0])
+    static char last[1200];
+    if (told < 30 && all[0] && strcmp(all, last))
     {
-        told = 1;
+        ++told;
+        snprintf(last, sizeof last, "%s", all);
         rt_log("[recomp] the game's windows:%s\n", all);
     }
 }
@@ -507,6 +506,20 @@ static void off_screen(uint32_t win)
 static void menu_draw(Guest* g)
 {
     g_dropping = 0;
+    {
+        /* which windows the manager's pass reaches, once each (the first few dozen) */
+        static uint32_t seen[48];
+        static int nseen;
+        int known = 0;
+        for (int k = 0; k < nseen && !known; ++k)
+            known = seen[k] == g->eax;
+        if (!known && nseen < 48)
+        {
+            seen[nseen++] = g->eax;
+            const char* n = game_window_name(g->eax);
+            rt_log("[recomp] the manager's pass draws %.8s\n", n ? n : "(unnamed)");
+        }
+    }
     for (size_t i = 0; i < sizeof g_game_windows / sizeof *g_game_windows; ++i)
         if (g_game_windows[i].dropped && g_game_windows[i].win == g->eax)
         {
