@@ -146,6 +146,10 @@ static struct
     bool equip = false, items = false; /* the equipment and item windows */
     /* the windows' background and the chat's: a color and how solid (the player's) */
     float win_bg[4] = { 0.06f, 0.06f, 0.08f, 0.88f }, chat_bg[4] = { 0.04f, 0.04f, 0.06f, 0.62f };
+    /* the chat, as the game's log: down to a few lines when nothing has come for a while */
+    bool chat_shrink = true;
+    int chat_quiet_lines = 4;
+    float chat_quiet_secs = 12.0f;
 } g_set;
 static char g_ini[1024];
 static struct
@@ -545,6 +549,9 @@ extern "C" void overlay_set_focus_rect(int (*rect)(float* x, float* y, float* w,
     g_place_focus = place;
 }
 
+static void (*g_place_log)(float x0, float y0, float x1, float y1);
+extern "C" void overlay_set_log_placer(void (*place)(float x0, float y0, float x1, float y1)) { g_place_log = place; }
+
 extern "C" void overlay_set_settings_opener(void (*open)(void))
 {
     g_open_settings = open;
@@ -704,6 +711,9 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
                     g_map_col[k] = IM_COL32(argb >> 16 & 255, argb >> 8 & 255, argb & 255, argb >> 24 & 255);
     }
     else if (!strncmp(line, "plate_font=", 11)) snprintf(g_set.plate_font, sizeof g_set.plate_font, "%s", line + 11);
+    else if (sscanf(line, "chat_shrink=%d", &v) == 1) g_set.chat_shrink = v != 0;
+    else if (sscanf(line, "chat_quiet_lines=%d", &v) == 1 && v >= 1 && v <= 20) g_set.chat_quiet_lines = v;
+    else if (sscanf(line, "chat_quiet_secs=%f", &f) == 1 && f >= 2 && f <= 120) g_set.chat_quiet_secs = f;
     else if (!strncmp(line, "win_bg=", 7) || !strncmp(line, "chat_bg=", 8))
     {
         float c[4];
@@ -734,6 +744,8 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("plates=%d\nplate_size=%g\nplate_outline=%d\nplates_occlude=%d\n", g_set.plates, g_set.plate_size, g_set.plate_outline,
         g_set.plates_occlude);
     out->appendf("ui_font=%s\nplate_font=%s\n", g_set.ui_font, g_set.plate_font);
+    out->appendf("chat_shrink=%d\nchat_quiet_lines=%d\nchat_quiet_secs=%g\n", g_set.chat_shrink, g_set.chat_quiet_lines,
+        g_set.chat_quiet_secs);
     out->appendf("win_bg=%.3f,%.3f,%.3f,%.3f\nchat_bg=%.3f,%.3f,%.3f,%.3f\n", g_set.win_bg[0], g_set.win_bg[1], g_set.win_bg[2],
         g_set.win_bg[3], g_set.chat_bg[0], g_set.chat_bg[1], g_set.chat_bg[2], g_set.chat_bg[3]);
     for (int k = 0; k < MC_COUNT; ++k)
@@ -806,6 +818,16 @@ static void overlay_window(void)
         dirty |= ImGui::SliderFloat("Chat##size", &g_set.chat_size, 10, 28, "%.0f");
         ImGui::SetNextItemWidth(-60);
         dirty |= font_combo("Font##ui", g_set.ui_font, sizeof g_set.ui_font);
+        ImGui::Separator();
+        ImGui::TextDisabled("Chat");
+        dirty |= ImGui::Checkbox("Shrinks when quiet, as the game's log", &g_set.chat_shrink);
+        if (g_set.chat_shrink)
+        {
+            ImGui::SetNextItemWidth(-60);
+            dirty |= ImGui::SliderInt("Lines##quiet", &g_set.chat_quiet_lines, 1, 12);
+            ImGui::SetNextItemWidth(-60);
+            dirty |= ImGui::SliderFloat("After##quiet", &g_set.chat_quiet_secs, 3, 60, "%.0f seconds");
+        }
         ImGui::Separator();
         ImGui::TextDisabled("Background (color and how solid)");
         const ImGuiColorEditFlags cf = ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_NoInputs;
@@ -1588,6 +1610,36 @@ static void chat_window(void)
         }
     }
     ImGui::SetNextWindowSize(ImVec2(560, 280), ImGuiCond_FirstUseEver);
+    {
+        /* Quiet for a while (no new line, not typed in, not pointed at, the game not asking): down to a
+         * few lines, the bottom where it is (pinned), as the game's log; back to the player's size when
+         * a line comes. Its full height is the player's, taken whenever it is at it. */
+        static float full_h, cur_h;
+        static double last;
+        static int last_n = -1;
+        int n = 0, mode;
+        const char *sender, *text;
+        while (gamestate_chat(n, &mode, &sender, &text))
+            ++n;
+        double now = ImGui::GetTime();
+        bool pointed = cw && ImGui::IsMouseHoveringRect(cw->Pos, ImVec2(cw->Pos.x + cw->Size.x, cw->Pos.y + cw->Size.y), false);
+        if (n != last_n || ImGui::GetIO().WantTextInput || pointed || g_asker[0] || g_at.open)
+            last = now, last_n = n;
+        bool quiet = g_set.chat_shrink && cw && now - last > g_set.chat_quiet_secs;
+        if (cw && !quiet && (cur_h <= 0 || fabsf(cur_h - full_h) < 1.0f))
+            full_h = cur_h = cw->SizeFull.y; /* at the player's size: theirs to change */
+        else if (cw)
+        {
+            float line = g_set.chat_size * 1.2f + ImGui::GetStyle().ItemSpacing.y;
+            float small = ImGui::GetFrameHeightWithSpacing() * 2.0f + line * (float)g_set.chat_quiet_lines + 12.0f;
+            float want = quiet ? ImMin(small, full_h) : full_h;
+            cur_h += (want - cur_h) * ImMin(1.0f, ImGui::GetIO().DeltaTime * 10.0f);
+            if (fabsf(want - cur_h) < 0.5f)
+                cur_h = want;
+            ImGui::SetNextWindowSize(ImVec2(cw->SizeFull.x, cur_h), ImGuiCond_Always);
+            size.y = cur_h;
+        }
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(240, 120), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(g_set.chat_bg[0], g_set.chat_bg[1], g_set.chat_bg[2], g_set.chat_bg[3]));
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
@@ -1599,7 +1651,8 @@ static void chat_window(void)
      * menu) and the chat all but goes, so nothing of the game's is hidden behind it (the mouse goes
      * through it then too) */
     bool talk = !strncmp(g_asker, "rem4", 4);
-    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, g_asker[0] && !talk ? 0.15f : 1.0f);
+    bool over = cw && g_asking && cw->Pos.x < g_ask1.x && cw->Pos.x + size.x > g_ask0.x && cw->Pos.y < g_ask1.y && cw->Pos.y + size.y > g_ask0.y;
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, g_asker[0] && !talk && over ? 0.15f : 1.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     bool shown = ImGui::Begin("Chat", NULL, flags);
@@ -2553,6 +2606,15 @@ extern "C" void overlay_build_frame(void)
     }
     g_send_open = 0; /* not taken up by the chat box this frame: dropped, so no key stays caught */
     /* the game's own windows the overlay's stand in for: back whenever the overlay is hidden */
+    if (g_place_log)
+    {
+        ImGuiWindow* cw = g_shown && g_set.chat ? ImGui::FindWindowByName("Chat") : NULL;
+        ImVec2 d = ImGui::GetIO().DisplaySize;
+        if (cw && !cw->Hidden && d.x > 0 && d.y > 0)
+            g_place_log(cw->Pos.x / d.x, cw->Pos.y / d.y, (cw->Pos.x + cw->Size.x) / d.x, (cw->Pos.y + cw->Size.y) / d.y);
+        else
+            g_place_log(-1, -1, -1, -1);
+    }
     if (g_hide_game)
         g_hide_game(g_shown && g_set.chat && g_set.hide_game_log, g_shown && g_set.party && g_set.hide_game_party,
             g_shown && g_set.target && g_set.hide_game_target);

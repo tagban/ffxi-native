@@ -421,10 +421,20 @@ typedef struct
     const char* name;
     int group; /* 0 the chat log, 1 the party list, 2 the target box, 3 the log's typing line */
     uint32_t win;
-    int16_t x, y;
+    int16_t x, y, x1, y1; /* where the game had it */
+    int16_t sx, sy;       /* where it was last put (the log: under the overlay's chat) */
     int moved;
     int dropped; /* its draws dropped (a window the game lays out every frame cannot be moved) */
 } GameWindow;
+
+/* where the overlay's chat is (fractions of the screen; x0 < 0 none): the game's log, hidden, is kept
+ * there and what it draws dropped, so the game's questions, which it puts above its log, come just
+ * above the overlay's chat (as they do above the log). With no chat, it goes off the screen. */
+static float g_log_at[4] = { -1, -1, -1, -1 };
+static void place_game_log(float x0, float y0, float x1, float y1)
+{
+    g_log_at[0] = x0, g_log_at[1] = y0, g_log_at[2] = x1, g_log_at[3] = y1;
+}
 static GameWindow g_game_windows[] = {
     { "logwindo", 0 }, { "logwin2 ", 0 }, { "inline  ", 3 }, /* the log, and the game's own typing line */
     { "partywin", 1 }, { "ptw0    ", 1 }, { "ptw1    ", 1 }, { "ptw2    ", 1 },
@@ -766,11 +776,11 @@ static void hide_game_windows(int log, int party, int target)
         if (hide)
         {
             static int held[16], undone[16], told[16];
-            if (pos[0] != -8000) /* where the game has it now (it may have laid it out again) */
+            if (!w->moved || pos[0] != w->sx || pos[1] != w->sy) /* where the game has it now (it may have laid it out again) */
             {
                 if (w->moved)
                     ++undone[i]; /* the game put it back since the last frame */
-                w->x = pos[0], w->y = pos[1];
+                w->x = pos[0], w->y = pos[1], w->x1 = pos[2], w->y1 = pos[3];
             }
             if (++held[i] == 600 && !told[i])
             {
@@ -781,11 +791,33 @@ static void hide_game_windows(int log, int party, int target)
                     w->y, undone[i]);
             }
             w->moved = 1;
-            pos[0] = -8000, pos[1] = -8000;
+            uint32_t bw = 0, bh = 0;
+            d3d8_backbuffer_size(&bw, &bh);
+            if (w->group == 0 && g_log_at[0] >= 0 && bw && bh)
+            {
+                /* under the overlay's chat, its size, and nothing it draws there shown */
+                float r[4] = { g_log_at[0] * bw, g_log_at[1] * bh, g_log_at[2] * bw, g_log_at[3] * bh };
+                pos[0] = (int16_t)r[0], pos[1] = (int16_t)r[1], pos[2] = (int16_t)r[2], pos[3] = (int16_t)r[3];
+                d3d8_drop_rect(2, 1, r[0] - 2, r[1] - 2, r[2] + 2, r[3] + 2);
+                static int said;
+                if (!said++)
+                    rt_log("[recomp] game window %.8s: kept under the overlay's chat, at %d,%d to %d,%d\n", w->name, pos[0], pos[1], pos[2], pos[3]);
+            }
+            else
+            {
+                pos[0] = -8000, pos[1] = -8000;
+                if (w->group == 0)
+                    d3d8_drop_rect(2, 0, 0, 0, 0, 0);
+            }
+            w->sx = pos[0], w->sy = pos[1];
         }
         else if (w->moved)
         {
             pos[0] = w->x, pos[1] = w->y;
+            if (w->x1 > w->x && w->y1 > w->y)
+                pos[2] = w->x1, pos[3] = w->y1;
+            if (w->group == 0)
+                d3d8_drop_rect(2, 0, 0, 0, 0, 0);
             w->moved = 0;
             rt_log("[recomp] game window %.8s: back at %d,%d\n", w->name, w->x, w->y);
         }
@@ -827,6 +859,7 @@ static void setup_packets(void)
     if (MENU_MGR)
         overlay_set_focus_rect(game_focus_rect, place_game_focus);
     overlay_set_settings_opener(open_launcher_settings);
+    overlay_set_log_placer(place_game_log);
     if (MENU_DRAW_HOOK && MENU_DRAWN_HOOK)
         *MENU_DRAW_HOOK = menu_draw, *MENU_DRAWN_HOOK = menu_drawn;
     GuestFn* ca = CHAT_ADD_HOOK;

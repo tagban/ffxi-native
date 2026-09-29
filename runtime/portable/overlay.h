@@ -50,6 +50,9 @@ void overlay_plate_depths(int token, const float* depths, int n, float proj10, f
  * settings (host64: asks the launcher to show them), for the overlay's bar. */
 void overlay_set_game_window_closer(int (*close)(const char* name8));
 void overlay_set_settings_opener(void (*open)(void));
+/* host64: where the overlay's chat is (fractions of the screen; x0 < 0: none), each frame: the game's
+ * own log, hidden, is kept there, so the game puts its questions just above it, as it does above its log */
+void overlay_set_log_placer(void (*place)(float x0, float y0, float x1, float y1));
 /* where the game's window with the keyboard is (host64: its rectangle in the game's back buffer
  * pixels), so the overlay's windows can keep out of its way */
 /* and moves it (its top left, fractions of the screen; x < 0 lets it go) */
