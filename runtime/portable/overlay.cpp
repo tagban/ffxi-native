@@ -6,6 +6,7 @@
 #include "itemdat.h"
 
 #include <float.h>
+#include <string>
 #include <unordered_map>
 #include <math.h>
 #include <stdio.h>
@@ -89,11 +90,22 @@ static bool g_swallow_text;                        /* the key's own character, n
 static bool g_plates_available;
 static struct Plate
 {
-    float x, y;
+    float x, y, z;
     ImU32 color;
     char text[40];
-} g_plates[256];
-static int g_nplates;
+} g_plates[256], g_last_plates[256];
+static int g_nplates, g_nlast_plates;
+/* names behind walls: the last frames' plates the back end was asked about (a few in flight), and
+ * which names were found hidden */
+static struct
+{
+    int token, n;
+    char text[256][40];
+    float z[256];
+} g_plate_asked[4];
+static int g_plate_token;
+static bool g_plates_depth_wrong; /* the depths turned out not as expected: nothing is hidden */
+static std::unordered_map<std::string, int> g_plate_hidden; /* name -> frames it has been hidden */
 
 /* The player's choices, kept in overlay.ini ([Overlay][Settings]) */
 static struct
@@ -104,6 +116,7 @@ static struct
     char ui_font[32] = "Roboto", plate_font[32] = "Arial Bold";
     float plate_size = 15.0f;
     bool plate_outline = true;
+    bool plates_occlude = true; /* names behind walls hidden, as the game's depth says */
     float ui_size = 15.0f;   /* the windows' text */
     float chat_size = 15.0f; /* the chat's lines */
     float map_range = 50.0f; /* yalms from the middle to the edge */
@@ -214,12 +227,67 @@ extern "C" int overlay_nameplates_wanted(void)
     return g_ready && g_shown && g_plates_available && g_set.plates;
 }
 
-extern "C" void overlay_nameplate(float x, float y, const char* text, uint32_t color) /* x, y: 0-1 across the view */
+extern "C" int overlay_plate_points(float* xy, int max, int* token)
+{
+    if (!g_set.plates || !g_set.plates_occlude || !g_nlast_plates)
+        return 0;
+    int n = g_nlast_plates < max ? g_nlast_plates : max;
+    int t = ++g_plate_token;
+    auto& a = g_plate_asked[t & 3];
+    a.token = t, a.n = n;
+    for (int i = 0; i < n; ++i)
+    {
+        xy[2 * i] = g_last_plates[i].x, xy[2 * i + 1] = g_last_plates[i].y;
+        memcpy(a.text[i], g_last_plates[i].text, sizeof a.text[i]);
+        a.z[i] = g_last_plates[i].z;
+    }
+    *token = t;
+    return n;
+}
+
+extern "C" void overlay_plate_depths(int token, const float* depths, int n, float p10, float p14)
+{
+    auto& a = g_plate_asked[token & 3];
+    if (a.token != token || n > a.n)
+        return;
+    /* a depth to a distance: the projection gives z = p10 + p14 / distance */
+    auto dist = [&](float z) { return z - p10 != 0.0f ? p14 / (z - p10) : 1e9f; };
+    static int told;
+    for (int i = 0; i < n; ++i)
+    {
+        float scene = dist(depths[i]), name = dist(a.z[i]);
+        bool hidden = depths[i] > 0.0f && depths[i] < 1.0f && scene < name - 0.75f;
+        if (told < 12)
+        {
+            ++told;
+            extern void rt_log(const char* fmt, ...);
+            rt_log("[recomp] nameplate %s: depth %.5f (%.1f away), the scene's there %.5f (%.1f): %s\n", a.text[i], a.z[i], name, depths[i], scene,
+                hidden ? "hidden" : "seen");
+        }
+        int& h = g_plate_hidden[a.text[i]];
+        h = hidden ? h + 1 : 0;
+        /* if nearly every name reads as hidden, the depths are not what they are taken to be: the
+         * hiding stops (and says so) rather than taking every name away */
+        static int seen_n, hidden_n;
+        if (seen_n + hidden_n < 150)
+        {
+            (hidden ? hidden_n : seen_n)++;
+            if (seen_n + hidden_n == 150 && hidden_n > 135)
+            {
+                g_plates_depth_wrong = true;
+                extern void rt_log(const char* fmt, ...);
+                rt_log("[recomp] nameplates: %d of 150 read as behind something: the depths are not as expected, so none are hidden\n", hidden_n);
+            }
+        }
+    }
+}
+
+extern "C" void overlay_nameplate(float x, float y, float z, const char* text, uint32_t color) /* x, y: 0-1 across the view */
 {
     if (g_nplates >= (int)(sizeof g_plates / sizeof *g_plates))
         return;
     Plate& p = g_plates[g_nplates++];
-    p.x = x, p.y = y;
+    p.x = x, p.y = y, p.z = z;
     /* the game's colors count 0x80 as full */
     auto c = [](uint32_t v) { return (unsigned)(v * 2 > 255 ? 255 : v * 2); };
     p.color = IM_COL32(c(color >> 16 & 255), c(color >> 8 & 255), c(color & 255), 255);
@@ -397,9 +465,17 @@ static void draw_nameplates(void)
     float kx = disp.x, ky = disp.y; /* the 3D view fills the window */
     ImFont* font = font_named(g_set.plate_font);
     float size = g_set.plate_size;
+    memcpy(g_last_plates, g_plates, sizeof(Plate) * (size_t)g_nplates);
+    g_nlast_plates = g_nplates;
     for (int i = 0; i < g_nplates; ++i)
     {
         const Plate& p = g_plates[i];
+        if (g_set.plates_occlude && !g_plates_depth_wrong)
+        {
+            auto h = g_plate_hidden.find(p.text);
+            if (h != g_plate_hidden.end() && h->second >= 2)
+                continue; /* behind something the game drew (two readings running: no flicker) */
+        }
         ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, p.text);
         uint16_t marks = 0;
         uint8_t gm = 0;
@@ -570,6 +646,7 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "plates=%d", &v) == 1) g_set.plates = v != 0;
     else if (sscanf(line, "plate_size=%f", &f) == 1 && f >= 8 && f <= 40) g_set.plate_size = f;
     else if (sscanf(line, "plate_outline=%d", &v) == 1) g_set.plate_outline = v != 0;
+    else if (sscanf(line, "plates_occlude=%d", &v) == 1) g_set.plates_occlude = v != 0;
     else if (!strncmp(line, "ui_font=", 8)) snprintf(g_set.ui_font, sizeof g_set.ui_font, "%s", line + 8);
     else if (!strncmp(line, "mapcol.", 7))
     {
@@ -601,7 +678,8 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("equip=%d\nitems=%d\n", g_set.equip, g_set.items);
     out->appendf("target=%d\nhide_game_log=%d\nhide_game_party=%d\nhide_game_target=%d\n", g_set.target, g_set.hide_game_log,
         g_set.hide_game_party, g_set.hide_game_target);
-    out->appendf("plates=%d\nplate_size=%g\nplate_outline=%d\n", g_set.plates, g_set.plate_size, g_set.plate_outline);
+    out->appendf("plates=%d\nplate_size=%g\nplate_outline=%d\nplates_occlude=%d\n", g_set.plates, g_set.plate_size, g_set.plate_outline,
+        g_set.plates_occlude);
     out->appendf("ui_font=%s\nplate_font=%s\n", g_set.ui_font, g_set.plate_font);
     for (int k = 0; k < MC_COUNT; ++k)
     {
@@ -654,6 +732,7 @@ static void overlay_window(void)
                 ImGui::SetNextItemWidth(-60);
                 dirty |= font_combo("Font##plates", g_set.plate_font, sizeof g_set.plate_font);
                 dirty |= ImGui::Checkbox("Outline", &g_set.plate_outline);
+                dirty |= ImGui::Checkbox("Hidden behind walls", &g_set.plates_occlude);
             }
         }
         if (g_hide_game)

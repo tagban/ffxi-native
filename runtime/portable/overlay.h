@@ -37,7 +37,14 @@ void overlay_set_game_windows(void (*hide)(int log, int party, int target), cons
  * view; the game's text, with its own codes; its color, 0x80 full in each channel). */
 void overlay_set_nameplates_available(int yes);
 int overlay_nameplates_wanted(void);
-void overlay_nameplate(float fx, float fy, const char* text, uint32_t color); /* fx, fy: 0-1 across the 3D view */
+void overlay_nameplate(float fx, float fy, float z, const char* text, uint32_t color); /* fx, fy: 0-1 across the 3D view */
+/* Names behind walls: the back end, when the world's scene is done, copies the scene's depth where
+ * the last frame's names were (overlay_plate_points: their places, 0-1 across the view, and a token
+ * for them), and hands the depths back when the GPU has them (overlay_plate_depths, with the
+ * projection's third column, to make distances of both); a name further than what is drawn there
+ * is hidden. */
+int overlay_plate_points(float* xy, int max, int* token);
+void overlay_plate_depths(int token, const float* depths, int n, float proj10, float proj14);
 
 /* The game's own close of one of its windows by its 8-character name (host64), and the launcher's
  * settings (host64: asks the launcher to show them), for the overlay's bar. */

@@ -254,7 +254,7 @@ static void nameplate_scale(Guest* g)
         d3d8_viewport(&vx, &vy, &vw, &vh);
         if (text && gwin_is_committed(text) && vw && vh)
             overlay_nameplate((rdf32(g->esp + 0x30) - (float)vx) / (float)vw, (rdf32(g->esp + 0x34) - (float)vy) / (float)vh,
-                (const char*)GUEST_PTR(text), color);
+                rdf32(g->esp + 0x38) /* its depth, 0-1 as the projection gives it */, (const char*)GUEST_PTR(text), color);
         wrf32(g->esp + 0x4c, 0.0f);
         wrf32(g->esp + 0x50, 0.0f);
         return;

@@ -2809,8 +2809,73 @@ void gfx_trace_dump(const char* path)
     fclose(f);
 }
 
+/* Names behind walls (overlay.h): at the world scene's end, its depth where the last frame's names
+ * were, copied a texel each into a buffer the CPU can read, and handed to the overlay once the GPU
+ * has done it (a frame or two on). */
+#define PLATE_POINTS 256
+static struct
+{
+    id<MTLBuffer> buf;
+    id<MTLCommandBuffer> cmd;
+    int n, token;
+    float p10, p14;
+} g_plate_rb[3];
+
+static void plate_depths(GfxTex* color, const GfxScene* s)
+{
+    for (int i = 0; i < 3; ++i)
+        if (g_plate_rb[i].cmd && g_plate_rb[i].cmd.status >= MTLCommandBufferStatusCompleted)
+        {
+            if (g_plate_rb[i].cmd.status == MTLCommandBufferStatusCompleted)
+                overlay_plate_depths(g_plate_rb[i].token, (const float*)g_plate_rb[i].buf.contents, g_plate_rb[i].n, g_plate_rb[i].p10,
+                    g_plate_rb[i].p14);
+            [g_plate_rb[i].cmd release];
+            g_plate_rb[i].cmd = nil;
+        }
+    id<MTLTexture> depth = color->depth_world ? color->depth_world : color->depth_seen;
+    if (!depth || (depth.pixelFormat != MTLPixelFormatDepth32Float && depth.pixelFormat != MTLPixelFormatDepth32Float_Stencil8) ||
+        s->proj[11] == 0.0f)
+        return;
+    int slot = -1;
+    for (int i = 0; i < 3 && slot < 0; ++i)
+        if (!g_plate_rb[i].cmd)
+            slot = i;
+    if (slot < 0)
+        return;
+    float xy[PLATE_POINTS * 2];
+    int token = 0, n = overlay_plate_points(xy, PLATE_POINTS, &token);
+    if (n <= 0)
+        return;
+    if (!g_plate_rb[slot].buf)
+        g_plate_rb[slot].buf = [g_dev newBufferWithLength:PLATE_POINTS * 4 options:MTLResourceStorageModeShared];
+    /* the scene's viewport within its target, as the scene effects take it */
+    float vx = (float)s->vp[0], vy = (float)s->vp[1], vw = (float)s->vp[2], vh = (float)s->vp[3];
+    if (vw < 16 || vh < 16 || vx + vw > depth.width || vy + vh > depth.height)
+        vx = vy = 0, vw = (float)depth.width, vh = (float)depth.height;
+    flush_pass();
+    id<MTLBlitCommandEncoder> b = [cmd() blitCommandEncoder];
+    MTLBlitOption opt = depth.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone;
+    for (int k = 0; k < n; ++k)
+    {
+        float fx = xy[2 * k] < 0 ? 0 : xy[2 * k] > 1 ? 1 : xy[2 * k], fy = xy[2 * k + 1] < 0 ? 0 : xy[2 * k + 1] > 1 ? 1 : xy[2 * k + 1];
+        NSUInteger x = (NSUInteger)(vx + fx * (vw - 1)), y = (NSUInteger)(vy + fy * (vh - 1));
+        [b copyFromTexture:depth sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(x, y, 0) sourceSize:MTLSizeMake(1, 1, 1)
+                   toBuffer:g_plate_rb[slot].buf destinationOffset:(NSUInteger)k * 4 destinationBytesPerRow:4 destinationBytesPerImage:4
+                    options:opt];
+    }
+    [b endEncoding];
+    g_plate_rb[slot].cmd = [cmd() retain];
+    g_plate_rb[slot].n = n, g_plate_rb[slot].token = token;
+    g_plate_rb[slot].p10 = s->proj[10], g_plate_rb[slot].p14 = s->proj[14];
+}
+
 void gfx_scene_done(GfxTex* color, const GfxScene* s)
 {
+    if (g_dev && color && color->type == GFX_TEX_2D)
+        @autoreleasepool
+        {
+            plate_depths(color, s);
+        }
     if (!g_dev || g_fxs.fx == 0.0f || !color || color->type != GFX_TEX_2D)
         return;
     @autoreleasepool

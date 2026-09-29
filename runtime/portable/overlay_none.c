@@ -16,7 +16,9 @@ void overlay_set_nameplates_available(int yes) { (void)yes; }
 void overlay_set_game_window_closer(int (*close)(const char* name8)) { (void)close; }
 void overlay_set_settings_opener(void (*open)(void)) { (void)open; }
 int overlay_nameplates_wanted(void) { return 0; }
-void overlay_nameplate(float x, float y, const char* text, uint32_t color) { (void)x, (void)y, (void)text, (void)color; }
+void overlay_nameplate(float x, float y, float z, const char* text, uint32_t color) { (void)x, (void)y, (void)z, (void)text, (void)color; }
+int overlay_plate_points(float* xy, int max, int* token) { (void)xy, (void)max, (void)token; return 0; }
+void overlay_plate_depths(int token, const float* depths, int n, float proj10, float proj14) { (void)token, (void)depths, (void)n, (void)proj10, (void)proj14; }
 
 /* no overlay, so no zone maps either (zonemap.cpp is the overlay's) */
 #include "zonemap.h"
