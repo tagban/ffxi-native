@@ -146,6 +146,9 @@ static uint32_t g_entity_map;
 
 void gamestate_set_entity_map(uint32_t addr) { g_entity_map = addr; }
 
+static uint32_t g_target_ptr;
+void gamestate_set_target_ptr(uint32_t addr) { g_target_ptr = addr; }
+
 static char g_game_dir[1024];
 static uint32_t g_mzb_keys;
 void gamestate_set_zone_files(const char* game_dir, uint32_t keys_addr)
@@ -269,6 +272,51 @@ int gamestate_entities(GameEntity* out, int max)
                 e->x = mem_f32(p + 0x04), e->y = mem_f32(p + 0x08), e->z = mem_f32(p + 0x0C);
         }
     return n;
+}
+
+/* The game's target record: [target_ptr] points at it; its first entry the target's index and the
+ * server's id for it (then the entity's pointer). Checked against who is around before it is used. */
+int gamestate_target(GameEntity* out, int* is_self)
+{
+    *is_self = 0;
+    if (!g_target_ptr || !gwin_is_committed(g_target_ptr))
+        return 0;
+    uint32_t t = rd32(g_target_ptr);
+    if (!t || !gwin_is_committed(t) || !gwin_is_committed(t + 0x40))
+        return 0;
+    uint32_t index = rd32(t), id = rd32(t + 4);
+    static uint32_t last_id = 0xFFFFFFFFu;
+    static int told;
+    if (id != last_id && told < 6)
+    {
+        /* the record's first bytes as the target changes, a few times: to confirm its layout */
+        ++told;
+        extern void rt_log(const char* fmt, ...);
+        rt_log("[recomp] target: %08x %08x %08x %08x %08x %08x %08x %08x\n", rd32(t), rd32(t + 4), rd32(t + 8), rd32(t + 12),
+            rd32(t + 16), rd32(t + 20), rd32(t + 24), rd32(t + 28));
+    }
+    last_id = id;
+    if (!id)
+        return 0;
+    if (id == g_self)
+    {
+        memset(out, 0, sizeof *out);
+        out->id = id, out->kind = ENTITY_PC, out->hpp = 100;
+        float f;
+        gamestate_self(&out->x, &out->y, &out->z, &f);
+        for (int i = 0; i < MEMBERS; ++i)
+            if (g_members[i].id == id)
+                snprintf(out->name, sizeof out->name, "%s", g_members[i].name), out->hpp = g_members[i].hpp;
+        *is_self = 1;
+        return 1;
+    }
+    if (index >= ENTITIES || g_ents[index].id != id)
+        return 0;
+    *out = g_ents[index];
+    uint32_t p = entity_at((uint16_t)index, id);
+    if (p)
+        out->x = mem_f32(p + 0x04), out->y = mem_f32(p + 0x08), out->z = mem_f32(p + 0x0C);
+    return 1;
 }
 
 int gamestate_self(float* x, float* y, float* z, float* facing)

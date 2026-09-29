@@ -17,7 +17,10 @@
         "present_site": "0x100035cb",
         "input_line": "0x10080dd0",
         "entity_map": "0x10480b30",
-        "mzb_keys": "0x10376ad0"
+        "mzb_keys": "0x10376ad0",
+        "menu_mgr": "0x105eed58",
+        "menu_find": "0x1015dc20",
+        "target_ptr": "0x105784b8"
       },
       "hooks": {
         "packet_in": "0x100dd803",
@@ -57,7 +60,10 @@
         "present_site": "0x100035cb",
         "input_line": "0x10080dc0",
         "entity_map": "0x10480af0",
-        "mzb_keys": "0x10376ac0"
+        "mzb_keys": "0x10376ac0",
+        "menu_mgr": "0x10621838",
+        "menu_find": "0x1015dc10",
+        "target_ptr": "0x10578478"
       },
       "hooks": {
         "nameplate_scale": "0x100863d6",

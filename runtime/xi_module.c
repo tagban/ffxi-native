@@ -104,4 +104,16 @@ XI_EXPORT const XiGameModule xi_game_module = {
 #else
     0,
 #endif
+#ifdef FFXI_MENU_MGR
+    FFXI_MENU_MGR,
+    FFXI_MENU_FIND,
+#else
+    0,
+    0,
+#endif
+#ifdef FFXI_TARGET_PTR
+    FFXI_TARGET_PTR,
+#else
+    0,
+#endif
 };

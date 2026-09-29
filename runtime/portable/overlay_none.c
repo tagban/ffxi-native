@@ -11,6 +11,7 @@ void overlay_note_present(int frame_w, int frame_h, int screen_w, int screen_h, 
 }
 void overlay_build_frame(void) {}
 void overlay_set_line_runner(int (*run)(const char* line)) { (void)run; }
+void overlay_set_game_windows(void (*hide)(int log, int party)) { (void)hide; }
 
 /* no overlay, so no zone maps either (zonemap.cpp is the overlay's) */
 #include "zonemap.h"

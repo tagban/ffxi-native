@@ -373,6 +373,97 @@ static void chat_add(Guest* g)
 #define MZB_KEYS 0u
 #endif
 
+#if defined(FFXI_MENU_MGR)
+#define MENU_MGR FFXI_MENU_MGR
+#define MENU_FIND FFXI_MENU_FIND
+#elif defined(XI_SPLIT)
+#define MENU_MGR (xi_game->size >= offsetof(XiGameModule, menu_find) + sizeof(uint32_t) ? xi_game->menu_mgr : 0u)
+#define MENU_FIND (xi_game->size >= offsetof(XiGameModule, menu_find) + sizeof(uint32_t) ? xi_game->menu_find : 0u)
+#else
+#define MENU_MGR 0u
+#define MENU_FIND 0u
+#endif
+#if defined(FFXI_TARGET_PTR)
+#define TARGET_PTR FFXI_TARGET_PTR
+#elif defined(XI_SPLIT)
+#define TARGET_PTR (xi_game->size >= offsetof(XiGameModule, target_ptr) + sizeof(uint32_t) ? xi_game->target_ptr : 0u)
+#else
+#define TARGET_PTR 0u
+#endif
+
+/* --- the game's own windows, where the overlay's stand in for them --------------------------------
+ * The game's window manager finds a window by its 16-character name ("menu    logwindo"); a window
+ * keeps its place at +0x3A and +0x3C (shorts) and its name at +0x46. Hidden, a window is only moved
+ * off the screen, so the game goes on running it exactly as before (its log keeps every line), and
+ * put back where it was when the overlay's own is turned off or hidden. */
+typedef struct
+{
+    const char* name;
+    int group; /* 0 the chat log, 1 the party list */
+    uint32_t win;
+    int16_t x, y;
+    int moved, told;
+} GameWindow;
+static GameWindow g_game_windows[] = {
+    { "menu    logwindo", 0 }, { "menu    logwin2 ", 0 },
+    { "menu    partywin", 1 }, { "menu    ptw0    ", 1 }, { "menu    ptw1    ", 1 }, { "menu    ptw2    ", 1 },
+};
+
+static uint32_t find_game_window(const char* name)
+{
+    static uint32_t buf;
+    if (!MENU_MGR || !MENU_FIND || (!buf && !(buf = gheap_alloc(32, 1))))
+        return 0;
+    memcpy(GUEST_PTR(buf), name, 16);
+    GUEST_PTR(buf)[16] = 0;
+    uint32_t arg = buf;
+    return guest_thiscall(MENU_FIND, MENU_MGR, 1, &arg);
+}
+
+static int window_is(uint32_t win, const char* name)
+{
+    return win && gwin_is_committed(win) && gwin_is_committed(win + 0x60) && !memcmp(GUEST_PTR(win + 0x46), name, 16);
+}
+
+/* each frame (the overlay's): which of the game's windows the overlay stands in for now */
+static void hide_game_windows(int log, int party)
+{
+    static unsigned frame;
+    int looked = ++frame % 30 == 0; /* the game makes and remakes its windows: looked up twice a second */
+    for (size_t i = 0; i < sizeof g_game_windows / sizeof *g_game_windows; ++i)
+    {
+        GameWindow* w = &g_game_windows[i];
+        int hide = w->group == 0 ? log : party;
+        if (!window_is(w->win, w->name))
+        {
+            w->win = 0, w->moved = 0;
+            if (!hide || !looked || !(w->win = find_game_window(w->name)) || !window_is(w->win, w->name))
+            {
+                w->win = 0;
+                continue;
+            }
+        }
+        int16_t* pos = (int16_t*)GUEST_PTR(w->win + 0x3A);
+        if (!w->told)
+        {
+            w->told = 1;
+            rt_log("[recomp] game window %s: at %d, %d\n", w->name + 8, pos[0], pos[1]);
+        }
+        if (hide)
+        {
+            if (pos[0] != -8000) /* where the game has it now (it may have laid it out again) */
+                w->x = pos[0], w->y = pos[1];
+            w->moved = 1;
+            pos[0] = -8000, pos[1] = -8000;
+        }
+        else if (w->moved)
+        {
+            pos[0] = w->x, pos[1] = w->y;
+            w->moved = 0;
+        }
+    }
+}
+
 /* A line from the overlay (its chat box, or a window's button, on the player's click): through the
  * game's own parser of a typed line, as if typed in its input line: its /commands, or chat. The
  * game's own menus run their commands the same way. On the game's thread (the overlay's frame). */
@@ -399,6 +490,9 @@ static void setup_packets(void)
     if (INPUT_LINE)
         overlay_set_line_runner(run_line);
     gamestate_set_entity_map(ENTITY_MAP);
+    gamestate_set_target_ptr(TARGET_PTR);
+    if (MENU_MGR && MENU_FIND)
+        overlay_set_game_windows(hide_game_windows);
     GuestFn* ca = CHAT_ADD_HOOK;
     if (ca)
         *ca = chat_add;

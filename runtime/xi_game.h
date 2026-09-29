@@ -60,6 +60,10 @@ typedef struct XiGameModule
     uint32_t entity_map;
     /* the 256-byte table the game's zone layouts (MZB) are obscured with ("mzb_keys"; 0 unknown) */
     uint32_t mzb_keys;
+    /* the game's window manager ("menu_mgr"), its find-a-window-by-name method ("menu_find",
+     * thiscall, the 16-character name), and where it keeps a pointer to the player's target
+     * ("target_ptr"); 0 unknown */
+    uint32_t menu_mgr, menu_find, target_ptr;
 } XiGameModule;
 
 /* The one symbol a module exports. */

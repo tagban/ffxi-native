@@ -40,3 +40,5 @@ uint32_t gt_get_error(void);
  * so args[0] is the first parameter), stdcall or cdecl alike; returns eax. Takes the guest lock
  * if this thread does not hold it. */
 uint32_t guest_call(uint32_t fn, unsigned nargs, const uint32_t* args);
+/* The same for a method (thiscall): the object in ecx. */
+uint32_t guest_thiscall(uint32_t fn, uint32_t self, unsigned nargs, const uint32_t* args);

@@ -27,6 +27,10 @@ void overlay_note_present(int frame_w, int frame_h, int screen_w, int screen_h, 
  * a typed line); without one, the overlay has no chat box. */
 void overlay_set_line_runner(int (*run)(const char* line));
 
+/* How the overlay hides the game's own windows its own stand in for (host64: moved off the screen
+ * and back), called every frame: the game's chat log, its party list. */
+void overlay_set_game_windows(void (*hide)(int log, int party));
+
 /* The back end's part: overlay.cpp builds the frame, the back end draws it (overlay_metal.mm). */
 void overlay_build_frame(void);
 

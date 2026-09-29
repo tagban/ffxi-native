@@ -69,6 +69,10 @@ void gamestate_set_entity_map(uint32_t addr);
 /* The install, and where the game keeps its zone layouts' key table ("mzb_keys"): each zone's map
  * is made from its layout when the player zones in (zonemap.h). */
 void gamestate_set_zone_files(const char* game_dir, uint32_t keys_addr);
+/* Where the game keeps a pointer to the player's target ("target_ptr"); 0 unknown. */
+void gamestate_set_target_ptr(uint32_t addr);
+/* The player's target now (from the game's own), as an entity: 0 when none. is_self: themselves. */
+int gamestate_target(GameEntity* out, int* is_self);
 
 #ifdef __cplusplus
 }

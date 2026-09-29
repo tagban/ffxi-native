@@ -129,7 +129,19 @@ uint32_t gt_get_error(void)
 
 /* --- host -> guest ----------------------------------------------------------------------------- */
 
+static uint32_t call_with(uint32_t fn, int has_self, uint32_t self, unsigned nargs, const uint32_t* args);
+
 uint32_t guest_call(uint32_t fn, unsigned nargs, const uint32_t* args)
+{
+    return call_with(fn, 0, 0, nargs, args);
+}
+
+uint32_t guest_thiscall(uint32_t fn, uint32_t self, unsigned nargs, const uint32_t* args)
+{
+    return call_with(fn, 1, self, nargs, args);
+}
+
+static uint32_t call_with(uint32_t fn, int has_self, uint32_t self, unsigned nargs, const uint32_t* args)
 {
     int took = !t_held;
     if (took)
@@ -147,6 +159,8 @@ uint32_t guest_call(uint32_t fn, unsigned nargs, const uint32_t* args)
     wr32(sp, 0xFEEDF00Du); /* return address: never used, the translation returns to us */
     g->esp = sp;
     g->df = 0;
+    if (has_self)
+        g->ecx = self;
     /* any guest function pointer: a translation, or a thunk to a shim (a method of our own polcore
      * object, say) - exactly as guest code's own indirect calls resolve */
     rt_call_indirect(g, fn);

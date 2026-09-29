@@ -21,11 +21,13 @@ static bool g_ready, g_shown;
 static void chat_register(void);
 static void overlay_register(void);
 static int (*g_run_line)(const char* line); /* host64: the game's parser of a typed line */
+static void (*g_hide_game)(int log, int party);  /* host64: the game's own windows off the screen */
 
 /* The player's choices, kept in overlay.ini ([Overlay][Settings]) */
 static struct
 {
-    bool chat = true, party = true, map = true, status = false;
+    bool chat = true, party = true, map = true, status = false, target = true;
+    bool hide_game_log = false, hide_game_party = false; /* the game's own, where ours stand in */
     float ui_size = 15.0f;   /* the windows' text */
     float chat_size = 15.0f; /* the chat's lines */
     float map_range = 50.0f; /* yalms from the middle to the edge */
@@ -100,6 +102,11 @@ extern "C" void overlay_init(SDL_Window* window)
     g_ready = true;
 }
 
+extern "C" void overlay_set_game_windows(void (*hide)(int log, int party))
+{
+    g_hide_game = hide;
+}
+
 extern "C" void overlay_set_line_runner(int (*run)(const char* line))
 {
     g_run_line = run;
@@ -163,6 +170,9 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "party=%d", &v) == 1) g_set.party = v != 0;
     else if (sscanf(line, "map=%d", &v) == 1) g_set.map = v != 0;
     else if (sscanf(line, "status=%d", &v) == 1) g_set.status = v != 0;
+    else if (sscanf(line, "target=%d", &v) == 1) g_set.target = v != 0;
+    else if (sscanf(line, "hide_game_log=%d", &v) == 1) g_set.hide_game_log = v != 0;
+    else if (sscanf(line, "hide_game_party=%d", &v) == 1) g_set.hide_game_party = v != 0;
     else if (sscanf(line, "ui_size=%f", &f) == 1 && f >= 10 && f <= 32) g_set.ui_size = f;
     else if (sscanf(line, "chat_size=%f", &f) == 1 && f >= 10 && f <= 32) g_set.chat_size = f;
     else if (sscanf(line, "map_range=%f", &f) == 1 && f >= 10 && f <= 250) g_set.map_range = f;
@@ -175,7 +185,8 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("[%s][Settings]\n", h->TypeName);
     out->appendf("chat=%d\nparty=%d\nmap=%d\nstatus=%d\n", g_set.chat, g_set.party, g_set.map, g_set.status);
     out->appendf("ui_size=%g\nchat_size=%g\nmap_range=%g\n", g_set.ui_size, g_set.chat_size, g_set.map_range);
-    out->appendf("map_north_up=%d\nmap_names=%d\n\n", g_set.map_north_up, g_set.map_names);
+    out->appendf("map_north_up=%d\nmap_names=%d\n", g_set.map_north_up, g_set.map_names);
+    out->appendf("target=%d\nhide_game_log=%d\nhide_game_party=%d\n\n", g_set.target, g_set.hide_game_log, g_set.hide_game_party);
 }
 
 static void overlay_register(void)
@@ -204,7 +215,16 @@ static void overlay_window(void)
         dirty |= ImGui::Checkbox("Party", &g_set.party);
         ImGui::SameLine(190);
         dirty |= ImGui::Checkbox("Map", &g_set.map);
+        dirty |= ImGui::Checkbox("Target", &g_set.target);
+        ImGui::SameLine(100);
         dirty |= ImGui::Checkbox("Performance", &g_set.status);
+        if (g_hide_game)
+        {
+            ImGui::Separator();
+            ImGui::TextDisabled("The game's own");
+            dirty |= ImGui::Checkbox("Hide its chat log (while Chat is on)", &g_set.hide_game_log);
+            dirty |= ImGui::Checkbox("Hide its party list (while Party is on)", &g_set.hide_game_party);
+        }
         ImGui::Separator();
         ImGui::TextDisabled("Text size");
         ImGui::SetNextItemWidth(-60);
@@ -665,6 +685,49 @@ static void party_window(void)
     ImGui::PopStyleVar(2);
 }
 
+/* --- the target ---------------------------------------------------------------------------------- */
+/* The player's target, small: its name, HP, how far. The game's own target window stays. */
+static void target_window(void)
+{
+    GameEntity t;
+    int self = 0;
+    bool have = gamestate_target(&t, &self) != 0;
+    ImGui::SetNextWindowPos(ImVec2(700, 60), ImGuiCond_FirstUseEver);
+    if (ImGuiWindow* tw = ImGui::FindWindowByName("Target"))
+        ImGui::SetNextWindowSize(ImVec2(tw->SizeFull.x, 0));
+    else
+        ImGui::SetNextWindowSize(ImVec2(260, 0), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(160, 0), ImVec2(700, FLT_MAX));
+    ImGui::SetNextWindowBgAlpha(have ? 0.55f : 0.25f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 2));
+    if (ImGui::Begin("Target", &g_set.target, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse))
+    {
+        if (!have)
+            ImGui::TextDisabled("No target");
+        else
+        {
+            ImU32 col = t.kind == ENTITY_PC ? IM_COL32(140, 180, 255, 255) : t.claimed ? IM_COL32(255, 110, 100, 255) : IM_COL32(240, 215, 120, 255);
+            ImGui::PushStyleColor(ImGuiCol_Text, col);
+            ImGui::TextUnformatted(t.name[0] ? t.name : "(no name yet)");
+            ImGui::PopStyleColor();
+            float mx, my, mz, f;
+            char right[32];
+            if (!self && gamestate_self(&mx, &my, &mz, &f))
+                snprintf(right, sizeof right, "%u%%  %.1f", t.hpp, sqrtf((t.x - mx) * (t.x - mx) + (t.z - mz) * (t.z - mz)));
+            else
+                snprintf(right, sizeof right, "%u%%", t.hpp);
+            float w = ImGui::GetContentRegionAvail().x;
+            ImGui::SameLine(ImGui::GetCursorPosX() + w - ImGui::CalcTextSize(right).x);
+            ImGui::TextDisabled("%s", right);
+            float h = ImMax(4.0f, ImGui::GetFontSize() * 0.35f);
+            thin_bar(t.hpp / 100.0f, t.hpp <= 25 ? IM_COL32(230, 80, 70, 255) : t.hpp <= 50 ? IM_COL32(230, 190, 70, 255) : IM_COL32(90, 200, 110, 255), w, h);
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
+
 /* --- the zone map under the radar (zonemap.h): one texture, filled again on each new zone ------- */
 static ImTextureData* g_map_tex;
 static ZoneMap g_map; /* its placement in the world (the pixels are the texture's) */
@@ -810,6 +873,9 @@ static void map_window(void)
     int n = known ? gamestate_entities(ents, 0x900) : 0;
     GameMember party[18];
     int np = gamestate_members(party, 18);
+    GameEntity target;
+    int target_self = 0;
+    bool has_target = gamestate_target(&target, &target_self) && !target_self;
     const GameEntity* near_one = NULL;
     float near_d = 64.0f;
     ImVec2 mouse = ImGui::GetIO().MousePos;
@@ -829,6 +895,8 @@ static void map_window(void)
                                         : IM_COL32(235, 205, 95, 255);
         ImVec2 p = to_screen(dx, dz);
         dl->AddCircleFilled(p, e.kind == ENTITY_PC ? 3.5f : 3.0f, col, 10);
+        if (has_target && e.id == target.id)
+            dl->AddCircle(p, 6.5f, IM_COL32(255, 255, 255, 230), 16, 1.5f); /* the player's target */
         if (g_set.map_names && e.name[0])
             dl->AddText(ImVec2(p.x + 5, p.y - ImGui::GetFontSize() * 0.5f), IM_COL32(230, 230, 230, 200), e.name);
         float md = (p.x - mouse.x) * (p.x - mouse.x) + (p.y - mouse.y) * (p.y - mouse.y);
@@ -871,7 +939,7 @@ extern "C" void overlay_build_frame(void)
     ImGui::GetStyle().FontScaleMain = g_set.ui_size / 16.0f;
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
-    bool was[4] = { g_set.chat, g_set.party, g_set.map, g_set.status };
+    bool was[5] = { g_set.chat, g_set.party, g_set.map, g_set.status, g_set.target };
     if (g_shown)
     {
         overlay_window();
@@ -883,8 +951,13 @@ extern "C" void overlay_build_frame(void)
             party_window();
         if (g_set.map)
             map_window();
+        if (g_set.target)
+            target_window();
     }
-    if (was[0] != g_set.chat || was[1] != g_set.party || was[2] != g_set.map || was[3] != g_set.status)
+    /* the game's own windows the overlay's stand in for: back whenever the overlay is hidden */
+    if (g_hide_game)
+        g_hide_game(g_shown && g_set.chat && g_set.hide_game_log, g_shown && g_set.party && g_set.hide_game_party);
+    if (was[0] != g_set.chat || was[1] != g_set.party || was[2] != g_set.map || was[3] != g_set.status || was[4] != g_set.target)
         ImGui::MarkIniSettingsDirty(); /* a window closed with its x */
     ImGui::Render();
 }
