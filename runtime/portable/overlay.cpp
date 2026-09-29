@@ -214,14 +214,35 @@ extern "C" void overlay_nameplate(float x, float y, const char* text, uint32_t c
     /* the game's colors count 0x80 as full */
     auto c = [](uint32_t v) { return (unsigned)(v * 2 > 255 ? 255 : v * 2); };
     p.color = IM_COL32(c(color >> 16 & 255), c(color >> 8 & 255), c(color & 255), 255);
-    /* its text: the icon codes (0xC8-0xCD) dropped, anything else not plain as '?' */
+    /* its text: the name only. The game's own marks (GM, mentor...) are codes in it, one byte
+     * (0x80 and up) or two (a Shift-JIS lead, 0x81-0x9F or 0xE0-0xFC, and the byte after): all
+     * dropped, the overlay draws its own marks from the player's flags. */
     size_t o = 0;
+    bool odd = false;
     for (const unsigned char* t = (const unsigned char*)text; *t && o + 1 < sizeof p.text; ++t)
+    {
         if (*t >= 0x20 && *t < 0x7F)
             p.text[o++] = (char)*t;
-        else if (*t < 0xC8 || *t > 0xCD)
-            p.text[o++] = '?';
+        else
+        {
+            odd = true;
+            if (((*t >= 0x81 && *t <= 0x9F) || (*t >= 0xE0 && *t <= 0xFC)) && t[1])
+                ++t;
+        }
+    }
+    while (o && p.text[o - 1] == ' ')
+        --o; /* a space the game left before a mark */
     p.text[o] = 0;
+    static int told;
+    if (odd && told < 4)
+    {
+        ++told;
+        char hex[3 * 24 + 1] = "";
+        for (int i = 0; i < 24 && text[i]; ++i)
+            snprintf(hex + 3 * i, 4, "%02x ", (unsigned char)text[i]);
+        extern void rt_log(const char* fmt, ...);
+        rt_log("[recomp] nameplate with the game's codes: %s-> \"%s\"\n", hex, p.text);
+    }
 }
 
 /* --- the marks by a player's name, drawn sharp at any size ----------------------------------------- */
