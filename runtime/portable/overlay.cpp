@@ -839,6 +839,13 @@ static void party_window(void)
             thin_bar(p.hpp / 100.0f, p.hpp <= 25 ? IM_COL32(230, 80, 70, 255) : p.hpp <= 50 ? IM_COL32(230, 190, 70, 255) : IM_COL32(90, 200, 110, 255), w, h);
             thin_bar(p.mpp / 100.0f, IM_COL32(210, 110, 190, 255), w, h * 0.75f);
             ImGui::EndGroup();
+            /* a click targets them, as the game's own party list does: the player's own command */
+            if (g_run_line && p.name[0] && ImGui::IsItemClicked(ImGuiMouseButton_Left))
+            {
+                char line[48];
+                snprintf(line, sizeof line, "/target %s", p.name);
+                g_run_line(line);
+            }
             if (ImGui::IsItemHovered())
             {
                 ImGui::BeginTooltip();
