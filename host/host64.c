@@ -392,69 +392,119 @@ static void chat_add(Guest* g)
 #endif
 
 /* --- the game's own windows, where the overlay's stand in for them --------------------------------
- * The game's window manager finds a window by its 16-character name ("menu    logwindo"); a window
- * keeps its place at +0x3A and +0x3C (shorts) and its name at +0x46. Hidden, a window is only moved
- * off the screen, so the game goes on running it exactly as before (its log keeps every line), and
- * put back where it was when the overlay's own is turned off or hidden. */
+ * The game's window manager ("menu_mgr") keeps its windows in a list: nodes of (next, ..., the window
+ * at +0x10, removed at +0x14), the first at the manager's +0. A window's rectangle is x, y, width,
+ * height at +0x3A (shorts); its name ("menu    logwindo") is in the description it points to at +4,
+ * at +0x46. Hidden, a window is only moved off the screen, so the game goes on running it exactly
+ * as before (its log keeps every line), and put back where it was when the overlay's own is turned
+ * off or hidden. */
 typedef struct
 {
     const char* name;
     int group; /* 0 the chat log, 1 the party list */
     uint32_t win;
     int16_t x, y;
-    int moved, told;
+    int moved;
 } GameWindow;
 static GameWindow g_game_windows[] = {
-    { "menu    logwindo", 0 }, { "menu    logwin2 ", 0 },
-    { "menu    partywin", 1 }, { "menu    ptw0    ", 1 }, { "menu    ptw1    ", 1 }, { "menu    ptw2    ", 1 },
+    { "logwindo", 0 }, { "logwin2 ", 0 },
+    { "partywin", 1 }, { "ptw0    ", 1 }, { "ptw1    ", 1 }, { "ptw2    ", 1 },
 };
 
-static uint32_t find_game_window(const char* name)
+/* a window's name (the 8 characters after "menu    "), or NULL */
+static const char* game_window_name(uint32_t win)
 {
-    static uint32_t buf;
-    if (!MENU_MGR || !MENU_FIND || (!buf && !(buf = gheap_alloc(32, 1))))
-        return 0;
-    memcpy(GUEST_PTR(buf), name, 16);
-    GUEST_PTR(buf)[16] = 0;
-    uint32_t arg = buf;
-    /* it returns the manager's list entry for the window; the window is the entry's second word */
-    uint32_t entry = guest_thiscall(MENU_FIND, MENU_MGR, 1, &arg);
-    return entry && gwin_is_committed(entry) ? rd32(entry + 4) : 0;
+    if (!win || !gwin_is_committed(win) || !gwin_is_committed(win + 0x80))
+        return NULL;
+    uint32_t desc = rd32(win + 4);
+    if (!desc || !gwin_is_committed(desc) || !gwin_is_committed(desc + 0x56))
+        return NULL;
+    const char* n = (const char*)GUEST_PTR(desc + 0x46);
+    return !memcmp(n, "menu    ", 8) ? n + 8 : NULL;
 }
 
-static int window_is(uint32_t win, const char* name)
+/* the windows the game has now, by the manager's list; each tracked one found by its name */
+static void find_game_windows(void)
 {
-    return win && gwin_is_committed(win) && gwin_is_committed(win + 0x60) && !memcmp(GUEST_PTR(win + 0x46), name, 16);
+    static int told;
+    for (size_t i = 0; i < sizeof g_game_windows / sizeof *g_game_windows; ++i)
+        g_game_windows[i].win = 0;
+    if (!MENU_MGR || !gwin_is_committed(MENU_MGR))
+        return;
+    int n = 0;
+    char all[1200] = "";
+    for (uint32_t node = rd32(MENU_MGR); node && gwin_is_committed(node) && n < 400; node = rd32(node), ++n)
+    {
+        if (rd8(node + 0x14))
+            continue; /* removed */
+        uint32_t win = rd32(node + 0x10);
+        const char* name = game_window_name(win);
+        if (!name)
+            continue;
+        if (!told && strlen(all) + 24 < sizeof all)
+        {
+            const int16_t* r = (const int16_t*)GUEST_PTR(win + 0x3A);
+            snprintf(all + strlen(all), sizeof all - strlen(all), " %.8s(%d,%d)", name, r[0], r[1]);
+        }
+        for (size_t i = 0; i < sizeof g_game_windows / sizeof *g_game_windows; ++i)
+            if (!memcmp(name, g_game_windows[i].name, 8))
+                g_game_windows[i].win = win;
+    }
+    if (!told && all[0])
+    {
+        told = 1;
+        rt_log("[recomp] the game's windows:%s\n", all);
+    }
 }
 
 /* each frame (the overlay's): which of the game's windows the overlay stands in for now */
 static void hide_game_windows(int log, int party)
 {
     static unsigned frame;
-    int looked = ++frame % 30 == 0; /* the game makes and remakes its windows: looked up twice a second */
+    static int any_moved;
+    if (!log && !party && !any_moved)
+        return;
+    if (frame++ % 30 == 0) /* the game makes and remakes its windows: looked for twice a second */
+    {
+        int16_t keep_x[16], keep_y[16];
+        int keep_moved[16];
+        uint32_t keep_win[16];
+        size_t n = sizeof g_game_windows / sizeof *g_game_windows;
+        for (size_t i = 0; i < n; ++i)
+            keep_win[i] = g_game_windows[i].win, keep_x[i] = g_game_windows[i].x, keep_y[i] = g_game_windows[i].y,
+            keep_moved[i] = g_game_windows[i].moved;
+        find_game_windows();
+        for (size_t i = 0; i < n; ++i)
+            if (g_game_windows[i].win != keep_win[i])
+                g_game_windows[i].moved = 0; /* a new window, where the game put it */
+            else
+                g_game_windows[i].x = keep_x[i], g_game_windows[i].y = keep_y[i], g_game_windows[i].moved = keep_moved[i];
+    }
+    any_moved = 0;
     for (size_t i = 0; i < sizeof g_game_windows / sizeof *g_game_windows; ++i)
     {
         GameWindow* w = &g_game_windows[i];
+        if (!game_window_name(w->win))
+            continue;
         int hide = w->group == 0 ? log : party;
-        if (!window_is(w->win, w->name))
-        {
-            w->win = 0, w->moved = 0;
-            if (!hide || !looked || !(w->win = find_game_window(w->name)) || !window_is(w->win, w->name))
-            {
-                w->win = 0;
-                continue;
-            }
-        }
         int16_t* pos = (int16_t*)GUEST_PTR(w->win + 0x3A);
-        if (!w->told)
-        {
-            w->told = 1;
-            rt_log("[recomp] game window %s: at %d, %d\n", w->name + 8, pos[0], pos[1]);
-        }
         if (hide)
         {
+            static int held[16], undone[16], told[16];
             if (pos[0] != -8000) /* where the game has it now (it may have laid it out again) */
+            {
+                if (w->moved)
+                    ++undone[i]; /* the game put it back since the last frame */
                 w->x = pos[0], w->y = pos[1];
+            }
+            if (++held[i] == 600 && !told[i])
+            {
+                /* after ten seconds, whether it stays moved: if the game lays it out every frame,
+                 * moving it cannot hide it */
+                told[i] = 1;
+                rt_log("[recomp] game window %.8s: hidden from %d,%d; the game put it back %d times in 600 frames\n", w->name, w->x,
+                    w->y, undone[i]);
+            }
             w->moved = 1;
             pos[0] = -8000, pos[1] = -8000;
         }
@@ -463,6 +513,7 @@ static void hide_game_windows(int log, int party)
             pos[0] = w->x, pos[1] = w->y;
             w->moved = 0;
         }
+        any_moved |= w->moved;
     }
 }
 
@@ -493,7 +544,7 @@ static void setup_packets(void)
         overlay_set_line_runner(run_line);
     gamestate_set_entity_map(ENTITY_MAP);
     gamestate_set_target_ptr(TARGET_PTR);
-    if (MENU_MGR && MENU_FIND)
+    if (MENU_MGR)
         overlay_set_game_windows(hide_game_windows);
     GuestFn* ca = CHAT_ADD_HOOK;
     if (ca)

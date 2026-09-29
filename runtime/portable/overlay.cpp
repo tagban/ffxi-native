@@ -707,7 +707,10 @@ static void target_window(void)
             ImGui::TextDisabled("No target");
         else
         {
-            ImU32 col = t.kind == ENTITY_PC ? IM_COL32(140, 180, 255, 255) : t.claimed ? IM_COL32(255, 110, 100, 255) : IM_COL32(240, 215, 120, 255);
+            ImU32 col = t.kind == ENTITY_PC ? IM_COL32(160, 190, 255, 255)
+                      : !t.mob              ? IM_COL32(120, 225, 130, 255)
+                      : t.claimed           ? IM_COL32(255, 110, 100, 255)
+                                            : IM_COL32(240, 215, 120, 255);
             ImGui::PushStyleColor(ImGuiCol_Text, col);
             ImGui::TextUnformatted(t.name[0] ? t.name : "(no name yet)");
             ImGui::PopStyleColor();
@@ -883,15 +886,19 @@ static void map_window(void)
     for (int i = 0; i < n; ++i)
     {
         const GameEntity& e = ents[i];
+        if (e.hidden)
+            continue; /* what the game does not draw: triggers, doors, markers, cutscene actors */
         float dx = e.x - me_x, dz = e.z - me_z;
         if (dx * dx + dz * dz > g_set.map_range * g_set.map_range)
             continue;
         bool in_party = false;
         for (int k = 0; k < np && !in_party; ++k)
             in_party = party[k].id == e.id;
-        ImU32 col = e.kind == ENTITY_PC ? (in_party ? IM_COL32(90, 230, 255, 255) : IM_COL32(110, 150, 255, 255))
-                  : e.claimed           ? IM_COL32(240, 80, 70, 255)
+        /* the game's own name colors: players white-blue, NPCs green, monsters yellow, claimed red */
+        ImU32 col = e.kind == ENTITY_PC ? (in_party ? IM_COL32(90, 230, 255, 255) : IM_COL32(150, 180, 255, 255))
+                  : !e.mob              ? IM_COL32(110, 220, 120, 255)
                   : e.hpp == 0          ? IM_COL32(120, 120, 120, 200)
+                  : e.claimed           ? IM_COL32(240, 80, 70, 255)
                                         : IM_COL32(235, 205, 95, 255);
         ImVec2 p = to_screen(dx, dz);
         dl->AddCircleFilled(p, e.kind == ENTITY_PC ? 3.5f : 3.0f, col, 10);

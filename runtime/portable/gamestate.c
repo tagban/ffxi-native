@@ -206,9 +206,16 @@ static void zone_entities(const uint8_t* p)
     g_me.known = 1;
 }
 
-/* 0x00D (another player) and 0x00E (an NPC or monster): the id, its index, which parts this update
- * carries (0x01 position, 0x04 HP and state, 0x08 name, 0x20 gone), facing, position, HP%, the
- * claim (0x00E), the name (0x00E at 0x34, 0x00D at 0x5A) */
+/* 0x00D (another player) and 0x00E (an NPC or monster), as the MogHouse client reads them (its
+ * docs/wiki/Entity-Visibility.md): the id, its index, which blocks this update carries (0x01
+ * position, 0x02 claim and status, 0x04 general, 0x08 name, 0x20 gone), facing and position. What
+ * a block does not carry is kept from before: a position-only update says nothing about the rest.
+ *   0x00E general: HP% at 0x1E, the battle byte at 0x25 (set only for a living monster)
+ *   0x00E claim/status: who claimed it at 0x2C, status at 0x20 (2, 3, 6: not drawn), flags at
+ *     0x21 (0x80 no model, 0x800 untargetable: triggers), the look at 0x30 (kind 2-4: a door or
+ *     transport; a standard look with no model: a marker)
+ *   0x00D general: flags at 0x20 (bits 1 and 29: hidden)
+ *   name: 0x00E at 0x34, 0x00D at 0x5A */
 static void entity_update(const uint8_t* p, uint32_t size, int pc)
 {
     if (size < 0x20)
@@ -235,18 +242,32 @@ static void entity_update(const uint8_t* p, uint32_t size, int pc)
         e->heading = p[0x0B];
         e->x = f32(p + 0x0C), e->y = f32(p + 0x10), e->z = f32(p + 0x14);
     }
-    if (parts & 0x04)
+    if ((parts & 0x04) && size > 0x25)
     {
         e->hpp = p[0x1E];
-        if (!pc && size >= 0x30)
-            e->claimed = u32(p + 0x2C) != 0;
+        if (!pc && p[0x25])
+            e->mob = 1;
+        if (pc && size >= 0x24)
+        {
+            uint32_t f = u32(p + 0x20);
+            e->hidden = (f >> 1 & 1) || (f >> 29 & 1);
+        }
+    }
+    if (!pc && (parts & 0x02) && size >= 0x34)
+    {
+        e->claimed = u32(p + 0x2C) != 0;
+        uint8_t status = p[0x20];
+        uint32_t flags = u32(p + 0x21);
+        uint16_t look = u16(p + 0x30), model = u16(p + 0x32);
+        e->hidden = status == 2 || status == 3 || status == 6 || (flags & 0x80) || (flags & 0x800) ||
+                    (look >= 2 && look <= 4) || (look == 0 && model == 0);
     }
     uint32_t at = pc ? 0x5A : 0x34;
     if ((parts & 0x08) && size > at)
     {
         uint32_t i = 0;
         for (; i + 1 < sizeof e->name && at + i < size && p[at + i] >= 0x20 && p[at + i] < 0x7F; ++i)
-            e->name[i] = (char)p[at + i];
+            e->name[i] = p[at + i] == '_' ? ' ' : (char)p[at + i]; /* the server's names have _ for spaces */
         e->name[i] = 0;
     }
 }
@@ -259,6 +280,48 @@ static float mem_f32(uint32_t a)
     return f;
 }
 
+/* The name the game itself shows for an entity (its own, from its data: what the server calls an
+ * NPC is not always what the player sees), right after the server's id in the entity, at 0x7C.
+ * Trusted once it has agreed with the server's name for a few entities, and logged. */
+static int g_mem_names; /* 0 not yet known, 1 agrees, -1 does not */
+static void entity_name(uint32_t p, GameEntity* e)
+{
+    if (g_mem_names < 0 || !gwin_is_committed(p + 0x7C + 24))
+        return;
+    char n[24];
+    int i = 0;
+    for (; i < 23; ++i)
+    {
+        uint8_t c = rd8(p + 0x7C + (uint32_t)i);
+        if (!c)
+            break;
+        if (c < 0x20 || c >= 0x7F)
+            return; /* not a name */
+        n[i] = (char)c;
+    }
+    n[i] = 0;
+    if (g_mem_names == 0)
+    {
+        static int agree, differ;
+        extern void rt_log(const char* fmt, ...);
+        if (!e->name[0] || !n[0])
+            return;
+        if (!strcmp(n, e->name))
+            ++agree;
+        else if (++differ <= 3)
+            rt_log("[recomp] names: the game's \"%s\", the server's \"%s\"\n", n, e->name);
+        if (agree >= 5 || differ >= 12)
+        {
+            g_mem_names = agree >= 5 && agree * 2 > differ ? 1 : -1;
+            rt_log("[recomp] names: the game's own names at +7C %s (%d agree, %d differ)\n", g_mem_names > 0 ? "used" : "not used", agree,
+                differ);
+        }
+        return;
+    }
+    if (i)
+        memcpy(e->name, n, (size_t)i + 1);
+}
+
 int gamestate_entities(GameEntity* out, int max)
 {
     int n = 0;
@@ -269,7 +332,10 @@ int gamestate_entities(GameEntity* out, int max)
             *e = g_ents[i];
             uint32_t p = entity_at((uint16_t)i, e->id);
             if (p) /* where the game draws it now, between the server's updates */
+            {
                 e->x = mem_f32(p + 0x04), e->y = mem_f32(p + 0x08), e->z = mem_f32(p + 0x0C);
+                entity_name(p, e);
+            }
         }
     return n;
 }
@@ -369,7 +435,10 @@ int gamestate_target(GameEntity* out, int* is_self)
     *out = g_ents[index];
     uint32_t p = entity_at((uint16_t)index, out->id);
     if (p)
+    {
         out->x = mem_f32(p + 0x04), out->y = mem_f32(p + 0x08), out->z = mem_f32(p + 0x0C);
+        entity_name(p, out);
+    }
     return 1;
 }
 

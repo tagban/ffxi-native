@@ -55,6 +55,9 @@ typedef struct
     uint8_t heading;
     uint8_t hpp;
     uint8_t claimed; /* a monster someone has claimed */
+    uint8_t mob;     /* a monster (only monsters carry the battle byte; kept once seen) */
+    uint8_t hidden;  /* not drawn by the game: hidden, cutscene only, a trigger, a door or
+                      * transport, a marker with no body */
     float x, y, z;
     char name[24];
 } GameEntity;
