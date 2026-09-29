@@ -44,6 +44,10 @@ extern GuestFn rt_hook_packet_out;
 #ifdef FFXI_HOOK_CHAT_ADD
 extern GuestFn rt_hook_chat_add;
 #endif
+#ifdef FFXI_HOOK_MENU_DRAW
+extern GuestFn rt_hook_menu_draw;
+extern GuestFn rt_hook_menu_drawn;
+#endif
 
 XI_EXPORT const XiGameModule xi_game_module = {
     XI_GAME_ABI,
@@ -115,5 +119,12 @@ XI_EXPORT const XiGameModule xi_game_module = {
     FFXI_TARGET_PTR,
 #else
     0,
+#endif
+#ifdef FFXI_HOOK_MENU_DRAW
+    &rt_hook_menu_draw,
+    &rt_hook_menu_drawn,
+#else
+    NULL,
+    NULL,
 #endif
 };

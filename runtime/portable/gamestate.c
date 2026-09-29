@@ -48,6 +48,7 @@ static void group_attr(const uint8_t* p, uint32_t size);
 static void group_list(const uint8_t* p, uint32_t size);
 static void group_table(const uint8_t* p, uint32_t size);
 static void entity_update(const uint8_t* p, uint32_t size, int pc);
+static void self_status(const uint8_t* p, uint32_t size);
 
 /* every so often, to the log: what has come (the ids seen most) */
 static void summary(void)
@@ -89,6 +90,7 @@ void gamestate_feed(const uint8_t* buf, uint32_t len)
         case 0x0C8: group_table(buf + at, size); break;
         case 0x00D: entity_update(buf + at, size, 1); break;
         case 0x00E: entity_update(buf + at, size, 0); break;
+        case 0x037: self_status(buf + at, size); break;
         default: break;
         }
         at += size;
@@ -247,10 +249,19 @@ static void entity_update(const uint8_t* p, uint32_t size, int pc)
         e->hpp = p[0x1E];
         if (!pc && p[0x25])
             e->mob = 1;
-        if (pc && size >= 0x24)
+        if (pc && size >= 0x2C)
         {
-            uint32_t f = u32(p + 0x20);
-            e->hidden = (f >> 1 & 1) || (f >> 29 & 1);
+            /* flags (LandSandBoat's char_update.cpp): the first word hide, LFG (11), anonymous (12),
+             * away (14), linkshell (17), GM level (24-26), invisible (29), bazaar (31); the second
+             * the linkshell's color (its low three bytes) and the GM icon (28); the third new
+             * adventurer (23) and mentor (24) */
+            uint32_t f1 = u32(p + 0x20), f2 = u32(p + 0x24), f3 = u32(p + 0x28);
+            e->hidden = (f1 >> 1 & 1) || (f1 >> 29 & 1);
+            e->gm = (uint8_t)(f1 >> 24 & 7);
+            e->marks = (uint16_t)((e->gm || (f2 >> 28 & 1) ? MARK_GM : 0) | (f3 >> 24 & 1 ? MARK_MENTOR : 0) | (f3 >> 23 & 1 ? MARK_NEW : 0) |
+                                  (f1 >> 11 & 1 ? MARK_LFG : 0) | (f1 >> 14 & 1 ? MARK_AWAY : 0) | (f1 >> 12 & 1 ? MARK_ANON : 0) |
+                                  (f1 >> 31 & 1 ? MARK_BAZAAR : 0) | (f1 >> 17 & 1 ? MARK_LS : 0));
+            e->ls = f2 & 0xFFFFFF;
         }
     }
     if (!pc && (parts & 0x02) && size >= 0x34)
@@ -320,6 +331,47 @@ static void entity_name(uint32_t p, GameEntity* e)
     }
     if (i)
         memcpy(e->name, n, (size_t)i + 1);
+}
+
+/* 0x037, the player's own status (LandSandBoat's char_status.cpp): flags at 0x28 (LFG 4, anonymous 5,
+ * away 7, linkshell 25, GM level 29-31), 0x2C (bazaar 29, GM icon 31), the linkshell's color at 0x31,
+ * and 0x38 (new adventurer 3, mentor 4) */
+static struct
+{
+    uint16_t marks;
+    uint8_t gm;
+    uint32_t ls;
+} g_self_marks;
+
+static void self_status(const uint8_t* p, uint32_t size)
+{
+    if (size < 0x3C)
+        return;
+    uint32_t f0 = u32(p + 0x28), f1 = u32(p + 0x2C), f3 = u32(p + 0x38);
+    g_self_marks.gm = (uint8_t)(f0 >> 29 & 7);
+    g_self_marks.marks = (uint16_t)((g_self_marks.gm || (f1 >> 31 & 1) ? MARK_GM : 0) | (f3 >> 4 & 1 ? MARK_MENTOR : 0) |
+                                    (f3 >> 3 & 1 ? MARK_NEW : 0) | (f0 >> 4 & 1 ? MARK_LFG : 0) | (f0 >> 7 & 1 ? MARK_AWAY : 0) |
+                                    (f0 >> 5 & 1 ? MARK_ANON : 0) | (f1 >> 29 & 1 ? MARK_BAZAAR : 0) | (f0 >> 25 & 1 ? MARK_LS : 0));
+    g_self_marks.ls = (uint32_t)p[0x31] << 16 | (uint32_t)p[0x32] << 8 | p[0x33];
+}
+
+int gamestate_marks(const char* name, uint16_t* marks, uint8_t* gm, uint32_t* ls)
+{
+    if (!name || !name[0])
+        return 0;
+    for (int i = 0; i < MEMBERS; ++i)
+        if (g_members[i].id && g_members[i].id == g_self && !strcmp(g_members[i].name, name))
+        {
+            *marks = g_self_marks.marks, *gm = g_self_marks.gm, *ls = g_self_marks.ls;
+            return 1;
+        }
+    for (int i = 0; i < ENTITIES; ++i)
+        if (g_ents[i].id && g_ents[i].kind == ENTITY_PC && !strcmp(g_ents[i].name, name))
+        {
+            *marks = g_ents[i].marks, *gm = g_ents[i].gm, *ls = g_ents[i].ls;
+            return 1;
+        }
+    return 0;
 }
 
 int gamestate_entities(GameEntity* out, int max)

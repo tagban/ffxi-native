@@ -64,6 +64,10 @@ typedef struct XiGameModule
      * thiscall, the 16-character name), and where it keeps a pointer to the player's target
      * ("target_ptr"); 0 unknown */
     uint32_t menu_mgr, menu_find, target_ptr;
+    /* the window manager's draw of each window: before it (eax the window, "menu_draw"), and after
+     * ("menu_drawn"); NULL when the build has none */
+    GuestFn* hook_menu_draw;
+    GuestFn* hook_menu_drawn;
 } XiGameModule;
 
 /* The one symbol a module exports. */

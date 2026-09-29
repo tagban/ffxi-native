@@ -223,6 +223,139 @@ extern "C" void overlay_nameplate(float x, float y, const char* text, uint32_t c
     p.text[o] = 0;
 }
 
+/* --- the marks by a player's name, drawn sharp at any size ----------------------------------------- */
+/* Before the name: GM (a badge), mentor (a star), new adventurer (a leaf), seeking a party (a flag),
+ * away (a moon), bazaar (a coin); after it, their linkshell's pearl in its color. */
+static const int LEFT_MARKS = MARK_GM | MARK_MENTOR | MARK_NEW | MARK_LFG | MARK_AWAY | MARK_BAZAAR;
+
+static float marks_width(uint16_t marks, float h, bool left)
+{
+    int n = 0;
+    for (int b = 1; b <= MARK_LS; b <<= 1)
+        if ((marks & b) && ((b & LEFT_MARKS) != 0) == left && b != MARK_ANON)
+            ++n;
+    return n ? n * (h * 0.95f) + h * 0.15f : 0.0f;
+}
+
+static void star(ImDrawList* dl, ImVec2 c, float r, ImU32 fill, ImU32 edge)
+{
+    ImVec2 pts[10];
+    for (int i = 0; i < 10; ++i)
+    {
+        float a = -IM_PI / 2 + i * IM_PI / 5, rr = i & 1 ? r * 0.45f : r;
+        pts[i] = ImVec2(c.x + cosf(a) * rr, c.y + sinf(a) * rr);
+    }
+    for (int i = 0; i < 5; ++i) /* a convex fill per point, then the middle */
+        dl->AddTriangleFilled(pts[(2 * i + 9) % 10], pts[2 * i], pts[2 * i + 1], fill);
+    ImVec2 mid[5] = { pts[1], pts[3], pts[5], pts[7], pts[9] };
+    dl->AddConvexPolyFilled(mid, 5, fill);
+    dl->AddPolyline(pts, 10, edge, ImDrawFlags_Closed, 1.0f);
+}
+
+/* one mark, in a square of side h at a (its top-left) */
+static void mark_icon(ImDrawList* dl, ImFont* font, int mark, uint8_t gm, uint32_t ls, ImVec2 a, float h)
+{
+    ImVec2 c(a.x + h * 0.5f, a.y + h * 0.5f);
+    float r = h * 0.42f;
+    const ImU32 ink = IM_COL32(20, 15, 10, 230);
+    switch (mark)
+    {
+    case MARK_GM:
+    {
+        /* a badge: dark red, a gold rim, GM in white (higher GM levels, a brighter gold) */
+        ImU32 gold = gm >= 4 ? IM_COL32(255, 225, 90, 255) : IM_COL32(220, 175, 60, 255);
+        ImVec2 p0(a.x + h * 0.02f, a.y + h * 0.16f), p1(a.x + h * 0.98f, a.y + h * 0.84f);
+        dl->AddRectFilled(p0, p1, IM_COL32(150, 25, 25, 255), h * 0.18f);
+        dl->AddRect(p0, p1, gold, h * 0.18f, 0, ImMax(1.0f, h * 0.08f));
+        float ts = h * 0.52f;
+        ImVec2 t = font->CalcTextSizeA(ts, FLT_MAX, 0.0f, "GM");
+        dl->AddText(font, ts, ImVec2(c.x - t.x * 0.5f, c.y - t.y * 0.5f), IM_COL32(255, 245, 220, 255), "GM");
+        break;
+    }
+    case MARK_MENTOR: star(dl, c, r * 1.1f, IM_COL32(255, 205, 60, 255), ink); break;
+    case MARK_NEW:
+    {
+        /* a leaf: two arcs meeting at the ends, and its vein */
+        ImVec2 tip(c.x + r * 0.8f, c.y - r * 0.8f), stem(c.x - r * 0.8f, c.y + r * 0.8f);
+        dl->PathLineTo(stem);
+        dl->PathBezierQuadraticCurveTo(ImVec2(c.x - r * 0.9f, c.y - r * 0.9f), tip);
+        dl->PathBezierQuadraticCurveTo(ImVec2(c.x + r * 0.9f, c.y + r * 0.9f), stem);
+        dl->PathFillConcave(IM_COL32(95, 190, 80, 255));
+        dl->AddLine(stem, tip, IM_COL32(40, 110, 40, 255), ImMax(1.0f, h * 0.06f));
+        break;
+    }
+    case MARK_LFG:
+    {
+        /* a flag on a pole */
+        float x0 = a.x + h * 0.22f;
+        dl->AddLine(ImVec2(x0, a.y + h * 0.1f), ImVec2(x0, a.y + h * 0.92f), IM_COL32(230, 230, 230, 255), ImMax(1.0f, h * 0.08f));
+        dl->AddTriangleFilled(ImVec2(x0, a.y + h * 0.12f), ImVec2(a.x + h * 0.92f, a.y + h * 0.3f), ImVec2(x0, a.y + h * 0.5f),
+            IM_COL32(70, 140, 240, 255));
+        break;
+    }
+    case MARK_AWAY:
+    {
+        /* a crescent moon: an arc, thick */
+        dl->PathArcTo(c, r * 0.75f, IM_PI * 0.35f, IM_PI * 1.65f, 16);
+        dl->PathStroke(IM_COL32(200, 205, 225, 255), 0, ImMax(1.5f, r * 0.45f));
+        break;
+    }
+    case MARK_BAZAAR:
+        dl->AddCircleFilled(c, r, IM_COL32(230, 185, 60, 255), 20);
+        dl->AddCircle(c, r * 0.62f, IM_COL32(150, 105, 25, 255), 20, ImMax(1.0f, h * 0.07f));
+        dl->AddCircle(c, r, ink, 20, 1.0f);
+        break;
+    case MARK_LS:
+    {
+        /* a pearl in the linkshell's color: a highlight up and left, a dark rim */
+        ImU32 col = IM_COL32(ls >> 16 & 255, ls >> 8 & 255, ls & 255, 255);
+        dl->AddCircleFilled(c, r * 0.9f, col, 24);
+        dl->AddCircleFilled(ImVec2(c.x - r * 0.3f, c.y - r * 0.3f), r * 0.3f, IM_COL32(255, 255, 255, 150), 12);
+        dl->AddCircle(c, r * 0.9f, ink, 24, 1.0f);
+        break;
+    }
+    default: break;
+    }
+}
+
+/* the marks on one side of a name, from x (left to right), middle at y; returns the width used */
+static float draw_marks(ImDrawList* dl, ImFont* font, uint16_t marks, uint8_t gm, uint32_t ls, float x, float y, float h, bool left)
+{
+    float at = x;
+    for (int b = 1; b <= MARK_LS; b <<= 1)
+        if ((marks & b) && ((b & LEFT_MARKS) != 0) == left && b != MARK_ANON)
+        {
+            mark_icon(dl, font, b, gm, ls, ImVec2(at, y - h * 0.5f), h);
+            at += h * 0.95f;
+        }
+    return at - x;
+}
+
+/* a name as an item, with the player's marks either side of it */
+static void name_with_marks(const char* name, ImU32 color)
+{
+    uint16_t marks = 0;
+    uint8_t gm = 0;
+    uint32_t ls = 0;
+    gamestate_marks(name, &marks, &gm, &ls);
+    float h = ImGui::GetTextLineHeight();
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float lw = marks ? draw_marks(dl, ImGui::GetFont(), marks, gm, ls, a.x, a.y + h * 0.5f, h, true) : 0.0f;
+    if (lw > 0)
+        ImGui::Dummy(ImVec2(lw, h)), ImGui::SameLine(0, 2);
+    ImGui::PushStyleColor(ImGuiCol_Text, color);
+    ImGui::TextUnformatted(name);
+    ImGui::PopStyleColor();
+    if (marks & MARK_LS)
+    {
+        ImGui::SameLine(0, 3);
+        ImVec2 b = ImGui::GetCursorScreenPos();
+        float rw = draw_marks(dl, ImGui::GetFont(), marks, gm, ls, b.x, b.y + h * 0.5f, h, false);
+        ImGui::Dummy(ImVec2(rw, h));
+    }
+}
+
 /* The names, drawn under every window, where the game put them (its 3D frame to the window) */
 static void draw_nameplates(void)
 {
@@ -237,7 +370,18 @@ static void draw_nameplates(void)
     {
         const Plate& p = g_plates[i];
         ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, p.text);
-        ImVec2 at(p.x * kx - ts.x * 0.5f, p.y * ky - ts.y * 0.5f);
+        uint16_t marks = 0;
+        uint8_t gm = 0;
+        uint32_t ls = 0;
+        gamestate_marks(p.text, &marks, &gm, &ls);
+        float ih = size * 1.05f, lw = marks_width(marks, ih, true), rw = marks_width(marks, ih, false);
+        float left = p.x * kx - (lw + ts.x + rw) * 0.5f;
+        ImVec2 at(left + lw, p.y * ky - ts.y * 0.5f);
+        if (marks)
+        {
+            draw_marks(dl, font, marks, gm, ls, left, at.y + ts.y * 0.5f, ih, true);
+            draw_marks(dl, font, marks, gm, ls, at.x + ts.x + ih * 0.15f, at.y + ts.y * 0.5f, ih, false);
+        }
         if (g_set.plate_outline)
             for (int k = 0; k < 8; ++k)
             {
@@ -958,9 +1102,16 @@ static void party_window(void)
                 continue;
             }
             ImGui::BeginGroup();
-            ImGui::PushStyleColor(ImGuiCol_Text, away ? IM_COL32(140, 140, 140, 255) : IM_COL32(255, 255, 255, 255));
-            ImGui::Text("%s%s", p.name[0] ? p.name : "You", p.leader ? " *" : "");
-            ImGui::PopStyleColor();
+            {
+                char label[32];
+                snprintf(label, sizeof label, "%s%s", p.name[0] ? p.name : "You", p.leader ? " *" : "");
+                name_with_marks(p.name[0] ? p.name : label, away ? IM_COL32(140, 140, 140, 255) : IM_COL32(255, 255, 255, 255));
+                if (p.leader)
+                {
+                    ImGui::SameLine(0, 2);
+                    ImGui::TextDisabled("*");
+                }
+            }
             /* HP, MP and TP, right-aligned on the name's line */
             char hp[16], mp[16], tp[16];
             snprintf(hp, sizeof hp, "%u", p.hp);
@@ -1029,9 +1180,14 @@ static void target_window(void)
                       : !t.mob              ? IM_COL32(120, 225, 130, 255)
                       : t.claimed           ? IM_COL32(255, 110, 100, 255)
                                             : IM_COL32(240, 215, 120, 255);
-            ImGui::PushStyleColor(ImGuiCol_Text, col);
-            ImGui::TextUnformatted(t.name[0] ? t.name : "(no name yet)");
-            ImGui::PopStyleColor();
+            if (t.kind == ENTITY_PC && t.name[0])
+                name_with_marks(t.name, col);
+            else
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, col);
+                ImGui::TextUnformatted(t.name[0] ? t.name : "(no name yet)");
+                ImGui::PopStyleColor();
+            }
             float mx, my, mz, f;
             char right[32];
             if (!self && gamestate_self(&mx, &my, &mz, &f))

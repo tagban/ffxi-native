@@ -1704,8 +1704,15 @@ static void draw(uint32_t prim, uint32_t count, uint32_t start, uint32_t indices
     uint32_t up_stride);
 
 /* DrawPrimitive(PrimitiveType, StartVertex, PrimitiveCount) */
+/* Draws dropped while set (d3d8_drop_draws): one of the game's windows the overlay stands in for is
+ * drawing itself. The UP draws still let go of stream 0, as D3D8 says they do. */
+static int g_drop_draws;
+void d3d8_drop_draws(int on) { g_drop_draws = on; }
+
 static void IDirect3DDevice8_DrawPrimitive(Guest* g)
 {
+    if (g_drop_draws)
+        RET(D3D_OK, 4);
     g_cap_esp = g->esp;
     draw(ARG(1), ARG(3), ARG(2), 0, 0, 0, 0);
     RET(D3D_OK, 4);
@@ -1715,6 +1722,8 @@ static void IDirect3DDevice8_DrawPrimitive(Guest* g)
  * comes from the indices themselves, not minIndex and NumVertices */
 static void IDirect3DDevice8_DrawIndexedPrimitive(Guest* g)
 {
+    if (g_drop_draws)
+        RET(D3D_OK, 6);
     g_cap_esp = g->esp;
     Obj* ib = obj(g_dev.cur.ib);
     if (ib && ib->mem)
@@ -1806,6 +1815,12 @@ static uint32_t widen_quad(uint32_t data, const Obj* t)
 
 static void IDirect3DDevice8_DrawPrimitiveUP(Guest* g)
 {
+    if (g_drop_draws)
+    {
+        bind(&g_dev.cur.stream[0], 0);
+        g_dev.cur.stride[0] = 0;
+        RET(D3D_OK, 5);
+    }
     g_cap_esp = g->esp;
     if (!(g_dev.cur.vs & 1) && (g_dev.cur.vs & 0xE) == 4 && ARG(3) && rd32(ARG(3) + 8) == 0x3f7ffffeu)
         g_probe_sky = 1; /* transformed vertices at the sky's depth */
@@ -1828,6 +1843,12 @@ static void IDirect3DDevice8_DrawPrimitiveUP(Guest* g)
  * IndexDataFormat, pVertexStreamZeroData, VertexStreamZeroStride) */
 static void IDirect3DDevice8_DrawIndexedPrimitiveUP(Guest* g)
 {
+    if (g_drop_draws)
+    {
+        bind(&g_dev.cur.stream[0], 0);
+        g_dev.cur.stride[0] = 0;
+        RET(D3D_OK, 9);
+    }
     g_cap_esp = g->esp;
     draw(ARG(1), ARG(4), 0, ARG(5), ARG(6) == FMT_INDEX32 ? 4 : 2, ARG(7), ARG(8));
     bind(&g_dev.cur.stream[0], 0);

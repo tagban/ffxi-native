@@ -60,7 +60,17 @@ typedef struct
                       * transport, a marker with no body */
     float x, y, z;
     char name[24];
+    uint16_t marks;  /* MARK_*: what the game shows by a player's name */
+    uint8_t gm;      /* GM level, 0 none */
+    uint32_t ls;     /* their linkshell's color, 0xRRGGBB (with MARK_LS) */
 } GameEntity;
+
+enum
+{
+    MARK_GM = 1, MARK_MENTOR = 2, MARK_NEW = 4, MARK_LFG = 8, MARK_AWAY = 16, MARK_ANON = 32, MARK_BAZAAR = 64, MARK_LS = 128,
+};
+/* A player's marks by name (the player too, from their own status): 0 when unknown */
+int gamestate_marks(const char* name, uint16_t* marks, uint8_t* gm, uint32_t* ls);
 int gamestate_entities(GameEntity* out, int max);
 /* the player's own position and facing (radians, 0 east, growing clockwise as the heading byte
  * does): from the game's own entity each frame where the build's entity table is known, else their

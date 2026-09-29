@@ -423,6 +423,7 @@ typedef struct
     uint32_t win;
     int16_t x, y;
     int moved;
+    int dropped; /* its draws dropped (a window the game lays out every frame cannot be moved) */
 } GameWindow;
 static GameWindow g_game_windows[] = {
     { "logwindo", 0 }, { "logwin2 ", 0 },
@@ -475,6 +476,36 @@ static void find_game_windows(void)
     }
 }
 
+#if defined(FFXI_HOOK_MENU_DRAW)
+extern GuestFn rt_hook_menu_draw, rt_hook_menu_drawn;
+#define MENU_DRAW_HOOK (&rt_hook_menu_draw)
+#define MENU_DRAWN_HOOK (&rt_hook_menu_drawn)
+#elif defined(XI_SPLIT)
+#define MENU_DRAW_HOOK (xi_game->size >= offsetof(XiGameModule, hook_menu_drawn) + sizeof(GuestFn*) ? xi_game->hook_menu_draw : NULL)
+#define MENU_DRAWN_HOOK (xi_game->size >= offsetof(XiGameModule, hook_menu_drawn) + sizeof(GuestFn*) ? xi_game->hook_menu_drawn : NULL)
+#else
+#define MENU_DRAW_HOOK ((GuestFn*)NULL)
+#define MENU_DRAWN_HOOK ((GuestFn*)NULL)
+#endif
+
+/* the window manager's draw of one window (eax the window) and its end: a window whose draws are
+ * dropped draws nothing */
+static void menu_draw(Guest* g)
+{
+    for (size_t i = 0; i < sizeof g_game_windows / sizeof *g_game_windows; ++i)
+        if (g_game_windows[i].dropped && g_game_windows[i].win == g->eax)
+        {
+            d3d8_drop_draws(1);
+            return;
+        }
+}
+
+static void menu_drawn(Guest* g)
+{
+    (void)g;
+    d3d8_drop_draws(0);
+}
+
 /* the game's window with the keyboard now (the manager's +0x54): its name, "" for none */
 static const char* game_focus(void)
 {
@@ -516,6 +547,15 @@ static void hide_game_windows(int log, int party)
             continue;
         int hide = w->group == 0 ? log : party;
         int16_t* pos = (int16_t*)GUEST_PTR(w->win + 0x3A);
+        if (w->group == 1 && MENU_DRAW_HOOK && MENU_DRAWN_HOOK)
+        {
+            /* the party list: laid out again every frame, so its drawing is dropped instead */
+            if (w->dropped != hide)
+                rt_log("[recomp] game window %.8s: %s\n", w->name, hide ? "not drawn" : "drawn again");
+            w->dropped = hide;
+            any_moved |= w->dropped;
+            continue;
+        }
         if (hide)
         {
             static int held[16], undone[16], told[16];
@@ -575,6 +615,8 @@ static void setup_packets(void)
     gamestate_set_target_ptr(TARGET_PTR);
     if (MENU_MGR)
         overlay_set_game_windows(hide_game_windows, game_focus);
+    if (MENU_DRAW_HOOK && MENU_DRAWN_HOOK)
+        *MENU_DRAW_HOOK = menu_draw, *MENU_DRAWN_HOOK = menu_drawn;
     GuestFn* ca = CHAT_ADD_HOOK;
     if (ca)
         *ca = chat_add;
