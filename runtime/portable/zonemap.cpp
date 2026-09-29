@@ -204,8 +204,9 @@ void walkable(std::vector<uint8_t> b, std::vector<Tri>& out)
 /* From above: each texel the highest floor over it (y points down, so the least y). Then the
  * ground the player can reach from where they stand: out from there, texel to texel, across no
  * more than a step up or down. That is the map; the rest (the planes under a city that catch what
- * falls, rooftops, scenery past the edge of the world) stays, dimmed. Colored like a paper map:
- * walkable ground lighter the higher it is, and its edges drawn. */
+ * falls, rooftops, scenery past the edge of the world) stays, dimmed. In greys, for the overlay to
+ * tint with the colors the player picks: walkable ground lighter the higher it is, with a paper's
+ * grain, and its edges drawn dark. */
 void make(int zone, float me_x, float me_y, float me_z)
 {
     std::string path = file_path((size_t)zone + ZONE_FILE_OFFSET);
@@ -347,12 +348,20 @@ void make(int zone, float me_x, float me_y, float me_z)
                 edge = ny > 1e29f || fabsf(ny - y) > 1.5f;
             }
             float h = std::clamp((y_lo - y) / (y_lo - y_hi), 0.0f, 1.0f); /* 1 the highest */
+            /* a little grain, like paper: the same for a texel whatever the zone */
+            uint32_t n = (uint32_t)x * 73856093u ^ (uint32_t)z * 19349663u;
+            n ^= n >> 13, n *= 0x5bd1e995u, n ^= n >> 15;
+            float grain = ((n & 255) / 255.0f - 0.5f) * 0.06f;
+            float lum;
+            uint8_t alpha;
             if (dim_rest && !reached[(size_t)z * SIZE + x])
-                o[0] = 90, o[1] = 90, o[2] = 95, o[3] = edge ? 90 : 55;
+                lum = 0.55f, alpha = edge ? 80 : 45;
             else if (edge)
-                o[0] = 70, o[1] = 55, o[2] = 35, o[3] = 235;
+                lum = 0.28f, alpha = 240;
             else
-                o[0] = (uint8_t)(150 + 80 * h), o[1] = (uint8_t)(135 + 75 * h), o[2] = (uint8_t)(100 + 60 * h), o[3] = 225;
+                lum = 0.78f + 0.22f * h + grain, alpha = 235;
+            uint8_t v = (uint8_t)(std::clamp(lum, 0.0f, 1.0f) * 255.0f);
+            o[0] = o[1] = o[2] = v, o[3] = alpha; /* grey: the overlay tints it with the ground color */
         }
     rt_log("[recomp] map: zone %d: %zu walkable triangles, %.0f units across, %zu%% of its ground reachable from %.0f %.0f %.0f (floor %.1f), from %s\n",
         zone, tris.size(), half * 2, ys.empty() ? 0 : reach_count * 100 / (ys.size() * 7), me_x, me_y, me_z, start >= 0 ? top[start] : 0.0f,

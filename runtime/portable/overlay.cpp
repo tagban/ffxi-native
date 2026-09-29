@@ -336,6 +336,31 @@ extern "C" int overlay_event(const SDL_Event* e)
     }
 }
 
+/* the map's colors (map_colors_window) */
+enum MapColor
+{
+    MC_GROUND, MC_BACK, MC_RING, MC_COMPASS, MC_NORTH, MC_SELF, MC_PARTY, MC_PC, MC_NPC, MC_MOB, MC_CLAIMED, MC_TARGET, MC_COUNT
+};
+static const char* const MC_NAME[MC_COUNT] = { "Ground", "Background", "Rim", "Compass", "North", "You", "Party", "Players",
+                                               "NPCs", "Monsters", "Claimed", "Target ring" };
+static const char* const MC_KEY[MC_COUNT] = { "ground", "back", "ring", "compass", "north", "self", "party", "pc", "npc", "mob", "claimed", "target" };
+static const ImU32 MC_DEFAULT[MC_COUNT] = {
+    IM_COL32(232, 214, 170, 255), /* ground: papyrus */
+    IM_COL32(58, 44, 30, 215),    /* background: dark umber */
+    IM_COL32(120, 90, 55, 255),   /* rim */
+    IM_COL32(95, 70, 40, 255),    /* compass letters */
+    IM_COL32(170, 40, 30, 255),   /* north */
+    IM_COL32(60, 35, 15, 255),    /* you */
+    IM_COL32(20, 140, 170, 255),  /* party */
+    IM_COL32(40, 80, 190, 255),   /* other players */
+    IM_COL32(30, 130, 55, 255),   /* NPCs */
+    IM_COL32(200, 135, 20, 255),  /* monsters */
+    IM_COL32(190, 35, 30, 255),   /* claimed */
+    IM_COL32(20, 20, 20, 255),    /* the target's ring */
+};
+static ImU32 g_map_col[MC_COUNT];
+static bool g_map_colors_open;
+
 /* [Overlay][Settings] in overlay.ini: which windows, the text sizes, the map's */
 static void* overlay_ini_open(ImGuiContext*, ImGuiSettingsHandler*, const char*) { return (void*)1; }
 
@@ -354,6 +379,15 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "plate_size=%f", &f) == 1 && f >= 8 && f <= 40) g_set.plate_size = f;
     else if (sscanf(line, "plate_outline=%d", &v) == 1) g_set.plate_outline = v != 0;
     else if (!strncmp(line, "ui_font=", 8)) snprintf(g_set.ui_font, sizeof g_set.ui_font, "%s", line + 8);
+    else if (!strncmp(line, "mapcol.", 7))
+    {
+        char key[24];
+        unsigned argb;
+        if (sscanf(line + 7, "%23[a-z]=%x", key, &argb) == 2)
+            for (int k = 0; k < MC_COUNT; ++k)
+                if (!strcmp(key, MC_KEY[k]))
+                    g_map_col[k] = IM_COL32(argb >> 16 & 255, argb >> 8 & 255, argb & 255, argb >> 24 & 255);
+    }
     else if (!strncmp(line, "plate_font=", 11)) snprintf(g_set.plate_font, sizeof g_set.plate_font, "%s", line + 11);
     else if (sscanf(line, "ui_size=%f", &f) == 1 && f >= 10 && f <= 32) g_set.ui_size = f;
     else if (sscanf(line, "chat_size=%f", &f) == 1 && f >= 10 && f <= 32) g_set.chat_size = f;
@@ -370,7 +404,13 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("map_north_up=%d\nmap_names=%d\n", g_set.map_north_up, g_set.map_names);
     out->appendf("target=%d\nhide_game_log=%d\nhide_game_party=%d\n", g_set.target, g_set.hide_game_log, g_set.hide_game_party);
     out->appendf("plates=%d\nplate_size=%g\nplate_outline=%d\n", g_set.plates, g_set.plate_size, g_set.plate_outline);
-    out->appendf("ui_font=%s\nplate_font=%s\n\n", g_set.ui_font, g_set.plate_font);
+    out->appendf("ui_font=%s\nplate_font=%s\n", g_set.ui_font, g_set.plate_font);
+    for (int k = 0; k < MC_COUNT; ++k)
+    {
+        ImU32 c = g_map_col[k] ? g_map_col[k] : MC_DEFAULT[k];
+        out->appendf("mapcol.%s=%02x%02x%02x%02x\n", MC_KEY[k], c >> 24 & 255, c & 255, c >> 8 & 255, c >> 16 & 255);
+    }
+    out->append("\n");
 }
 
 static void overlay_register(void)
@@ -854,6 +894,13 @@ static void party_window(void)
 {
     GameMember m[18];
     int n = gamestate_members(m, 18);
+    /* the player's own party first (the player at its head), then the alliance's others in turn */
+    for (int i = 1; i < n; ++i)
+        for (int j = i; j > 1 && m[j].party < m[j - 1].party; --j)
+        {
+            GameMember t = m[j];
+            m[j] = m[j - 1], m[j - 1] = t;
+        }
     ImGui::SetNextWindowPos(ImVec2(24, 520), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(160, 0), ImVec2(600, FLT_MAX));
     /* its width is the player's; its height always fits who is in it */
@@ -873,11 +920,43 @@ static void party_window(void)
         for (int i = 0; i < n; ++i)
         {
             const GameMember& p = m[i];
-            if (i && p.party != m[i - 1].party)
-                ImGui::Dummy(ImVec2(0, 5)); /* the alliance's other parties */
-            else if (i)
-                ImGui::Dummy(ImVec2(0, 2));
             bool away = here && p.zone && p.zone != here;
+            if (i && p.party != m[i - 1].party)
+            {
+                /* the alliance's other parties: a rule between them */
+                ImGui::Dummy(ImVec2(0, 3));
+                ImVec2 a = ImGui::GetCursorScreenPos();
+                ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, a.y), ImVec2(a.x + w, a.y), IM_COL32(255, 255, 255, 50));
+                ImGui::Dummy(ImVec2(0, 3));
+            }
+            else if (i)
+                ImGui::Dummy(ImVec2(0, p.party ? 0 : 2));
+            if (p.party)
+            {
+                /* someone in the alliance's other parties: a line of their name and HP */
+                ImGui::BeginGroup();
+                ImGui::PushStyleColor(ImGuiCol_Text, away ? IM_COL32(140, 140, 140, 255) : IM_COL32(225, 225, 225, 255));
+                ImGui::PushFont(NULL, ImGui::GetStyle().FontSizeBase * 0.9f);
+                ImGui::TextUnformatted(p.name);
+                ImGui::PopFont();
+                ImGui::PopStyleColor();
+                ImGui::SameLine(w * 0.5f);
+                float hh = ImMax(3.0f, ImGui::GetFontSize() * 0.3f);
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (ImGui::GetTextLineHeight() - hh) * 0.5f);
+                thin_bar(p.hpp / 100.0f, p.hpp <= 25 ? IM_COL32(230, 80, 70, 255) : p.hpp <= 50 ? IM_COL32(230, 190, 70, 255) : IM_COL32(90, 200, 110, 255),
+                    w * 0.5f, hh);
+                ImGui::EndGroup();
+                if (g_run_line && ImGui::IsItemClicked(ImGuiMouseButton_Left))
+                {
+                    char line[48];
+                    snprintf(line, sizeof line, "/target %s", p.name);
+                    g_run_line(line);
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s %d / %s %d  HP %u (%u%%)%s", job_name(p.mjob), p.mjob_lv, job_name(p.sjob), p.sjob_lv, p.hp, p.hpp,
+                        away ? "  (in another area)" : "");
+                continue;
+            }
             ImGui::BeginGroup();
             ImGui::PushStyleColor(ImGuiCol_Text, away ? IM_COL32(140, 140, 140, 255) : IM_COL32(255, 255, 255, 255));
             ImGui::Text("%s%s", p.name[0] ? p.name : "You", p.leader ? " *" : "");
@@ -970,6 +1049,48 @@ static void target_window(void)
     ImGui::PopStyleVar(2);
 }
 
+/* --- the map's colors: papyrus by default, each one the player's to change ------------------------ */
+
+static ImU32 mapcol(int k)
+{
+    return g_map_col[k] ? g_map_col[k] : MC_DEFAULT[k];
+}
+
+static void map_colors_window(void)
+{
+    if (!g_map_colors_open)
+        return;
+    ImGui::SetNextWindowSize(ImVec2(260, 0), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Map colors", &g_map_colors_open, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        for (int k = 0; k < MC_COUNT; ++k)
+        {
+            ImVec4 c = ImGui::ColorConvertU32ToFloat4(mapcol(k));
+            if (ImGui::ColorEdit4(MC_NAME[k], &c.x, ImGuiColorEditFlags_NoInputs | (k == MC_BACK ? ImGuiColorEditFlags_AlphaBar : ImGuiColorEditFlags_NoAlpha)))
+            {
+                g_map_col[k] = ImGui::ColorConvertFloat4ToU32(c);
+                ImGui::MarkIniSettingsDirty();
+            }
+        }
+        if (ImGui::Button("Papyrus (the defaults)"))
+        {
+            memcpy(g_map_col, MC_DEFAULT, sizeof g_map_col);
+            ImGui::MarkIniSettingsDirty();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Night"))
+        {
+            static const ImU32 NIGHT[MC_COUNT] = { IM_COL32(150, 170, 190, 255), IM_COL32(12, 16, 22, 200), IM_COL32(200, 210, 230, 255),
+                IM_COL32(210, 215, 225, 255), IM_COL32(255, 110, 90, 255), IM_COL32(255, 255, 255, 255), IM_COL32(90, 230, 255, 255),
+                IM_COL32(150, 180, 255, 255), IM_COL32(110, 220, 120, 255), IM_COL32(235, 205, 95, 255), IM_COL32(240, 80, 70, 255),
+                IM_COL32(255, 255, 255, 255) };
+            memcpy(g_map_col, NIGHT, sizeof g_map_col);
+            ImGui::MarkIniSettingsDirty();
+        }
+    }
+    ImGui::End();
+}
+
 /* --- the zone map under the radar (zonemap.h): one texture, filled again on each new zone ------- */
 static ImTextureData* g_map_tex;
 static ZoneMap g_map; /* its placement in the world (the pixels are the texture's) */
@@ -1040,15 +1161,16 @@ static void map_window(void)
             ImGui::MarkIniSettingsDirty();
         if (ImGui::MenuItem("Names", NULL, &g_set.map_names))
             ImGui::MarkIniSettingsDirty();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Colors..."))
+            g_map_colors_open = true;
         ImGui::EndPopup();
     }
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddCircleFilled(c, r, IM_COL32(12, 16, 22, 190), 64);
+    dl->AddCircleFilled(c, r, mapcol(MC_BACK), 64);
     map_texture_update();
     bool have_map = known && g_map_tex && g_map.zone == gamestate_zone() && g_map.half > 0;
-    dl->AddCircle(c, r * 0.5f, IM_COL32(255, 255, 255, 28), 48);
-    dl->AddCircle(c, r, IM_COL32(255, 255, 255, 70), 64, 1.5f);
 
     /* the world (x east, z north) to the radar: facing up, or north up. Facing 0 is east and grows
      * clockwise (64 south), so facing t looks along (cos t, -sin t). */
@@ -1083,12 +1205,12 @@ static void map_window(void)
         dl->PushTexture(g_map_tex->GetTexRef());
         dl->PrimReserve(SEG * 3, SEG + 1);
         ImDrawIdx base = (ImDrawIdx)dl->_VtxCurrentIdx;
-        dl->PrimWriteVtx(c, uv_at(0, 0), IM_COL32_WHITE);
+        dl->PrimWriteVtx(c, uv_at(0, 0), mapcol(MC_GROUND)); /* the grey map, tinted the ground's color */
         for (int i = 0; i < SEG; ++i)
         {
             float a = (float)i / SEG * IM_PI * 2.0f;
             float sx = cosf(a) * r, sy = sinf(a) * r;
-            dl->PrimWriteVtx(ImVec2(c.x + sx, c.y + sy), uv_at(sx, sy), IM_COL32_WHITE);
+            dl->PrimWriteVtx(ImVec2(c.x + sx, c.y + sy), uv_at(sx, sy), mapcol(MC_GROUND));
         }
         for (int i = 0; i < SEG; ++i)
         {
@@ -1099,8 +1221,11 @@ static void map_window(void)
         dl->PopTexture();
     }
 
-    dl->AddCircle(c, r * 0.5f, IM_COL32(255, 255, 255, 28), 48);
-    dl->AddCircle(c, r, IM_COL32(255, 255, 255, 90), 64, 1.5f);
+    {
+        ImU32 rim = mapcol(MC_RING);
+        dl->AddCircle(c, r * 0.5f, (rim & 0x00FFFFFFu) | 0x30000000u, 48);
+        dl->AddCircle(c, r, rim, 64, 2.0f);
+    }
 
     /* the compass ring's letters */
     static const struct { const char* l; float dx, dz; } DIRS[] = { { "N", 0, 1 }, { "E", 1, 0 }, { "S", 0, -1 }, { "W", -1, 0 } };
@@ -1108,7 +1233,7 @@ static void map_window(void)
     {
         ImVec2 p = to_screen(d.dx * g_set.map_range * 0.9f, d.dz * g_set.map_range * 0.9f);
         ImVec2 ts = ImGui::CalcTextSize(d.l);
-        dl->AddText(ImVec2(p.x - ts.x * 0.5f, p.y - ts.y * 0.5f), d.l[0] == 'N' ? IM_COL32(255, 110, 90, 255) : IM_COL32(220, 220, 220, 200), d.l);
+        dl->AddText(ImVec2(p.x - ts.x * 0.5f, p.y - ts.y * 0.5f), d.l[0] == 'N' ? mapcol(MC_NORTH) : mapcol(MC_COMPASS), d.l);
     }
 
     static GameEntity ents[0x900];
@@ -1134,17 +1259,18 @@ static void map_window(void)
         for (int k = 0; k < np && !in_party; ++k)
             in_party = party[k].id == e.id;
         /* the game's own name colors: players white-blue, NPCs green, monsters yellow, claimed red */
-        ImU32 col = e.kind == ENTITY_PC ? (in_party ? IM_COL32(90, 230, 255, 255) : IM_COL32(150, 180, 255, 255))
-                  : !e.mob              ? IM_COL32(110, 220, 120, 255)
+        ImU32 col = e.kind == ENTITY_PC ? (in_party ? mapcol(MC_PARTY) : mapcol(MC_PC))
+                  : !e.mob              ? mapcol(MC_NPC)
                   : e.hpp == 0          ? IM_COL32(120, 120, 120, 200)
-                  : e.claimed           ? IM_COL32(240, 80, 70, 255)
-                                        : IM_COL32(235, 205, 95, 255);
+                  : e.claimed           ? mapcol(MC_CLAIMED)
+                                        : mapcol(MC_MOB);
         ImVec2 p = to_screen(dx, dz);
         dl->AddCircleFilled(p, e.kind == ENTITY_PC ? 3.5f : 3.0f, col, 10);
+        dl->AddCircle(p, e.kind == ENTITY_PC ? 3.5f : 3.0f, IM_COL32(0, 0, 0, 90), 10, 1.0f); /* reads on light ground and dark */
         if (has_target && e.id == target.id)
-            dl->AddCircle(p, 6.5f, IM_COL32(255, 255, 255, 230), 16, 1.5f); /* the player's target */
+            dl->AddCircle(p, 6.5f, mapcol(MC_TARGET), 16, 1.8f); /* the player's target */
         if (g_set.map_names && e.name[0])
-            dl->AddText(ImVec2(p.x + 5, p.y - ImGui::GetFontSize() * 0.5f), IM_COL32(230, 230, 230, 200), e.name);
+            dl->AddText(ImVec2(p.x + 5, p.y - ImGui::GetFontSize() * 0.5f), mapcol(MC_COMPASS), e.name);
         float md = (p.x - mouse.x) * (p.x - mouse.x) + (p.y - mouse.y) * (p.y - mouse.y);
         if (hovered && md < near_d)
             near_d = md, near_one = &e;
@@ -1160,7 +1286,8 @@ static void map_window(void)
         ImVec2 tip(c.x + fwd.x * L, c.y + fwd.y * L);
         ImVec2 b1(c.x - fwd.x * L * 0.6f + side_v.x * L * 0.6f, c.y - fwd.y * L * 0.6f + side_v.y * L * 0.6f);
         ImVec2 b2(c.x - fwd.x * L * 0.6f - side_v.x * L * 0.6f, c.y - fwd.y * L * 0.6f - side_v.y * L * 0.6f);
-        dl->AddTriangleFilled(tip, b1, b2, IM_COL32(255, 255, 255, 255));
+        dl->AddTriangleFilled(tip, b1, b2, mapcol(MC_SELF));
+        dl->AddTriangle(tip, b1, b2, IM_COL32(255, 255, 255, 120), 1.0f);
     }
 
     char range[32];
@@ -1202,6 +1329,7 @@ extern "C" void overlay_build_frame(void)
             party_window();
         if (g_set.map)
             map_window();
+        map_colors_window();
         if (g_set.target)
             target_window();
     }
