@@ -76,7 +76,7 @@ static bool g_ready, g_shown;
 static void chat_register(void);
 static void overlay_register(void);
 static int (*g_run_line)(const char* line); /* host64: the game's parser of a typed line */
-static void (*g_hide_game)(int log, int party);  /* host64: the game's own windows off the screen */
+static void (*g_hide_game)(int log, int party, int target); /* host64: the game's own windows hidden */
 static const char* (*g_game_focus)(void);         /* host64: the game's window with the keyboard */
 static int g_send_open;                           /* 1 the box asked to open (Space), 2 with "/" */
 static bool g_swallow_text;                        /* the key's own character, not to be typed */
@@ -95,7 +95,7 @@ static int g_nplates;
 static struct
 {
     bool chat = true, party = true, map = true, status = false, target = true;
-    bool hide_game_log = false, hide_game_party = false; /* the game's own, where ours stand in */
+    bool hide_game_log = false, hide_game_party = false, hide_game_target = false; /* the game's own, where ours stand in */
     bool plates = false;       /* the names over heads drawn by the overlay */
     char ui_font[32] = "Roboto", plate_font[32] = "Arial Bold";
     float plate_size = 15.0f;
@@ -417,7 +417,7 @@ static void draw_nameplates(void)
     g_nplates = 0; /* the next frame's come as the game draws them */
 }
 
-extern "C" void overlay_set_game_windows(void (*hide)(int log, int party), const char* (*focus)(void))
+extern "C" void overlay_set_game_windows(void (*hide)(int log, int party, int target), const char* (*focus)(void))
 {
     g_hide_game = hide;
     g_game_focus = focus;
@@ -541,6 +541,7 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "target=%d", &v) == 1) g_set.target = v != 0;
     else if (sscanf(line, "hide_game_log=%d", &v) == 1) g_set.hide_game_log = v != 0;
     else if (sscanf(line, "hide_game_party=%d", &v) == 1) g_set.hide_game_party = v != 0;
+    else if (sscanf(line, "hide_game_target=%d", &v) == 1) g_set.hide_game_target = v != 0;
     else if (sscanf(line, "plates=%d", &v) == 1) g_set.plates = v != 0;
     else if (sscanf(line, "plate_size=%f", &f) == 1 && f >= 8 && f <= 40) g_set.plate_size = f;
     else if (sscanf(line, "plate_outline=%d", &v) == 1) g_set.plate_outline = v != 0;
@@ -569,7 +570,8 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("chat=%d\nparty=%d\nmap=%d\nstatus=%d\n", g_set.chat, g_set.party, g_set.map, g_set.status);
     out->appendf("ui_size=%g\nchat_size=%g\nmap_range=%g\n", g_set.ui_size, g_set.chat_size, g_set.map_range);
     out->appendf("map_north_up=%d\nmap_names=%d\nmap_art=%d\n", g_set.map_north_up, g_set.map_names, g_set.map_art);
-    out->appendf("target=%d\nhide_game_log=%d\nhide_game_party=%d\n", g_set.target, g_set.hide_game_log, g_set.hide_game_party);
+    out->appendf("target=%d\nhide_game_log=%d\nhide_game_party=%d\nhide_game_target=%d\n", g_set.target, g_set.hide_game_log,
+        g_set.hide_game_party, g_set.hide_game_target);
     out->appendf("plates=%d\nplate_size=%g\nplate_outline=%d\n", g_set.plates, g_set.plate_size, g_set.plate_outline);
     out->appendf("ui_font=%s\nplate_font=%s\n", g_set.ui_font, g_set.plate_font);
     for (int k = 0; k < MC_COUNT; ++k)
@@ -629,6 +631,7 @@ static void overlay_window(void)
             ImGui::TextDisabled("The game's own");
             dirty |= ImGui::Checkbox("Hide its chat log (while Chat is on)", &g_set.hide_game_log);
             dirty |= ImGui::Checkbox("Hide its party list (while Party is on)", &g_set.hide_game_party);
+            dirty |= ImGui::Checkbox("Hide its target box (while Target is on)", &g_set.hide_game_target);
         }
         ImGui::Separator();
         ImGui::TextDisabled("Text size");
@@ -1533,7 +1536,8 @@ extern "C" void overlay_build_frame(void)
     g_send_open = 0; /* not taken up by the chat box this frame: dropped, so no key stays caught */
     /* the game's own windows the overlay's stand in for: back whenever the overlay is hidden */
     if (g_hide_game)
-        g_hide_game(g_shown && g_set.chat && g_set.hide_game_log, g_shown && g_set.party && g_set.hide_game_party);
+        g_hide_game(g_shown && g_set.chat && g_set.hide_game_log, g_shown && g_set.party && g_set.hide_game_party,
+            g_shown && g_set.target && g_set.hide_game_target);
     if (was[0] != g_set.chat || was[1] != g_set.party || was[2] != g_set.map || was[3] != g_set.status || was[4] != g_set.target)
         ImGui::MarkIniSettingsDirty(); /* a window closed with its x */
     ImGui::Render();

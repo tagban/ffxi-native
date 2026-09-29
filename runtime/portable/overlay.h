@@ -28,9 +28,9 @@ void overlay_note_present(int frame_w, int frame_h, int screen_w, int screen_h, 
 void overlay_set_line_runner(int (*run)(const char* line));
 
 /* How the overlay hides the game's own windows its own stand in for (host64: moved off the screen
- * and back), called every frame: the game's chat log, its party list; and which of the game's
+ * and back), called every frame: the game's chat log, its party list, its target box; and which of the game's
  * windows has the keyboard ("" none, else its 8-character name). */
-void overlay_set_game_windows(void (*hide)(int log, int party), const char* (*focus)(void));
+void overlay_set_game_windows(void (*hide)(int log, int party, int target), const char* (*focus)(void));
 
 /* The names over heads, when the overlay draws them (host64's nameplate hook, where the build has
  * one): whether it wants them now, and each one as the game placed it this frame (where in its 3D

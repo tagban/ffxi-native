@@ -419,7 +419,7 @@ static void chat_add(Guest* g)
 typedef struct
 {
     const char* name;
-    int group; /* 0 the chat log, 1 the party list */
+    int group; /* 0 the chat log, 1 the party list, 2 the target box */
     uint32_t win;
     int16_t x, y;
     int moved;
@@ -428,6 +428,7 @@ typedef struct
 static GameWindow g_game_windows[] = {
     { "logwindo", 0 }, { "logwin2 ", 0 },
     { "partywin", 1 }, { "ptw0    ", 1 }, { "ptw1    ", 1 }, { "ptw2    ", 1 },
+    { "targetwi", 2 },
 };
 
 /* a window's name (the 8 characters after "menu    "), or NULL */
@@ -490,11 +491,30 @@ extern GuestFn rt_hook_menu_draw, rt_hook_menu_drawn;
 
 /* the window manager's draw of one window (eax the window) and its end: a window whose draws are
  * dropped draws nothing */
+static uint32_t g_dropping; /* the window between menu_draw and menu_drawn, when it is one hidden */
+
+/* a hidden window's place, off the screen: set on both sides of the manager's call, since the game
+ * lays some out again in it (the party list, every frame) and draws them after */
+static void off_screen(uint32_t win)
+{
+    if (gwin_is_committed(win + 0x3A))
+    {
+        int16_t* pos = (int16_t*)GUEST_PTR(win + 0x3A);
+        pos[0] = -8000, pos[1] = -8000;
+    }
+}
+
 static void menu_draw(Guest* g)
 {
+    g_dropping = 0;
     for (size_t i = 0; i < sizeof g_game_windows / sizeof *g_game_windows; ++i)
         if (g_game_windows[i].dropped && g_game_windows[i].win == g->eax)
         {
+            g_dropping = g->eax;
+            static int seen[16];
+            if (!seen[i]++)
+                rt_log("[recomp] game window %.8s: the manager's pass seen, moved off the screen there\n", g_game_windows[i].name);
+            off_screen(g_dropping);
             d3d8_drop_draws(1);
             return;
         }
@@ -503,6 +523,9 @@ static void menu_draw(Guest* g)
 static void menu_drawn(Guest* g)
 {
     (void)g;
+    if (g_dropping)
+        off_screen(g_dropping);
+    g_dropping = 0;
     d3d8_drop_draws(0);
 }
 
@@ -517,13 +540,13 @@ static const char* game_focus(void)
 }
 
 /* each frame (the overlay's): which of the game's windows the overlay stands in for now */
-static void hide_game_windows(int log, int party)
+static void hide_game_windows(int log, int party, int target)
 {
     static unsigned frame;
     static int any_moved;
-    if (!log && !party && !any_moved)
+    if (!log && !party && !target && !any_moved)
         return;
-    if (frame++ % 30 == 0) /* the game makes and remakes its windows: looked for twice a second */
+    if (frame++ % 10 == 0) /* the game makes and remakes its windows (the target box on each target) */
     {
         int16_t keep_x[16], keep_y[16];
         int keep_moved[16];
@@ -545,11 +568,12 @@ static void hide_game_windows(int log, int party)
         GameWindow* w = &g_game_windows[i];
         if (!game_window_name(w->win))
             continue;
-        int hide = w->group == 0 ? log : party;
+        int hide = w->group == 0 ? log : w->group == 1 ? party : target;
         int16_t* pos = (int16_t*)GUEST_PTR(w->win + 0x3A);
-        if (w->group == 1 && MENU_DRAW_HOOK && MENU_DRAWN_HOOK)
+        if (w->group >= 1 && MENU_DRAW_HOOK && MENU_DRAWN_HOOK)
         {
-            /* the party list: laid out again every frame, so its drawing is dropped instead */
+            /* the party list and target box: laid out again every frame, so they are moved off
+             * the screen in the manager's own pass (menu_draw), and their draws dropped there */
             if (w->dropped != hide)
                 rt_log("[recomp] game window %.8s: %s\n", w->name, hide ? "not drawn" : "drawn again");
             w->dropped = hide;
