@@ -49,6 +49,7 @@ static void group_list(const uint8_t* p, uint32_t size);
 static void group_table(const uint8_t* p, uint32_t size);
 static void entity_update(const uint8_t* p, uint32_t size, int pc);
 static void self_status(const uint8_t* p, uint32_t size);
+static void bags(uint32_t id, const uint8_t* p, uint32_t size);
 
 /* every so often, to the log: what has come (the ids seen most) */
 static void summary(void)
@@ -91,6 +92,7 @@ void gamestate_feed(const uint8_t* buf, uint32_t len)
         case 0x00D: entity_update(buf + at, size, 1); break;
         case 0x00E: entity_update(buf + at, size, 0); break;
         case 0x037: self_status(buf + at, size); break;
+        case 0x01C: case 0x01E: case 0x01F: case 0x020: case 0x050: bags(id, buf + at, size); break;
         default: break;
         }
         at += size;
@@ -353,6 +355,75 @@ static void self_status(const uint8_t* p, uint32_t size)
                                     (f3 >> 3 & 1 ? MARK_NEW : 0) | (f0 >> 4 & 1 ? MARK_LFG : 0) | (f0 >> 7 & 1 ? MARK_AWAY : 0) |
                                     (f0 >> 5 & 1 ? MARK_ANON : 0) | (f1 >> 29 & 1 ? MARK_BAZAAR : 0) | (f0 >> 25 & 1 ? MARK_LS : 0));
     g_self_marks.ls = (uint32_t)p[0x31] << 16 | (uint32_t)p[0x32] << 8 | p[0x33];
+}
+
+/* --- the bags (the layouts as the MogHouse client reads them, FfxiInventory.cs) ----------------------- */
+static GameSlot g_bag[BAGS][BAG_SLOTS];
+static uint16_t g_bag_size[BAGS];
+static struct
+{
+    uint8_t bag, slot, worn;
+} g_equip[EQUIP_SLOTS];
+
+static void bags(uint32_t id, const uint8_t* p, uint32_t size)
+{
+    switch (id)
+    {
+    case 0x01C: /* sizes: a byte each at 0x04, and a short each (when not 0, the one to use) at 0x24 */
+        if (size >= 0x24 + 2 * BAGS)
+            for (int i = 0; i < BAGS; ++i)
+            {
+                uint16_t wide = u16(p + 0x24 + 2 * i);
+                g_bag_size[i] = wide ? wide : p[0x04 + i];
+            }
+        break;
+    case 0x01F: /* an item in a slot: count 0x04, item 0x08, bag 0x0A, slot 0x0B, locked 0x0C */
+    case 0x020: /* the same, with more: count 0x04, price 0x08, item 0x0C, bag 0x0E, slot 0x0F, locked 0x10 */
+    {
+        int wide = id == 0x020;
+        if (size < (wide ? 0x11u : 0x0Du))
+            break;
+        uint8_t bag = p[wide ? 0x0E : 0x0A], slot = p[wide ? 0x0F : 0x0B];
+        if (bag < BAGS && slot < BAG_SLOTS)
+        {
+            GameSlot* s = &g_bag[bag][slot];
+            s->count = u32(p + 0x04), s->item = u16(p + (wide ? 0x0C : 0x08)), s->locked = p[wide ? 0x10 : 0x0C];
+            if (!s->count)
+                s->item = 0;
+        }
+        break;
+    }
+    case 0x01E: /* a count: 0x04, bag 0x08, slot 0x09, locked 0x0A */
+        if (size >= 0x0B && p[0x08] < BAGS && p[0x09] < BAG_SLOTS)
+        {
+            GameSlot* s = &g_bag[p[0x08]][p[0x09]];
+            s->count = u32(p + 0x04), s->locked = p[0x0A];
+            if (!s->count)
+                s->item = 0;
+        }
+        break;
+    case 0x050: /* worn: the bag slot 0x04, the equipment slot 0x05, the bag 0x06 */
+        if (size >= 0x07 && p[0x05] < EQUIP_SLOTS)
+        {
+            g_equip[p[0x05]].slot = p[0x04], g_equip[p[0x05]].bag = p[0x06], g_equip[p[0x05]].worn = p[0x04] != 255;
+        }
+        break;
+    }
+}
+
+int gamestate_bag_size(int bag) { return bag >= 0 && bag < BAGS ? g_bag_size[bag] : 0; }
+
+const GameSlot* gamestate_slot(int bag, int slot)
+{
+    return bag >= 0 && bag < BAGS && slot >= 0 && slot < BAG_SLOTS && g_bag[bag][slot].item ? &g_bag[bag][slot] : NULL;
+}
+
+int gamestate_equipped(int equip_slot, int* bag, int* slot)
+{
+    if (equip_slot < 0 || equip_slot >= EQUIP_SLOTS || !g_equip[equip_slot].worn)
+        return 0;
+    *bag = g_equip[equip_slot].bag, *slot = g_equip[equip_slot].slot;
+    return 1;
 }
 
 int gamestate_marks(const char* name, uint16_t* marks, uint8_t* gm, uint32_t* ls)

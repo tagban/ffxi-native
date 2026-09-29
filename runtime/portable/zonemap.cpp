@@ -708,6 +708,21 @@ void make(int zone, float me_x, float me_y, float me_z)
 }
 } // namespace
 
+extern "C" int zonemap_file_path(unsigned id, char* out, size_t n)
+{
+    std::string path;
+    {
+        std::lock_guard<std::mutex> hold(g_lock);
+        if (g_game.empty())
+            return 0;
+    }
+    path = file_path(id);
+    if (path.empty())
+        return 0;
+    snprintf(out, n, "%s", path.c_str());
+    return 1;
+}
+
 extern "C" void zonemap_init(const char* game_dir, const uint8_t keys[256])
 {
     std::lock_guard<std::mutex> hold(g_lock);

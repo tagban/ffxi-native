@@ -6,6 +6,7 @@
  * renderer/ffxi/{dat,mzb,filetable}.cpp and the walkable raster in renderer/collision.cpp. */
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -37,6 +38,8 @@ void zonemap_want(int zone, float x, float y, float z);
  * fields filled (art, art_scale, art_ox, art_oy). */
 int zonemap_take(int zone, ZoneMap* out);
 int zonemap_take_art(int zone, ZoneMap* out);
+/* The install's path for a file id (its VTABLE/FTABLE, and each expansion's): 0 if not installed */
+int zonemap_file_path(unsigned id, char* out, size_t n);
 
 #ifdef __cplusplus
 }

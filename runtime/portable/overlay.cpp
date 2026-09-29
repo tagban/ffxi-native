@@ -3,8 +3,10 @@
 #include "overlay.h"
 #include "gamestate.h"
 #include "zonemap.h"
+#include "itemdat.h"
 
 #include <float.h>
+#include <unordered_map>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -105,6 +107,7 @@ static struct
     float map_range = 50.0f; /* yalms from the middle to the edge */
     bool map_north_up = false, map_names = false;
     bool map_art = true; /* the game's own map under the radar, where there is one */
+    bool equip = false, items = false; /* the equipment and item windows */
 } g_set;
 static char g_ini[1024];
 static struct
@@ -562,6 +565,8 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "map_north_up=%d", &v) == 1) g_set.map_north_up = v != 0;
     else if (sscanf(line, "map_names=%d", &v) == 1) g_set.map_names = v != 0;
     else if (sscanf(line, "map_art=%d", &v) == 1) g_set.map_art = v != 0;
+    else if (sscanf(line, "equip=%d", &v) == 1) g_set.equip = v != 0;
+    else if (sscanf(line, "items=%d", &v) == 1) g_set.items = v != 0;
 }
 
 static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextBuffer* out)
@@ -570,6 +575,7 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("chat=%d\nparty=%d\nmap=%d\nstatus=%d\n", g_set.chat, g_set.party, g_set.map, g_set.status);
     out->appendf("ui_size=%g\nchat_size=%g\nmap_range=%g\n", g_set.ui_size, g_set.chat_size, g_set.map_range);
     out->appendf("map_north_up=%d\nmap_names=%d\nmap_art=%d\n", g_set.map_north_up, g_set.map_names, g_set.map_art);
+    out->appendf("equip=%d\nitems=%d\n", g_set.equip, g_set.items);
     out->appendf("target=%d\nhide_game_log=%d\nhide_game_party=%d\nhide_game_target=%d\n", g_set.target, g_set.hide_game_log,
         g_set.hide_game_party, g_set.hide_game_target);
     out->appendf("plates=%d\nplate_size=%g\nplate_outline=%d\n", g_set.plates, g_set.plate_size, g_set.plate_outline);
@@ -610,6 +616,9 @@ static void overlay_window(void)
         dirty |= ImGui::Checkbox("Map", &g_set.map);
         dirty |= ImGui::Checkbox("Target", &g_set.target);
         ImGui::SameLine(100);
+        dirty |= ImGui::Checkbox("Equipment", &g_set.equip);
+        ImGui::SameLine(190);
+        dirty |= ImGui::Checkbox("Items", &g_set.items);
         dirty |= ImGui::Checkbox("Performance", &g_set.status);
         if (g_plates_available)
         {
@@ -1180,6 +1189,300 @@ static void party_window(void)
     ImGui::PopStyleVar(2);
 }
 
+/* --- items: icons, and the equipment and item windows ------------------------------------------ */
+/* Icons from the install's item DATs (itemdat.h), 32x32 each in one 1024x1024 texture, filled as
+ * items are first shown. */
+static ImTextureData* g_icons;
+static std::unordered_map<uint16_t, int> g_icon_cell; /* item -> cell, -1 when it has none */
+static int g_icon_next;
+
+static bool item_icon(uint16_t item, ImVec2* uv0, ImVec2* uv1)
+{
+    auto found = g_icon_cell.find(item);
+    int cell;
+    if (found != g_icon_cell.end())
+        cell = found->second;
+    else
+    {
+        const ItemInfo* it = item_info(item);
+        cell = -1;
+        if (it && it->has_icon)
+        {
+            if (!g_icons)
+            {
+                g_icons = IM_NEW(ImTextureData)();
+                g_icons->Create(ImTextureFormat_RGBA32, 1024, 1024);
+                g_icons->UseColors = true;
+                ImGui::RegisterUserTexture(g_icons);
+            }
+            if (g_icon_next >= 32 * 32)
+            {
+                g_icon_next = 0; /* full: start again (those shown again are filled again) */
+                g_icon_cell.clear();
+            }
+            cell = g_icon_next++;
+            int cx = cell % 32 * 32, cy = cell / 32 * 32;
+            for (int y = 0; y < 32; ++y)
+                memcpy(g_icons->GetPixelsAt(cx, cy + y), it->icon + y * 32 * 4, 32 * 4);
+            if (g_icons->Status == ImTextureStatus_OK || g_icons->Status == ImTextureStatus_WantUpdates)
+            {
+                ImTextureRect r = { (unsigned short)cx, (unsigned short)cy, 32, 32 };
+                g_icons->Updates.push_back(r);
+                g_icons->UpdateRect = r;
+                g_icons->SetStatus(ImTextureStatus_WantUpdates);
+            }
+        }
+        g_icon_cell[item] = cell;
+    }
+    if (cell < 0)
+        return false;
+    float u = (cell % 32) / 32.0f, v = (cell / 32) / 32.0f;
+    *uv0 = ImVec2(u, v), *uv1 = ImVec2(u + 1 / 32.0f, v + 1 / 32.0f);
+    return true;
+}
+
+/* an item's icon as an item of the window, with its count; true when clicked */
+static bool item_button(const char* id, uint16_t item, uint32_t count, float size, bool worn)
+{
+    ImVec2 uv0, uv1;
+    ImGui::PushID(id);
+    ImVec2 at = ImGui::GetCursorScreenPos();
+    bool clicked = ImGui::InvisibleButton("item", ImVec2(size, size));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(at, ImVec2(at.x + size, at.y + size), IM_COL32(20, 22, 28, 200), 4);
+    if (item && item_icon(item, &uv0, &uv1))
+        dl->AddImage(g_icons->GetTexRef(), ImVec2(at.x + 2, at.y + 2), ImVec2(at.x + size - 2, at.y + size - 2), uv0, uv1);
+    if (ImGui::IsItemHovered())
+        dl->AddRect(at, ImVec2(at.x + size, at.y + size), IM_COL32(255, 255, 255, 120), 4);
+    if (worn)
+        dl->AddText(ImVec2(at.x + 3, at.y + 1), IM_COL32(120, 230, 255, 255), "E");
+    if (count > 1)
+    {
+        char n[12];
+        snprintf(n, sizeof n, "%u", count);
+        ImVec2 ts = ImGui::CalcTextSize(n);
+        dl->AddText(ImVec2(at.x + size - ts.x - 3 + 1, at.y + size - ts.y), IM_COL32(0, 0, 0, 220), n);
+        dl->AddText(ImVec2(at.x + size - ts.x - 3, at.y + size - ts.y - 1), IM_COL32(255, 255, 255, 255), n);
+    }
+    ImGui::PopID();
+    return clicked;
+}
+
+static void item_tooltip(uint16_t item)
+{
+    const ItemInfo* it = item_info(item);
+    if (!it)
+        return;
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted(it->name);
+    if (it->level)
+        ImGui::TextDisabled("Lv. %u", it->level);
+    if (it->desc[0])
+    {
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 20);
+        ImGui::TextUnformatted(it->desc);
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::EndTooltip();
+}
+
+/* the game's names for its equipment slots, as /equip takes them */
+static const char* const EQUIP_NAME[EQUIP_SLOTS] = { "main", "sub", "range", "ammo", "head", "body", "hands", "legs",
+                                                     "feet", "neck", "waist", "ear1", "ear2", "ring1", "ring2", "back" };
+static const char* const EQUIP_LABEL[EQUIP_SLOTS] = { "Main", "Sub", "Range", "Ammo", "Head", "Body", "Hands", "Legs",
+                                                      "Feet", "Neck", "Waist", "Ear 1", "Ear 2", "Ring 1", "Ring 2", "Back" };
+/* the bags equipment can be worn from: the inventory and the wardrobes */
+static const int WEAR_BAGS[] = { 0, 8, 10, 11, 12, 13, 14, 15, 16 };
+
+static void run_equip(int slot, const char* name)
+{
+    char line[128];
+    if (name)
+        snprintf(line, sizeof line, "/equip %s \"%s\"", EQUIP_NAME[slot], name);
+    else
+        snprintf(line, sizeof line, "/equip %s", EQUIP_NAME[slot]); /* nothing: takes it off */
+    g_run_line(line);
+}
+
+/* the slot an item goes in when equipped from the bags: its first (a ring's or an earring's, the
+ * first free of the pair) */
+static int slot_for(const ItemInfo* it)
+{
+    if (!it || !(it->type == ITEM_WEAPON || it->type == ITEM_ARMOR) || !it->slots)
+        return -1;
+    int b, s;
+    for (int k = 0; k < EQUIP_SLOTS; ++k)
+        if (it->slots >> k & 1)
+        {
+            if ((k == 11 || k == 13) && (it->slots >> (k + 1) & 1) && gamestate_equipped(k, &b, &s))
+                return k + 1; /* the first of the pair is taken: the second */
+            return k;
+        }
+    return -1;
+}
+
+static void equipment_window(void)
+{
+    ImGui::SetNextWindowPos(ImVec2(900, 300), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Equipment", &g_set.equip, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
+    /* the game's own order: weapons, then head, neck, ears; body, hands, rings; back, waist, legs, feet */
+    static const int ORDER[EQUIP_SLOTS] = { 0, 1, 2, 3, 4, 9, 11, 12, 5, 6, 13, 14, 15, 10, 7, 8 };
+    float size = ImGui::GetFontSize() * 2.6f;
+    static int choosing = -1;
+    for (int i = 0; i < EQUIP_SLOTS; ++i)
+    {
+        int slot = ORDER[i], bag, at;
+        const GameSlot* s = gamestate_equipped(slot, &bag, &at) ? gamestate_slot(bag, at) : NULL;
+        if (i % 4)
+            ImGui::SameLine();
+        if (item_button(EQUIP_LABEL[slot], s ? s->item : 0, 0, size, false) && g_run_line)
+        {
+            choosing = slot;
+            ImGui::OpenPopup("choose");
+        }
+        if (ImGui::IsItemHovered())
+        {
+            if (s)
+                item_tooltip(s->item);
+            else
+                ImGui::SetTooltip("%s: nothing", EQUIP_LABEL[slot]);
+        }
+    }
+    if (ImGui::BeginPopup("choose"))
+    {
+        /* what can go in the slot, from the inventory and the wardrobes */
+        ImGui::TextDisabled("%s", choosing >= 0 ? EQUIP_LABEL[choosing] : "");
+        ImGui::Separator();
+        int shown = 0;
+        for (int b : WEAR_BAGS)
+            for (int k = 0; k < gamestate_bag_size(b) && k < BAG_SLOTS; ++k)
+            {
+                const GameSlot* s = gamestate_slot(b, k);
+                const ItemInfo* it = s ? item_info(s->item) : NULL;
+                if (!it || choosing < 0 || !(it->slots >> choosing & 1))
+                    continue;
+                ImVec2 uv0, uv1;
+                ImGui::PushID(b * 100 + k);
+                if (item_icon(s->item, &uv0, &uv1))
+                {
+                    ImGui::Image(g_icons->GetTexRef(), ImVec2(ImGui::GetFontSize() * 1.3f, ImGui::GetFontSize() * 1.3f), uv0, uv1);
+                    ImGui::SameLine();
+                }
+                char label[96];
+                snprintf(label, sizeof label, "%s%s", it->name, s->locked ? "  (worn)" : "");
+                if (ImGui::Selectable(label))
+                {
+                    run_equip(choosing, it->name);
+                    ImGui::CloseCurrentPopup();
+                }
+                if (ImGui::IsItemHovered())
+                    item_tooltip(s->item);
+                ImGui::PopID();
+                ++shown;
+            }
+        if (!shown)
+            ImGui::TextDisabled("Nothing for it in your bags");
+        ImGui::Separator();
+        if (ImGui::Selectable("Take it off"))
+        {
+            run_equip(choosing, NULL);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::End();
+}
+
+static void items_window(void)
+{
+    static const char* const BAG_NAME[BAGS] = { "Inventory", "Safe", "Storage", "Temporary", "Locker", "Satchel", "Sack", "Case",
+                                                "Wardrobe", "Safe 2", "Wardrobe 2", "Wardrobe 3", "Wardrobe 4", "Wardrobe 5",
+                                                "Wardrobe 6", "Wardrobe 7", "Wardrobe 8", "Recycle" };
+    ImGui::SetNextWindowPos(ImVec2(900, 520), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(430, 360), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Items", &g_set.items))
+    {
+        ImGui::End();
+        return;
+    }
+    static char find[48];
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##find", "Find an item", find, sizeof find);
+    if (ImGui::BeginTabBar("bags", ImGuiTabBarFlags_FittingPolicyScroll))
+    {
+        for (int b = 0; b < BAGS; ++b)
+        {
+            int size = gamestate_bag_size(b);
+            if (!size || b == 3 || b == 17)
+                continue;
+            int used = 0;
+            for (int k = 1; k <= size && k < BAG_SLOTS; ++k)
+                used += gamestate_slot(b, k) != NULL;
+            char tab[40];
+            snprintf(tab, sizeof tab, "%s %d/%d###bag%d", BAG_NAME[b], used, size, b);
+            if (!ImGui::BeginTabItem(tab))
+                continue;
+            float cell = ImGui::GetFontSize() * 2.4f, gap = ImGui::GetStyle().ItemSpacing.x;
+            int per_row = ImMax(1, (int)((ImGui::GetContentRegionAvail().x + gap) / (cell + gap)));
+            int n = 0;
+            ImGui::BeginChild("slots");
+            for (int k = 1; k <= size && k < BAG_SLOTS; ++k) /* slot 0 is the gil's */
+            {
+                const GameSlot* s = gamestate_slot(b, k);
+                if (!s)
+                    continue;
+                const ItemInfo* it = item_info(s->item);
+                if (find[0] && (!it || !strcasestr(it->name, find)))
+                    continue;
+                if (n++ % per_row)
+                    ImGui::SameLine();
+                char id[16];
+                snprintf(id, sizeof id, "%d.%d", b, k);
+                item_button(id, s->item, s->count, cell, s->locked && (it && (it->type == ITEM_WEAPON || it->type == ITEM_ARMOR)));
+                if (ImGui::IsItemHovered())
+                    item_tooltip(s->item);
+                /* right-click: what can be done with it, each the game's own command */
+                if (it && g_run_line && ImGui::BeginPopupContextItem("do"))
+                {
+                    ImGui::TextDisabled("%s", it->name);
+                    ImGui::Separator();
+                    int slot = slot_for(it);
+                    bool wearable = slot >= 0 && (b == 0 || b == 8 || b >= 10);
+                    if (wearable && ImGui::MenuItem("Equip"))
+                        run_equip(slot, it->name);
+                    if (it->type == ITEM_USABLE && b == 0)
+                    {
+                        char line[128];
+                        if (ImGui::MenuItem("Use"))
+                        {
+                            snprintf(line, sizeof line, "/item \"%s\" <me>", it->name);
+                            g_run_line(line);
+                        }
+                        if (ImGui::MenuItem("Use on your target"))
+                        {
+                            snprintf(line, sizeof line, "/item \"%s\" <t>", it->name);
+                            g_run_line(line);
+                        }
+                    }
+                    if (!wearable && !(it->type == ITEM_USABLE && b == 0))
+                        ImGui::TextDisabled("Nothing to do with it here");
+                    ImGui::EndPopup();
+                }
+            }
+            if (!n)
+                ImGui::TextDisabled(find[0] ? "Nothing by that name here" : "Empty");
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::End();
+}
+
 /* --- the target ---------------------------------------------------------------------------------- */
 /* The player's target, small: its name, HP, how far. The game's own target window stays. */
 static void target_window(void)
@@ -1513,7 +1816,7 @@ extern "C" void overlay_build_frame(void)
     ImGui::GetIO().FontDefault = font_named(g_set.ui_font);
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
-    bool was[5] = { g_set.chat, g_set.party, g_set.map, g_set.status, g_set.target };
+    bool was[7] = { g_set.chat, g_set.party, g_set.map, g_set.status, g_set.target, g_set.equip, g_set.items };
     if (g_shown && g_set.plates)
         draw_nameplates();
     else
@@ -1532,13 +1835,18 @@ extern "C" void overlay_build_frame(void)
         map_colors_window();
         if (g_set.target)
             target_window();
+        if (g_set.equip)
+            equipment_window();
+        if (g_set.items)
+            items_window();
     }
     g_send_open = 0; /* not taken up by the chat box this frame: dropped, so no key stays caught */
     /* the game's own windows the overlay's stand in for: back whenever the overlay is hidden */
     if (g_hide_game)
         g_hide_game(g_shown && g_set.chat && g_set.hide_game_log, g_shown && g_set.party && g_set.hide_game_party,
             g_shown && g_set.target && g_set.hide_game_target);
-    if (was[0] != g_set.chat || was[1] != g_set.party || was[2] != g_set.map || was[3] != g_set.status || was[4] != g_set.target)
+    if (was[0] != g_set.chat || was[1] != g_set.party || was[2] != g_set.map || was[3] != g_set.status || was[4] != g_set.target ||
+        was[5] != g_set.equip || was[6] != g_set.items)
         ImGui::MarkIniSettingsDirty(); /* a window closed with its x */
     ImGui::Render();
 }

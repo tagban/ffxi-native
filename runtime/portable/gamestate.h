@@ -69,6 +69,22 @@ enum
 {
     MARK_GM = 1, MARK_MENTOR = 2, MARK_NEW = 4, MARK_LFG = 8, MARK_AWAY = 16, MARK_ANON = 32, MARK_BAZAAR = 64, MARK_LS = 128,
 };
+/* The player's bags and what they wear (the server's 0x01C sizes, 0x01F / 0x020 an item in a slot,
+ * 0x01E its count, 0x050 an equipment slot's item): containers 0 inventory, 1 safe, 2 storage,
+ * 3 temporary, 4 locker, 5 satchel, 6 sack, 7 case, 8 wardrobe, 9 safe 2, 10-16 wardrobes 2-8. */
+enum { BAGS = 18, BAG_SLOTS = 81, EQUIP_SLOTS = 16 };
+typedef struct
+{
+    uint16_t item; /* 0 empty */
+    uint32_t count;
+    uint8_t locked; /* equipped, or otherwise bound in place */
+} GameSlot;
+int gamestate_bag_size(int bag);
+const GameSlot* gamestate_slot(int bag, int slot);
+/* what is worn in an equipment slot (0 main, 1 sub, 2 range, 3 ammo, 4 head, 5 body, 6 hands, 7 legs,
+ * 8 feet, 9 neck, 10 waist, 11-12 ears, 13-14 rings, 15 back): where it is kept; 0 when nothing */
+int gamestate_equipped(int equip_slot, int* bag, int* slot);
+
 /* A player's marks by name (the player too, from their own status): 0 when unknown */
 int gamestate_marks(const char* name, uint16_t* marks, uint8_t* gm, uint32_t* ls);
 int gamestate_entities(GameEntity* out, int max);
