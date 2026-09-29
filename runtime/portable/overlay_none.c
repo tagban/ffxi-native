@@ -11,7 +11,7 @@ void overlay_note_present(int frame_w, int frame_h, int screen_w, int screen_h, 
 }
 void overlay_build_frame(void) {}
 void overlay_set_line_runner(int (*run)(const char* line)) { (void)run; }
-void overlay_set_game_windows(void (*hide)(int log, int party)) { (void)hide; }
+void overlay_set_game_windows(void (*hide)(int log, int party), const char* (*focus)(void)) { (void)hide, (void)focus; }
 void overlay_set_nameplates_available(int yes) { (void)yes; }
 int overlay_nameplates_wanted(void) { return 0; }
 void overlay_nameplate(float x, float y, const char* text, uint32_t color) { (void)x, (void)y, (void)text, (void)color; }

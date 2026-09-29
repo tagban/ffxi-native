@@ -77,6 +77,9 @@ static void chat_register(void);
 static void overlay_register(void);
 static int (*g_run_line)(const char* line); /* host64: the game's parser of a typed line */
 static void (*g_hide_game)(int log, int party);  /* host64: the game's own windows off the screen */
+static const char* (*g_game_focus)(void);         /* host64: the game's window with the keyboard */
+static int g_send_open;                           /* 1 the box asked to open (Space), 2 with "/" */
+static bool g_swallow_text;                        /* the key's own character, not to be typed */
 
 /* The names over heads this frame, as the game placed them (host64's nameplate hook) */
 static bool g_plates_available;
@@ -201,7 +204,7 @@ extern "C" int overlay_nameplates_wanted(void)
     return g_ready && g_shown && g_plates_available && g_set.plates;
 }
 
-extern "C" void overlay_nameplate(float x, float y, const char* text, uint32_t color)
+extern "C" void overlay_nameplate(float x, float y, const char* text, uint32_t color) /* x, y: 0-1 across the view */
 {
     if (g_nplates >= (int)(sizeof g_plates / sizeof *g_plates))
         return;
@@ -223,14 +226,11 @@ extern "C" void overlay_nameplate(float x, float y, const char* text, uint32_t c
 /* The names, drawn under every window, where the game put them (its 3D frame to the window) */
 static void draw_nameplates(void)
 {
-    if (!g_nplates || !g_present.frame_w || !g_present.frame_h)
-    {
-        g_nplates = 0;
+    if (!g_nplates)
         return;
-    }
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     ImVec2 disp = ImGui::GetIO().DisplaySize;
-    float kx = disp.x / (float)g_present.frame_w, ky = disp.y / (float)g_present.frame_h;
+    float kx = disp.x, ky = disp.y; /* the 3D view fills the window */
     ImFont* font = font_named(g_set.plate_font);
     float size = g_set.plate_size;
     for (int i = 0; i < g_nplates; ++i)
@@ -251,9 +251,24 @@ static void draw_nameplates(void)
     g_nplates = 0; /* the next frame's come as the game draws them */
 }
 
-extern "C" void overlay_set_game_windows(void (*hide)(int log, int party))
+extern "C" void overlay_set_game_windows(void (*hide)(int log, int party), const char* (*focus)(void))
 {
     g_hide_game = hide;
+    g_game_focus = focus;
+}
+
+/* Typing, when the game's log is hidden: the keys that open the game's own input line (Space, and
+ * "/") open the overlay's chat box instead, while no menu of the game's has the keyboard. */
+static bool typing_is_ours(const SDL_KeyboardEvent& k)
+{
+    if (!g_shown || !g_set.chat || !g_set.hide_game_log || !g_run_line || !dsound_in_world() || k.repeat)
+        return false;
+    if (k.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI))
+        return false;
+    if (k.key != SDLK_SPACE && k.key != SDLK_SLASH)
+        return false;
+    const char* focus = g_game_focus ? g_game_focus() : "";
+    return !focus[0] || !strncmp(focus, "logwin", 6) || !strncmp(focus, "fulllog", 7);
 }
 
 extern "C" void overlay_set_line_runner(int (*run)(const char* line))
@@ -285,9 +300,22 @@ extern "C" int overlay_event(const SDL_Event* e)
     }
     if (e->type == SDL_EVENT_KEY_UP && e->key.key == SDLK_U && (e->key.mod & (SDL_KMOD_GUI | SDL_KMOD_CTRL)))
         return 1;
+    if (e->type == SDL_EVENT_TEXT_INPUT && g_swallow_text)
+    {
+        g_swallow_text = false; /* the Space or / that opened the box */
+        return 1;
+    }
+    if (e->type == SDL_EVENT_KEY_DOWN && !ImGui::GetIO().WantTextInput && typing_is_ours(e->key))
+    {
+        g_send_open = e->key.key == SDLK_SLASH ? 2 : 1;
+        g_swallow_text = true;
+        return 1;
+    }
     ImGui_ImplSDL3_ProcessEvent(e);
     if (!g_shown)
         return 0;
+    if (g_send_open && (e->type == SDL_EVENT_KEY_DOWN || e->type == SDL_EVENT_TEXT_INPUT))
+        return 1; /* typed before the box has opened: the box's */
     const ImGuiIO& io = ImGui::GetIO();
     switch (e->type)
     {
@@ -448,7 +476,7 @@ static const ImU32 KIND_DEFAULT[KINDS] = {
     IM_COL32(150, 255, 140, 255), /* linkshell 1 */
     IM_COL32(200, 255, 110, 255), /* linkshell 2 */
     IM_COL32(210, 180, 255, 255), /* emote */
-    IM_COL32(255, 255, 255, 255), /* NPC */
+    IM_COL32(215, 240, 215, 255), /* NPC: the say color, a little green, to stand apart */
     IM_COL32(230, 225, 180, 255), /* battle */
     IM_COL32(200, 200, 200, 255), /* system */
 };
@@ -527,6 +555,8 @@ static void chat_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const cha
         for (int k = 0; k < KINDS; ++k)
             if (!strcmp(key, KIND_KEY[k]))
                 g_kind_col[k] = IM_COL32(rgb >> 16 & 255, rgb >> 8 & 255, rgb & 255, 255);
+        if (!strcmp(key, "npc") && rgb == 0xFFFFFF)
+            g_kind_col[NPC] = 0; /* the first builds' default (the say color): the new default */
     }
     else if (sscanf(line, "tab=%x|", &kinds) == 1 && g_ntabs < 16)
     {
@@ -661,6 +691,19 @@ static void chat_lines(const Tab& t)
             Kind k = kind_of(mode);
             if (!(t.kinds >> k & 1) || !has_words(text, t.words))
                 continue;
+            if (k == NPC)
+            {
+                /* a small speech bubble before an NPC's line */
+                float h = ImGui::GetTextLineHeight();
+                ImVec2 a = ImGui::GetCursorScreenPos();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                ImU32 c = IM_COL32(110, 220, 120, 230);
+                ImVec2 b0(a.x + 1, a.y + h * 0.18f), b1(a.x + h * 0.95f, a.y + h * 0.72f);
+                dl->AddRectFilled(b0, b1, c, h * 0.2f);
+                dl->AddTriangleFilled(ImVec2(b0.x + h * 0.2f, b1.y - 1), ImVec2(b0.x + h * 0.45f, b1.y - 1), ImVec2(b0.x + h * 0.15f, a.y + h * 0.95f), c);
+                ImGui::Dummy(ImVec2(h * 1.05f, h));
+                ImGui::SameLine(0, 2);
+            }
             ImGui::PushStyleColor(ImGuiCol_Text, g_kind_col[k]);
             if (sender[0])
                 ImGui::TextWrapped("%s: %s", sender, text);
@@ -685,7 +728,7 @@ static const struct
 };
 static int g_send_to;
 static char g_send[256];
-static bool g_send_refocus;
+static bool g_send_refocus, g_send_fresh;
 
 static void chat_box(void)
 {
@@ -701,13 +744,29 @@ static void chat_box(void)
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
+    if (g_send_open)
+    {
+        /* opened by the game's own keys: Space empty, "/" with it typed */
+        if (g_send_open == 2)
+            snprintf(g_send, sizeof g_send, "/");
+        g_send_open = 0;
+        g_send_refocus = true;
+    }
     if (g_send_refocus)
     {
         ImGui::SetKeyboardFocusHere();
         g_send_refocus = false;
+        g_send_fresh = true;
     }
-    const char* hint = g_send_to == 6 ? "name, then the message" : "Type here; Enter sends, Esc leaves";
-    if (ImGui::InputTextWithHint("##send", hint, g_send, sizeof g_send, ImGuiInputTextFlags_EnterReturnsTrue))
+    const char* hint = g_send_to == 6 ? "name, then the message" : "Space or / to type; Enter sends, Esc leaves";
+    /* the cursor at the end of what is there (a "/"), not all of it selected */
+    auto to_end = [](ImGuiInputTextCallbackData* d) -> int {
+        if (g_send_fresh)
+            d->CursorPos = d->SelectionStart = d->SelectionEnd = d->BufTextLen, g_send_fresh = false;
+        return 0;
+    };
+    if (ImGui::InputTextWithHint("##send", hint, g_send, sizeof g_send, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways,
+            to_end))
     {
         const char* t = g_send;
         while (*t == ' ')
@@ -718,8 +777,7 @@ static void chat_box(void)
             snprintf(line, sizeof line, "%s%s", *t == '/' ? "" : SEND_TO[g_send_to].prefix, t);
             g_run_line(line);
         }
-        g_send[0] = 0;
-        g_send_refocus = true; /* stay in the box for the next line */
+        g_send[0] = 0; /* and the box closes, as the game's input line does */
     }
 }
 
@@ -728,6 +786,8 @@ static void chat_window(void)
     chat_defaults();
     ImGui::SetNextWindowPos(ImVec2(24, 220), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(560, 280), ImGuiCond_FirstUseEver);
+    if (g_send_open)
+        ImGui::SetNextWindowCollapsed(false); /* typing opens it */
     if (ImGui::Begin("Chat", &g_set.chat))
     {
         if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_FittingPolicyScroll))
@@ -1145,6 +1205,7 @@ extern "C" void overlay_build_frame(void)
         if (g_set.target)
             target_window();
     }
+    g_send_open = 0; /* not taken up by the chat box this frame: dropped, so no key stays caught */
     /* the game's own windows the overlay's stand in for: back whenever the overlay is hidden */
     if (g_hide_game)
         g_hide_game(g_shown && g_set.chat && g_set.hide_game_log, g_shown && g_set.party && g_set.hide_game_party);

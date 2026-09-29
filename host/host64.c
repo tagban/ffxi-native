@@ -248,9 +248,13 @@ static void nameplate_scale(Guest* g)
      * drawn at no size at all. */
     if (overlay_nameplates_wanted())
     {
-        uint32_t text = rd32(g->esp + 0x6dc), color = rd32(g->esp + 0x6e4);
-        if (text && gwin_is_committed(text))
-            overlay_nameplate(rdf32(g->esp + 0x30), rdf32(g->esp + 0x34), (const char*)GUEST_PTR(text), color);
+        uint32_t text = rd32(g->esp + 0x6dc), color = rd32(g->esp + 0x6e4), vx, vy, vw, vh;
+        /* the point is in the viewport the game projected it into (its own units, which are not
+         * the frame's): handed on as a fraction of it */
+        d3d8_viewport(&vx, &vy, &vw, &vh);
+        if (text && gwin_is_committed(text) && vw && vh)
+            overlay_nameplate((rdf32(g->esp + 0x30) - (float)vx) / (float)vw, (rdf32(g->esp + 0x34) - (float)vy) / (float)vh,
+                (const char*)GUEST_PTR(text), color);
         wrf32(g->esp + 0x4c, 0.0f);
         wrf32(g->esp + 0x50, 0.0f);
         return;
@@ -471,6 +475,16 @@ static void find_game_windows(void)
     }
 }
 
+/* the game's window with the keyboard now (the manager's +0x54): its name, "" for none */
+static const char* game_focus(void)
+{
+    if (!MENU_MGR || !gwin_is_committed(MENU_MGR + 0x54))
+        return "";
+    uint32_t win = rd32(MENU_MGR + 0x54);
+    const char* name = win ? game_window_name(win) : NULL;
+    return name ? name : "";
+}
+
 /* each frame (the overlay's): which of the game's windows the overlay stands in for now */
 static void hide_game_windows(int log, int party)
 {
@@ -526,6 +540,7 @@ static void hide_game_windows(int log, int party)
         {
             pos[0] = w->x, pos[1] = w->y;
             w->moved = 0;
+            rt_log("[recomp] game window %.8s: back at %d,%d\n", w->name, w->x, w->y);
         }
         any_moved |= w->moved;
     }
@@ -559,7 +574,7 @@ static void setup_packets(void)
     gamestate_set_entity_map(ENTITY_MAP);
     gamestate_set_target_ptr(TARGET_PTR);
     if (MENU_MGR)
-        overlay_set_game_windows(hide_game_windows);
+        overlay_set_game_windows(hide_game_windows, game_focus);
     GuestFn* ca = CHAT_ADD_HOOK;
     if (ca)
         *ca = chat_add;

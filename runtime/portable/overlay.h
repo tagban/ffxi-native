@@ -28,15 +28,16 @@ void overlay_note_present(int frame_w, int frame_h, int screen_w, int screen_h, 
 void overlay_set_line_runner(int (*run)(const char* line));
 
 /* How the overlay hides the game's own windows its own stand in for (host64: moved off the screen
- * and back), called every frame: the game's chat log, its party list. */
-void overlay_set_game_windows(void (*hide)(int log, int party));
+ * and back), called every frame: the game's chat log, its party list; and which of the game's
+ * windows has the keyboard ("" none, else its 8-character name). */
+void overlay_set_game_windows(void (*hide)(int log, int party), const char* (*focus)(void));
 
 /* The names over heads, when the overlay draws them (host64's nameplate hook, where the build has
- * one): whether it wants them now, and each one as the game placed it this frame (its 3D frame's
- * pixels; the game's text, with its own codes; its color, 0x80 full in each channel). */
+ * one): whether it wants them now, and each one as the game placed it this frame (where in its 3D
+ * view; the game's text, with its own codes; its color, 0x80 full in each channel). */
 void overlay_set_nameplates_available(int yes);
 int overlay_nameplates_wanted(void);
-void overlay_nameplate(float x, float y, const char* text, uint32_t color);
+void overlay_nameplate(float fx, float fy, const char* text, uint32_t color); /* fx, fy: 0-1 across the 3D view */
 
 /* The back end's part: overlay.cpp builds the frame, the back end draws it (overlay_metal.mm). */
 void overlay_build_frame(void);

@@ -1059,6 +1059,11 @@ void d3d8_screen_size(uint32_t* w, uint32_t* h)
         user32_shown_size(g_dev.hwnd, w, h); /* the shape the frame is seen at */
 }
 
+void d3d8_viewport(uint32_t* x, uint32_t* y, uint32_t* w, uint32_t* h)
+{
+    *x = g_dev.cur.vp[0], *y = g_dev.cur.vp[1], *w = g_dev.cur.vp[2], *h = g_dev.cur.vp[3];
+}
+
 static void ui_present(void);
 
 static void IDirect3DDevice8_Present(Guest* g)
