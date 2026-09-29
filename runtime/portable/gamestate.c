@@ -879,11 +879,113 @@ int gamestate_load_autotranslate(const char* path)
     return g_nphrases;
 }
 
+static void resolve_phrase_refs(void);
+
 static const char* phrase(uint32_t key)
 {
+    resolve_phrase_refs();
     Phrase k = { key, NULL };
     const Phrase* p = g_phrases ? (const Phrase*)bsearch(&k, g_phrases, (size_t)g_nphrases, sizeof(Phrase), phrase_cmp) : NULL;
     return p ? p->text : NULL;
+}
+
+/* A d_msg file of the install (its name lists: areas, jobs, spells, abilities), by file id: the text
+ * of entry i, or NULL. Its header (0x40): 0x0A encoded (each byte after the header inverted), 0x18
+ * the header's size, 0x1C the table's (0: entries of one size, 0x20), 0x28 how many. The table: an
+ * offset (past the table) and a length each. An entry: how many fields, then each one's offset and
+ * kind; a text field four bytes of count and 24 of attributes, then the text. */
+typedef struct
+{
+    unsigned file;
+    uint8_t* body;
+    uint32_t size, table, each, count;
+} Dmsg;
+
+static const char* dmsg_text(Dmsg* m, uint32_t i)
+{
+    if (!m->body && m->file)
+    {
+        char path[1024];
+        unsigned id = m->file;
+        m->file = 0; /* read once, whether it is there or not */
+        FILE* f = zonemap_file_path(id, path, sizeof path) ? fopen(path, "rb") : NULL;
+        if (!f)
+            return NULL;
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        uint8_t* b = n > 0x40 ? (uint8_t*)malloc((size_t)n) : NULL;
+        int ok = b && fread(b, 1, (size_t)n, f) == (size_t)n && !memcmp(b, "d_msg", 5);
+        fclose(f);
+        if (!ok)
+        {
+            free(b);
+            return NULL;
+        }
+        uint32_t head = b[0x18] | b[0x19] << 8 | b[0x1A] << 16 | (uint32_t)b[0x1B] << 24;
+        if (head >= (uint32_t)n)
+        {
+            free(b);
+            return NULL;
+        }
+        m->table = b[0x1C] | b[0x1D] << 8 | b[0x1E] << 16 | (uint32_t)b[0x1F] << 24;
+        m->each = b[0x20] | b[0x21] << 8 | b[0x22] << 16 | (uint32_t)b[0x23] << 24;
+        m->count = b[0x28] | b[0x29] << 8 | b[0x2A] << 16 | (uint32_t)b[0x2B] << 24;
+        if (b[0x0A])
+            for (long k = head; k < n; ++k)
+                b[k] = (uint8_t)~b[k];
+        m->size = (uint32_t)n - head;
+        m->body = (uint8_t*)malloc(m->size + 1);
+        memcpy(m->body, b + head, m->size);
+        m->body[m->size] = 0;
+        free(b);
+    }
+    if (!m->body || i >= m->count)
+        return NULL;
+#define DM32(o) ((o) + 4 <= m->size ? (uint32_t)(m->body[o] | m->body[(o) + 1] << 8 | m->body[(o) + 2] << 16 | (uint32_t)m->body[(o) + 3] << 24) : 0u)
+    uint32_t e = m->table ? m->table + DM32(8 * i) : m->each * i;
+    uint32_t t = e + DM32(e + 4) + 28;
+#undef DM32
+    return t < m->size ? (const char*)m->body + t : NULL;
+}
+
+/* The dictionary's phrases that name something by its number in one of the game's lists ("@A F5":
+ * area 0xF5, Lower Jeuno), by that list's name, once the install's files can be found. A phrase
+ * whose name is not there (or is only ".") is left out of the search. */
+static int g_refs_done;
+static void resolve_phrase_refs(void)
+{
+    if (g_refs_done)
+        return;
+    char path[1024];
+    if (!zonemap_file_path(55465, path, sizeof path))
+        return; /* the install is not known yet */
+    g_refs_done = 1;
+    static Dmsg areas = { 55465 }, jobs = { 55467 }, spells = { 55702 }, abilities = { 55701 };
+    int named = 0, dropped = 0;
+    for (int i = 0; i < g_nphrases; ++i)
+    {
+        char* t = g_phrases[i].text;
+        if (t[0] != '@' || !t[1] || !t[2])
+            continue;
+        Dmsg* m = t[1] == 'A' ? &areas : t[1] == 'J' ? &jobs : t[1] == 'C' ? &spells : t[1] == 'Y' ? &abilities : NULL;
+        char* end;
+        unsigned long n = strtoul(t + 2, &end, 16);
+        const char* name = m && end != t + 2 ? dmsg_text(m, (uint32_t)n) : NULL;
+        if (name && name[0] && strcmp(name, "."))
+        {
+            size_t len = strlen(name);
+            char* copy = (char*)malloc(len + 1);
+            memcpy(copy, name, len + 1);
+            free(t);
+            g_phrases[i].text = copy;
+            ++named;
+        }
+        else
+            t[0] = 0, ++dropped;
+    }
+    extern void rt_log(const char* fmt, ...);
+    rt_log("[recomp] auto-translate: %d phrases named from the game's lists (areas, jobs, spells, abilities), %d without a name\n", named, dropped);
 }
 
 /* case aside: whether t starts with w at i */
@@ -900,6 +1002,7 @@ int gamestate_autotranslate_find(const char* typed, uint32_t* keys, const char**
     int n = 0;
     if (!typed || !typed[0] || !g_phrases)
         return 0;
+    resolve_phrase_refs();
     for (int pass = 0; pass < 2 && n < max; ++pass)
         for (int i = 0; i < g_nphrases && n < max; ++i)
         {

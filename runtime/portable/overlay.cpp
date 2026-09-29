@@ -88,6 +88,7 @@ static int (*g_focus_rect)(float* x, float* y, float* w, float* h); /* host64: w
 static void (*g_place_focus)(float x, float y);   /* host64: and moves it */
 static bool g_question;                            /* the one asking is a question (yes/no, a choice): it joins the chat */
 static bool g_asking;                              /* one of the game's own windows is asking something */
+static char g_asker[9];                            /* its name */
 static ImVec2 g_ask0, g_ask1;                      /* where, on the screen (the overlay's units) */
 static int g_send_open;                           /* the box asked to open: 1 empty, 2 with "/", 3 with "!" */
 static bool g_swallow_text;                        /* the key's own character, not to be typed */
@@ -133,6 +134,8 @@ static struct
     bool bar = true, settings_open = false; /* the bar of icons; the Overlay window */
     bool chat_pinned = true; /* the chat held to the bottom right corner */
     bool equip = false, items = false; /* the equipment and item windows */
+    /* the windows' background and the chat's: a color and how solid (the player's) */
+    float win_bg[4] = { 0.06f, 0.06f, 0.08f, 0.88f }, chat_bg[4] = { 0.04f, 0.04f, 0.06f, 0.62f };
 } g_set;
 static char g_ini[1024];
 static struct
@@ -598,6 +601,8 @@ extern "C" int overlay_event(const SDL_Event* e)
         g_swallow_up = e->key.scancode;
         return 1;
     }
+    if ((e->type == SDL_EVENT_KEY_DOWN || e->type == SDL_EVENT_KEY_UP) && e->key.key == SDLK_TAB && !ImGui::GetIO().WantTextInput)
+        return 0; /* Tab is the game's (the next target), not a way into the overlay's boxes */
     ImGui_ImplSDL3_ProcessEvent(e);
     if (!g_shown)
         return 0;
@@ -678,6 +683,12 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
                     g_map_col[k] = IM_COL32(argb >> 16 & 255, argb >> 8 & 255, argb & 255, argb >> 24 & 255);
     }
     else if (!strncmp(line, "plate_font=", 11)) snprintf(g_set.plate_font, sizeof g_set.plate_font, "%s", line + 11);
+    else if (!strncmp(line, "win_bg=", 7) || !strncmp(line, "chat_bg=", 8))
+    {
+        float c[4];
+        if (sscanf(strchr(line, '=') + 1, "%f,%f,%f,%f", &c[0], &c[1], &c[2], &c[3]) == 4)
+            memcpy(line[0] == 'w' ? g_set.win_bg : g_set.chat_bg, c, sizeof c);
+    }
     else if (sscanf(line, "ui_size=%f", &f) == 1 && f >= 10 && f <= 32) g_set.ui_size = f;
     else if (sscanf(line, "chat_size=%f", &f) == 1 && f >= 10 && f <= 32) g_set.chat_size = f;
     else if (sscanf(line, "map_range=%f", &f) == 1 && f >= 10 && f <= 250) g_set.map_range = f;
@@ -702,6 +713,8 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("plates=%d\nplate_size=%g\nplate_outline=%d\nplates_occlude=%d\n", g_set.plates, g_set.plate_size, g_set.plate_outline,
         g_set.plates_occlude);
     out->appendf("ui_font=%s\nplate_font=%s\n", g_set.ui_font, g_set.plate_font);
+    out->appendf("win_bg=%.3f,%.3f,%.3f,%.3f\nchat_bg=%.3f,%.3f,%.3f,%.3f\n", g_set.win_bg[0], g_set.win_bg[1], g_set.win_bg[2],
+        g_set.win_bg[3], g_set.chat_bg[0], g_set.chat_bg[1], g_set.chat_bg[2], g_set.chat_bg[3]);
     for (int k = 0; k < MC_COUNT; ++k)
     {
         ImU32 c = g_map_col[k] ? g_map_col[k] : MC_DEFAULT[k];
@@ -772,6 +785,17 @@ static void overlay_window(void)
         dirty |= ImGui::SliderFloat("Chat##size", &g_set.chat_size, 10, 28, "%.0f");
         ImGui::SetNextItemWidth(-60);
         dirty |= font_combo("Font##ui", g_set.ui_font, sizeof g_set.ui_font);
+        ImGui::Separator();
+        ImGui::TextDisabled("Background (color and how solid)");
+        const ImGuiColorEditFlags cf = ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_NoInputs;
+        dirty |= ImGui::ColorEdit4("Windows##bg", g_set.win_bg, cf);
+        ImGui::SameLine(190);
+        dirty |= ImGui::ColorEdit4("Chat##bg", g_set.chat_bg, cf);
+        if (ImGui::SmallButton("Defaults##bg"))
+        {
+            const float w[4] = { 0.06f, 0.06f, 0.08f, 0.88f }, c[4] = { 0.04f, 0.04f, 0.06f, 0.62f };
+            memcpy(g_set.win_bg, w, sizeof w), memcpy(g_set.chat_bg, c, sizeof c), dirty = true;
+        }
         ImGui::Separator();
         ImGui::TextDisabled("%s shows and hides the overlay", TOGGLE_NAME);
         if (dirty)
@@ -869,7 +893,7 @@ static void bar_window(void)
         { BI_OVERLAY, "Overlay settings", &g_set.settings_open },
     };
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, 8), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0));
-    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::SetNextWindowBgAlpha(g_set.win_bg[3] * 0.8f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
     if (ImGui::Begin("Bar", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
     {
@@ -1365,10 +1389,12 @@ static void chat_box(void)
         g_send_fresh = true;
     }
     const char* hint = g_send_to == 6 ? "name, then the message" : "Space, Enter, / or ! to type; Tab: auto-translate; Enter sends";
+    ImGui::PushItemFlag(ImGuiItemFlags_NoTabStop, true);
     bool entered = ImGui::InputTextWithHint("##send", hint, g_send, sizeof g_send,
         ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways | ImGuiInputTextFlags_CallbackCompletion |
             ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackEdit,
         chat_box_callback);
+    ImGui::PopItemFlag();
     ImVec2 box0 = ImGui::GetItemRectMin(), box1 = ImGui::GetItemRectMax();
     bool active = ImGui::IsItemActive();
     int clicked = -1;
@@ -1448,9 +1474,16 @@ static void chat_window(void)
     auto under_question = [&](ImVec2 pos) {
         return g_asking && pos.x < g_ask1.x && pos.x + size.x > g_ask0.x && pos.y < g_ask1.y && pos.y + size.y > g_ask0.y;
     };
-    /* a question joins the chat: the game's window put on top of it, its left edge with the chat's */
+    /* a question joins the chat: the game's window put on top of it, its left edge with the chat's.
+     * So does any other of the game's windows asking something where the chat is (its commands menu,
+     * at the bottom left): the chat stays where it is and the game's window sits on it. */
     static bool placing;
-    if (g_question && g_place_focus && cw)
+    static char joined[9]; /* the window placed (it stays placed while it asks, though no longer under) */
+    bool join = g_question;
+    if (!join && g_asking && cw)
+        join = !strcmp(joined, g_asker) || (cw->Pos.x < g_ask1.x && cw->Pos.x + size.x > g_ask0.x && cw->Pos.y < g_ask1.y && cw->Pos.y + size.y > g_ask0.y);
+    snprintf(joined, sizeof joined, "%s", join ? g_asker : "");
+    if (join && g_place_focus && cw)
     {
         float qh = g_ask1.y - g_ask0.y;
         g_place_focus(cw->Pos.x / disp.x, ImMax(0.0f, cw->Pos.y - qh - 2.0f) / disp.y);
@@ -1462,7 +1495,7 @@ static void chat_window(void)
             g_place_focus(-1, -1);
         placing = false;
     }
-    auto under_other = [&](ImVec2 pos) { return !g_question && under_question(pos); };
+    auto under_other = [&](ImVec2 pos) { return !join && under_question(pos); };
     if (g_set.chat_pinned)
     {
         /* the bottom left corner, where the game's own log was */
@@ -1489,7 +1522,7 @@ static void chat_window(void)
     }
     ImGui::SetNextWindowSize(ImVec2(560, 280), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(240, 120), ImVec2(FLT_MAX, FLT_MAX));
-    ImGui::SetNextWindowBgAlpha(0.45f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(g_set.chat_bg[0], g_set.chat_bg[1], g_set.chat_bg[2], g_set.chat_bg[3]));
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
                              (g_set.chat_pinned ? ImGuiWindowFlags_NoMove : 0);
     /* while the game asks, the rest of the overlay fades; the chat stays readable, all of it to its
@@ -1500,6 +1533,7 @@ static void chat_window(void)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     bool shown = ImGui::Begin("Chat", NULL, flags);
     ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
     if (shown)
     {
         if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_FittingPolicyScroll))
@@ -1598,7 +1632,7 @@ static void party_window(void)
         ImGui::SetNextWindowSize(ImVec2(pw->SizeFull.x, 0));
     else
         ImGui::SetNextWindowSize(ImVec2(230, 0), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowBgAlpha(0.55f);
+    ImGui::SetNextWindowBgAlpha(g_set.win_bg[3] * 0.8f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1));
     if (ImGui::Begin("Party", &g_set.party, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse))
@@ -2046,7 +2080,7 @@ static void target_window(void)
     else
         ImGui::SetNextWindowSize(ImVec2(260, 0), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(160, 0), ImVec2(700, FLT_MAX));
-    ImGui::SetNextWindowBgAlpha(have ? 0.55f : 0.25f);
+    ImGui::SetNextWindowBgAlpha(g_set.win_bg[3] * (have ? 0.8f : 0.35f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 2));
     if (ImGui::Begin("Target", &g_set.target, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse))
@@ -2363,13 +2397,14 @@ static void map_window(void)
 extern "C" void overlay_build_frame(void)
 {
     ImGui::GetStyle().FontScaleMain = g_set.ui_size / 16.0f;
+    ImGui::GetStyle().Colors[ImGuiCol_WindowBg] = ImVec4(g_set.win_bg[0], g_set.win_bg[1], g_set.win_bg[2], g_set.win_bg[3]);
     ImGui::GetIO().FontDefault = font_named(g_set.ui_font);
     /* One of the game's own windows asking something (a question, a menu): the overlay fades and
      * lets the mouse through, so the game's window is never hidden behind it. The log, its typing
      * line and nothing at all do not count. */
     {
         const char* f = g_game_focus ? g_game_focus() : "";
-        static const char* const PASSIVE[] = { "logwin", "inline", "fulllog", "playermo", "partywin", "netstat", "buff", "helpwind",
+        static const char* const PASSIVE[] = { "logwin", "inline", "fulllog", "partywin", "netstat", "buff", "helpwind",
                                                "titlewin", "targetwi" };
         bool game_asks = f[0] && dsound_in_world();
         for (const char* p : PASSIVE)
@@ -2388,6 +2423,7 @@ extern "C" void overlay_build_frame(void)
             }
         }
         g_asking = false;
+        snprintf(g_asker, sizeof g_asker, "%.8s", game_asks ? f : "");
         /* a question: yes/no windows (their names end yn, yesn, yesno), a choice (query), a notice (ok) */
         size_t fl = strnlen(f, 8);
         while (fl && f[fl - 1] == ' ')
