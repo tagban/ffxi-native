@@ -5,6 +5,7 @@
 #include "gwin.h"
 #include "zonemap.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -883,6 +884,36 @@ static const char* phrase(uint32_t key)
     Phrase k = { key, NULL };
     const Phrase* p = g_phrases ? (const Phrase*)bsearch(&k, g_phrases, (size_t)g_nphrases, sizeof(Phrase), phrase_cmp) : NULL;
     return p ? p->text : NULL;
+}
+
+/* case aside: whether t starts with w at i */
+static int at_word(const char* t, const char* w)
+{
+    for (; *w; ++t, ++w)
+        if (!*t || tolower((unsigned char)*t) != tolower((unsigned char)*w))
+            return 0;
+    return 1;
+}
+
+int gamestate_autotranslate_find(const char* typed, uint32_t* keys, const char** texts, int max)
+{
+    int n = 0;
+    if (!typed || !typed[0] || !g_phrases)
+        return 0;
+    for (int pass = 0; pass < 2 && n < max; ++pass)
+        for (int i = 0; i < g_nphrases && n < max; ++i)
+        {
+            const Phrase* p = &g_phrases[i];
+            if ((p->key >> 24) != 0x02) /* English (04: Japanese) */
+                continue;
+            int starts = at_word(p->text, typed), within = 0;
+            if (pass == 1 && !starts)
+                for (const char* t = p->text + 1; *t && !within; ++t)
+                    within = !isalnum((unsigned char)t[-1]) && at_word(t, typed); /* a word in it ("flower" is not "lower") */
+            if (pass == 0 ? starts : within)
+                keys[n] = p->key, texts[n] = p->text, ++n;
+        }
+    return n;
 }
 
 /* the log's text as plain ASCII: its colour and control codes (0x1E, 0x1F, 0x7F, each with a byte)

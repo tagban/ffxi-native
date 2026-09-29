@@ -20,6 +20,10 @@ void gamestate_chat_line(uint32_t mode, const uint8_t* text);
 
 /* The auto-translate dictionary, from the install (ROM/76/23.DAT): how many phrases, 0 if none. */
 int gamestate_load_autotranslate(const char* path);
+/* Auto-translate phrases for what the player typed (the game's Tab): the English ones that start with
+ * it first, then those with it further in (letters' case aside), each in the dictionary's order;
+ * up to max, how many. The key is what goes between the two 0xFD bytes (the high byte first). */
+int gamestate_autotranslate_find(const char* typed, uint32_t* keys, const char** texts, int max);
 
 /* For the overlay */
 uint32_t gamestate_udp_packets(void);

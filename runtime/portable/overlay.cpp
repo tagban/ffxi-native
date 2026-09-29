@@ -1222,6 +1222,118 @@ static void follow_chat_mode(const char* t)
 }
 static bool g_send_refocus, g_send_fresh;
 
+/* Auto-translate, as the game's Tab: the word before the cursor, and the dictionary's phrases for it
+ * (those starting with it first) in a list over the box; Tab or the arrows move in it, Enter or a
+ * click takes one, typing or Esc leaves it. A phrase taken shows in the box in braces ("{Lower}")
+ * and goes to the game as its key between two 0xFD bytes, as the game's own does. */
+static struct
+{
+    bool open;
+    int n, sel, from, to; /* the matches; the chosen one; the word's place in the box */
+    bool moved;           /* the chosen one changed: kept in view */
+    uint32_t keys[200];
+    const char* texts[200];
+} g_at;
+/* the phrases in the box: their text and key, so a brace pair goes out as the phrase chosen */
+static struct
+{
+    char text[64];
+    uint32_t key;
+} g_at_used[16];
+static int g_at_nused;
+
+static int chat_box_callback(ImGuiInputTextCallbackData* d)
+{
+    if (d->EventFlag == ImGuiInputTextFlags_CallbackAlways)
+    {
+        /* the cursor at the end of what is there (a "/"), not all of it selected */
+        if (g_send_fresh)
+            d->CursorPos = d->SelectionStart = d->SelectionEnd = d->BufTextLen, g_send_fresh = false;
+    }
+    else if (d->EventFlag == ImGuiInputTextFlags_CallbackEdit)
+        g_at.open = false;
+    else if (d->EventFlag == ImGuiInputTextFlags_CallbackCompletion)
+    {
+        if (g_at.open && g_at.n)
+        {
+            g_at.sel = (g_at.sel + (ImGui::GetIO().KeyShift ? g_at.n - 1 : 1)) % g_at.n, g_at.moved = true;
+            return 0;
+        }
+        int to = d->CursorPos, from = to;
+        while (from > 0 && d->Buf[from - 1] != ' ' && d->Buf[from - 1] != '}' && d->Buf[from - 1] != '{')
+            --from;
+        char word[64];
+        int len = to - from < (int)sizeof word - 1 ? to - from : (int)sizeof word - 1;
+        memcpy(word, d->Buf + from, (size_t)len);
+        word[len] = 0;
+        g_at.n = len ? gamestate_autotranslate_find(word, g_at.keys, g_at.texts, 200) : 0;
+        g_at.open = g_at.n > 0, g_at.sel = 0, g_at.from = from, g_at.to = to, g_at.moved = true;
+    }
+    else if (d->EventFlag == ImGuiInputTextFlags_CallbackHistory && g_at.open && g_at.n)
+    {
+        g_at.sel = (g_at.sel + (d->EventKey == ImGuiKey_UpArrow ? g_at.n - 1 : 1)) % g_at.n, g_at.moved = true;
+    }
+    return 0;
+}
+
+/* the chosen phrase in place of the word it was found for */
+static void take_phrase(int i)
+{
+    char text[64];
+    snprintf(text, sizeof text, "%s", g_at.texts[i]);
+    char rest[256];
+    snprintf(rest, sizeof rest, "%s", g_send + (g_at.to <= (int)strlen(g_send) ? g_at.to : strlen(g_send)));
+    g_send[g_at.from < (int)sizeof g_send ? g_at.from : 0] = 0;
+    snprintf(g_send + strlen(g_send), sizeof g_send - strlen(g_send), "{%s} %s", text, rest[0] == ' ' ? rest + 1 : rest);
+    if (g_at_nused == (int)(sizeof g_at_used / sizeof *g_at_used))
+        memmove(g_at_used, g_at_used + 1, sizeof g_at_used - sizeof *g_at_used), --g_at_nused;
+    snprintf(g_at_used[g_at_nused].text, sizeof g_at_used[0].text, "%s", text);
+    g_at_used[g_at_nused++].key = g_at.keys[i];
+    g_at.open = false;
+    g_send_refocus = true; /* back in the box, the cursor at the end */
+}
+
+/* the line as the game takes it: each phrase in braces as its key between two 0xFD */
+static void with_phrases(char* out, size_t n, const char* in)
+{
+    size_t o = 0;
+    for (const char* t = in; *t && o + 7 < n;)
+    {
+        const char* close = *t == '{' ? strchr(t, '}') : NULL;
+        if (close)
+        {
+            uint32_t key = 0;
+            size_t len = (size_t)(close - t - 1);
+            for (int k = g_at_nused - 1; k >= 0 && !key; --k)
+                if (strlen(g_at_used[k].text) == len && !memcmp(g_at_used[k].text, t + 1, len))
+                    key = g_at_used[k].key;
+            if (!key && len && len < 64)
+            {
+                /* typed by hand: the phrase with exactly that text */
+                char want[64];
+                memcpy(want, t + 1, len), want[len] = 0;
+                uint32_t keys[8];
+                const char* texts[8];
+                int m = gamestate_autotranslate_find(want, keys, texts, 8);
+                for (int k = 0; k < m && !key; ++k)
+                    if (!strcasecmp(texts[k], want))
+                        key = keys[k];
+            }
+            if (key)
+            {
+                out[o++] = (char)0xFD;
+                for (int b = 3; b >= 0; --b)
+                    out[o++] = (char)(key >> (8 * b));
+                out[o++] = (char)0xFD;
+                t = close + 1;
+                continue;
+            }
+        }
+        out[o++] = *t++;
+    }
+    out[o] = 0;
+}
+
 static void chat_box(void)
 {
     if (!g_run_line)
@@ -1252,29 +1364,72 @@ static void chat_box(void)
         g_send_refocus = false;
         g_send_fresh = true;
     }
-    const char* hint = g_send_to == 6 ? "name, then the message" : "Space, Enter, / or ! to type; Enter sends, Esc leaves";
-    /* the cursor at the end of what is there (a "/"), not all of it selected */
-    auto to_end = [](ImGuiInputTextCallbackData* d) -> int {
-        if (g_send_fresh)
-            d->CursorPos = d->SelectionStart = d->SelectionEnd = d->BufTextLen, g_send_fresh = false;
-        return 0;
-    };
-    if (ImGui::InputTextWithHint("##send", hint, g_send, sizeof g_send, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways,
-            to_end))
+    const char* hint = g_send_to == 6 ? "name, then the message" : "Space, Enter, / or ! to type; Tab: auto-translate; Enter sends";
+    bool entered = ImGui::InputTextWithHint("##send", hint, g_send, sizeof g_send,
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways | ImGuiInputTextFlags_CallbackCompletion |
+            ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackEdit,
+        chat_box_callback);
+    ImVec2 box0 = ImGui::GetItemRectMin(), box1 = ImGui::GetItemRectMax();
+    bool active = ImGui::IsItemActive();
+    int clicked = -1;
+    bool list_hovered = false;
+    if (g_at.open && g_at.n)
+    {
+        /* the list, over the box */
+        float row = ImGui::GetTextLineHeightWithSpacing();
+        float h = row * (float)(g_at.n < 12 ? g_at.n : 12) + ImGui::GetStyle().WindowPadding.y * 2;
+        ImGui::SetNextWindowPos(ImVec2(box0.x, box0.y - 2), ImGuiCond_Always, ImVec2(0, 1));
+        ImGui::SetNextWindowSize(ImVec2(ImMax(260.0f, (box1.x - box0.x) * 0.6f), h), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.92f);
+        if (ImGui::Begin("##autotranslate", NULL,
+                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                    ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav))
+        {
+            ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+            list_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+            for (int i = 0; i < g_at.n; ++i)
+            {
+                ImGui::PushID(i);
+                char label[80];
+                snprintf(label, sizeof label, "{%s}", g_at.texts[i]);
+                if (ImGui::Selectable(label, i == g_at.sel))
+                    clicked = i;
+                if (i == g_at.sel && g_at.moved)
+                    ImGui::SetScrollHereY(0.5f), g_at.moved = false;
+                ImGui::PopID();
+            }
+        }
+        ImGui::End();
+    }
+    if (clicked >= 0)
+    {
+        take_phrase(clicked);
+        return;
+    }
+    if (g_at.open && !active && !entered && !list_hovered)
+        g_at.open = false; /* Esc, or the box left (not for a click in the list) */
+    if (entered && g_at.open && g_at.n)
+    {
+        take_phrase(g_at.sel); /* Enter takes the phrase; the next Enter sends */
+        return;
+    }
+    if (entered)
     {
         const char* t = g_send;
         while (*t == ' ')
             ++t;
         if (*t)
         {
-            char line[300];
+            char typed[300], line[600];
             /* a /command, or a server's own ! command (a GM's, say), goes as it is: as if typed in
              * the game's own input line */
-            snprintf(line, sizeof line, "%s%s", *t == '/' || *t == '!' ? "" : SEND_TO[g_send_to].prefix, t);
-            follow_chat_mode(line);
+            snprintf(typed, sizeof typed, "%s%s", *t == '/' || *t == '!' ? "" : SEND_TO[g_send_to].prefix, t);
+            follow_chat_mode(typed);
+            with_phrases(line, sizeof line, typed);
             g_run_line(line);
         }
         g_send[0] = 0; /* and the box closes, as the game's input line does */
+        g_at_nused = 0;
     }
 }
 

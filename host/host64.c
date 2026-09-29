@@ -629,8 +629,8 @@ static const char* game_focus(void)
     return name ? name : "";
 }
 
-/* where that window is: its rectangle (+0x3A: x, y, width, height) in the game's own units (its
- * back buffer's pixels), as fractions of the screen; 0 when none has the keyboard */
+/* where that window is: its rectangle (+0x3A: left, top, right, bottom, shorts) in the game's own
+ * units (its back buffer's pixels), as fractions of the screen; 0 when none has the keyboard */
 static int game_focus_rect(float* x, float* y, float* w, float* h)
 {
     uint32_t bw = 0, bh = 0;
@@ -641,17 +641,40 @@ static int game_focus_rect(float* x, float* y, float* w, float* h)
     if (!game_window_name(win))
         return 0;
     const int16_t* r = (const int16_t*)GUEST_PTR(win + 0x3A);
-    if (r[2] <= 0 || r[3] <= 0)
+    if (r[2] <= r[0] || r[3] <= r[1])
         return 0;
-    *x = (float)r[0] / bw, *y = (float)r[1] / bh, *w = (float)r[2] / bw, *h = (float)r[3] / bh;
+    *x = (float)r[0] / bw, *y = (float)r[1] / bh, *w = (float)(r[2] - r[0]) / bw, *h = (float)(r[3] - r[1]) / bh;
+    {
+        /* each window that takes the keyboard, once: its rectangle and the start of it (what its
+         * list is made of, for the overlay's own in its place later) */
+        static char seen[64][8];
+        static int nseen;
+        const char* name = game_window_name(win);
+        int known = 0;
+        for (int k = 0; k < nseen && !known; ++k)
+            known = !memcmp(seen[k], name, 8);
+        if (!known && nseen < 64 && gwin_is_committed(win + 0x200))
+        {
+            memcpy(seen[nseen++], name, 8);
+            rt_log("[recomp] game window %.8s: at %d,%d to %d,%d; its object:\n", name, r[0], r[1], r[2], r[3]);
+            for (int o = 0; o < 0x200; o += 32)
+            {
+                char line[200];
+                int n = snprintf(line, sizeof line, "  +%03x", o);
+                for (int k = 0; k < 32; k += 4)
+                    n += snprintf(line + n, sizeof line - (size_t)n, " %08x", rd32(win + (uint32_t)(o + k)));
+                rt_log("%s\n", line);
+            }
+        }
+    }
     return 1;
 }
 
 /* The game's question, placed where the overlay wants it (on top of its chat): the window with the
  * keyboard moved there, and kept there in the window manager's pass too (menu_draw), since some
  * are laid out again every frame. x, y: its top left, as fractions of the screen; < 0 lets go. */
-static uint32_t g_place_win;
-static int16_t g_place_x, g_place_y;
+static uint32_t g_place_win, g_place_last;
+static int16_t g_place_x, g_place_y, g_place_w, g_place_h;
 
 static void place_game_focus(float x, float y)
 {
@@ -663,9 +686,13 @@ static void place_game_focus(float x, float y)
     uint32_t win = rd32(MENU_MGR + 0x54);
     if (!game_window_name(win))
         return;
-    g_place_win = win, g_place_x = (int16_t)(x * bw), g_place_y = (int16_t)(y * bh);
     int16_t* pos = (int16_t*)GUEST_PTR(win + 0x3A);
-    pos[0] = g_place_x, pos[1] = g_place_y;
+    if (win != g_place_last || pos[2] - pos[0] > 0)
+        g_place_w = (int16_t)(pos[2] - pos[0]), g_place_h = (int16_t)(pos[3] - pos[1]);
+    g_place_last = win;
+    g_place_win = win, g_place_x = (int16_t)(x * bw), g_place_y = (int16_t)(y * bh);
+    /* moved whole: both corners, so it keeps its size */
+    pos[0] = g_place_x, pos[1] = g_place_y, pos[2] = (int16_t)(g_place_x + g_place_w), pos[3] = (int16_t)(g_place_y + g_place_h);
 }
 
 static void placed_again(uint32_t win)
@@ -673,7 +700,7 @@ static void placed_again(uint32_t win)
     if (win && win == g_place_win && game_window_name(win))
     {
         int16_t* pos = (int16_t*)GUEST_PTR(win + 0x3A);
-        pos[0] = g_place_x, pos[1] = g_place_y;
+        pos[0] = g_place_x, pos[1] = g_place_y, pos[2] = (int16_t)(g_place_x + g_place_w), pos[3] = (int16_t)(g_place_y + g_place_h);
     }
 }
 
