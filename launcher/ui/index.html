@@ -73,12 +73,7 @@
         <form id="first-account">
           <label>Server name <input name="name" placeholder="My server" required></label>
           <label>Server address <input name="server" placeholder="play.example.com or 1.2.3.4" spellcheck="false" required></label>
-          <label>Connection
-            <select name="kind">
-              <option value="lsb">LandSandBoat server (most private servers)</option>
-              <option value="pol">PlayOnline server</option>
-            </select>
-          </label>
+          <input type="hidden" name="kind" value="lsb"><!-- private servers only: LandSandBoat's sign-in -->
           <label><span data-kind="lsb">Account name</span><span data-kind="pol" hidden>PlayOnline ID</span>
             <input name="login" autocomplete="username" spellcheck="false" required>
           </label>
@@ -104,12 +99,7 @@
         <div id="no-account" class="empty">Add an account to play.</div>
         <form id="account" hidden>
           <label>Name <input name="name" placeholder="My character"></label>
-          <label>Connection
-            <select name="kind">
-              <option value="lsb">LandSandBoat server</option>
-              <option value="pol">PlayOnline server</option>
-            </select>
-          </label>
+          <input type="hidden" name="kind" value="lsb"><!-- private servers only: LandSandBoat's sign-in -->
           <label><span data-kind="pol">PlayOnline ID</span><span data-kind="lsb">Account name</span>
             <input name="login" autocomplete="username" spellcheck="false">
           </label>
@@ -127,6 +117,12 @@
           <label>Password <input name="password" type="password" autocomplete="current-password" placeholder=""></label>
           <label data-kind="lsb">One-time code <input name="otp" inputmode="numeric" autocomplete="one-time-code" placeholder="only if the account has two-factor sign-in"></label>
           <label class="check"><input name="save_password" type="checkbox"> Remember the password (in the system keychain)</label>
+          <details id="new-account" data-kind="lsb">
+            <summary>New to this server? Make the account</summary>
+            <p class="hint">Makes the account name and password above on the server, if the server allows it.</p>
+            <label>Password again <input id="new-password-again" type="password" autocomplete="new-password"></label>
+            <div class="actions"><span class="grow"></span><button type="button" id="create-account" class="secondary">Make the account</button></div>
+          </details>
           <div class="actions">
             <button type="button" id="delete-account" class="danger secondary">Delete</button>
             <span class="grow"></span>

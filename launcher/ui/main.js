@@ -53,7 +53,7 @@ function renderAccounts() {
     const name = document.createElement("span");
     name.textContent = a.name || a.login || "New account";
     const sub = document.createElement("small");
-    sub.textContent = `${KIND_LABEL[a.kind]} · ${a.server || "no server"}`;
+    sub.textContent = a.server || "no server";
     li.append(name, sub);
     li.addEventListener("click", () => select(a.id));
     ul.append(li);
@@ -810,3 +810,29 @@ $("#repair-files").addEventListener("click", async () => {
     await openSetup(3);
   }
 })();
+
+// A new account on a LandSandBoat server, made from the form's name and password (as xiloader can)
+$("#create-account").addEventListener("click", async () => {
+  const a = account();
+  const f = new FormData(accountForm);
+  const login = (f.get("login") || "").trim();
+  const password = f.get("password") || "";
+  const again = $("#new-password-again").value;
+  if (!login || !password) return setStatus("Fill in the account name and the password first.", true);
+  if (password !== again) return setStatus("The two passwords are not the same.", true);
+  const server = (f.get("server") || (a && a.server) || "").trim();
+  const port = parseInt(f.get("auth_port"), 10) || 0;
+  const button = $("#create-account");
+  button.disabled = true;
+  setStatus("Making the account…");
+  try {
+    const message = await invoke("create_account", { server, port, login, password });
+    setStatus(message);
+    $("#new-password-again").value = "";
+    $("#new-account").open = false;
+  } catch (e) {
+    setStatus(String(e), true);
+  } finally {
+    button.disabled = false;
+  }
+});

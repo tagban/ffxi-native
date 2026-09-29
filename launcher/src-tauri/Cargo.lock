@@ -1210,6 +1210,7 @@ version = "0.1.2"
 dependencies = [
  "cc",
  "keyring",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",

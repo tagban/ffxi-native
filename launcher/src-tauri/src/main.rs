@@ -2,6 +2,7 @@
 // settings, and starting host64 with the right arguments. Same program on macOS and Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod account;
 mod config;
 mod game;
 mod pol;
@@ -244,6 +245,14 @@ fn check_install(app: AppHandle, tasks: State<Arc<Tasks>>, full: bool, repair: b
     versions::check(app, tasks.inner().clone(), full, repair)
 }
 
+/// Makes an account on a LandSandBoat server (as xiloader can), off the window's thread.
+#[tauri::command]
+async fn create_account(server: String, port: u16, login: String, password: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || account::create(&server, port, &login, &password))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn check_server(app: AppHandle, account_id: String) -> Result<versions::ServerVersion, String> {
     versions::check_server(&app, &account_id)
@@ -407,7 +416,8 @@ fn main() {
             backup_install,
             check_install,
             check_server,
-            update_for_server
+            update_for_server,
+            create_account
         ])
         .build(tauri::generate_context!())
         .expect("error while starting the launcher")
