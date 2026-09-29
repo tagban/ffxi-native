@@ -274,46 +274,100 @@ int gamestate_entities(GameEntity* out, int max)
     return n;
 }
 
-/* The game's target record: [target_ptr] points at it; its first entry the target's index and the
- * server's id for it (then the entity's pointer). Checked against who is around before it is used. */
+/* The player's target. [target_ptr] is the game's target window, which holds who it shows; which
+ * of its words that is was not known, so it is found: while something is targeted, the window's
+ * words are compared with the ids and the entity pointers of who is around, and the offset that
+ * keeps matching is kept (and logged). */
+static int g_tgt_off = -1, g_tgt_is_ptr;
+
+static uint32_t entity_ptr_of(uint16_t index)
+{
+    uint32_t slot = g_entity_map + 4u * index;
+    return g_entity_map && index < ENTITIES && gwin_is_committed(slot) ? rd32(slot) : 0;
+}
+
+/* who a word of the window names: the index of the entity it is (the player's own index for
+ * themselves), or -1 */
+static int who_is(uint32_t v, int as_ptr)
+{
+    if (!v)
+        return -1;
+    if (as_ptr)
+    {
+        if (v == entity_ptr_of(g_self_index))
+            return g_self_index;
+        for (int i = 0; i < ENTITIES; ++i)
+            if (g_ents[i].id && entity_ptr_of((uint16_t)i) == v)
+                return i;
+        return -1;
+    }
+    if (v == g_self)
+        return g_self_index;
+    uint16_t guess = (uint16_t)(v & 0xFFF); /* an NPC's id carries its index */
+    if (guess < ENTITIES && g_ents[guess].id == v)
+        return guess;
+    for (int i = 0; i < ENTITIES; ++i)
+        if (g_ents[i].id == v)
+            return i;
+    return -1;
+}
+
 int gamestate_target(GameEntity* out, int* is_self)
 {
     *is_self = 0;
     if (!g_target_ptr || !gwin_is_committed(g_target_ptr))
         return 0;
     uint32_t t = rd32(g_target_ptr);
-    if (!t || !gwin_is_committed(t) || !gwin_is_committed(t + 0x40))
+    if (!t || !gwin_is_committed(t) || !gwin_is_committed(t + 0x200))
         return 0;
-    uint32_t index = rd32(t), id = rd32(t + 4);
-    static uint32_t last_id = 0xFFFFFFFFu;
-    static int told;
-    if (id != last_id && told < 6)
+    if (g_tgt_off < 0)
     {
-        /* the record's first bytes as the target changes, a few times: to confirm its layout */
-        ++told;
-        extern void rt_log(const char* fmt, ...);
-        rt_log("[recomp] target: %08x %08x %08x %08x %08x %08x %08x %08x\n", rd32(t), rd32(t + 4), rd32(t + 8), rd32(t + 12),
-            rd32(t + 16), rd32(t + 20), rd32(t + 24), rd32(t + 28));
-    }
-    last_id = id;
-    if (!id)
+        static int hits[128][2], frame;
+        if (++frame % 6)
+            return 0;
+        /* who is around, by id and by entity pointer (not the player: the window may name them
+         * for another reason) */
+        static uint32_t ids[ENTITIES], ptrs[ENTITIES];
+        int n = 0;
+        for (int i = 0; i < ENTITIES; ++i)
+            if (g_ents[i].id)
+                ids[n] = g_ents[i].id, ptrs[n] = entity_ptr_of((uint16_t)i), ++n;
+        for (int o = 1; o < 128; ++o)
+            for (int k = 0; k < 2; ++k)
+            {
+                uint32_t v = rd32(t + 4u * o);
+                int found = 0;
+                for (int i = 0; i < n && v && !found; ++i)
+                    found = v == (k ? ptrs[i] : ids[i]);
+                if (found)
+                {
+                    if (++hits[o][k] >= 10)
+                    {
+                        g_tgt_off = 4 * o, g_tgt_is_ptr = k;
+                        extern void rt_log(const char* fmt, ...);
+                        rt_log("[recomp] target: the target window holds its %s at +%02x\n", k ? "entity pointer" : "id", g_tgt_off);
+                    }
+                }
+            }
         return 0;
-    if (id == g_self)
+    }
+    int index = who_is(rd32(t + (uint32_t)g_tgt_off), g_tgt_is_ptr);
+    if (index < 0)
+        return 0;
+    if (index == g_self_index)
     {
         memset(out, 0, sizeof *out);
-        out->id = id, out->kind = ENTITY_PC, out->hpp = 100;
+        out->id = g_self, out->kind = ENTITY_PC, out->hpp = 100;
         float f;
         gamestate_self(&out->x, &out->y, &out->z, &f);
         for (int i = 0; i < MEMBERS; ++i)
-            if (g_members[i].id == id)
+            if (g_members[i].id == g_self)
                 snprintf(out->name, sizeof out->name, "%s", g_members[i].name), out->hpp = g_members[i].hpp;
         *is_self = 1;
         return 1;
     }
-    if (index >= ENTITIES || g_ents[index].id != id)
-        return 0;
     *out = g_ents[index];
-    uint32_t p = entity_at((uint16_t)index, id);
+    uint32_t p = entity_at((uint16_t)index, out->id);
     if (p)
         out->x = mem_f32(p + 0x04), out->y = mem_f32(p + 0x08), out->z = mem_f32(p + 0x0C);
     return 1;

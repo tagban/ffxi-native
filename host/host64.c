@@ -417,7 +417,9 @@ static uint32_t find_game_window(const char* name)
     memcpy(GUEST_PTR(buf), name, 16);
     GUEST_PTR(buf)[16] = 0;
     uint32_t arg = buf;
-    return guest_thiscall(MENU_FIND, MENU_MGR, 1, &arg);
+    /* it returns the manager's list entry for the window; the window is the entry's second word */
+    uint32_t entry = guest_thiscall(MENU_FIND, MENU_MGR, 1, &arg);
+    return entry && gwin_is_committed(entry) ? rd32(entry + 4) : 0;
 }
 
 static int window_is(uint32_t win, const char* name)
