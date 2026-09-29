@@ -242,6 +242,19 @@ static float g_nameplate_sx = 1.0f, g_nameplate_sy = 1.0f; /* --nameplate-scale 
 
 static void nameplate_scale(Guest* g)
 {
+    /* The overlay may draw the names itself (its own font, size, outline): the name is handed to it
+     * as the game placed it (the point in the 3D frame's pixels at +0x30, top-left origin; the
+     * text, size and color are the routine's 2nd to 4th arguments), and the game's own glyphs are
+     * drawn at no size at all. */
+    if (overlay_nameplates_wanted())
+    {
+        uint32_t text = rd32(g->esp + 0x6dc), color = rd32(g->esp + 0x6e4);
+        if (text && gwin_is_committed(text))
+            overlay_nameplate(rdf32(g->esp + 0x30), rdf32(g->esp + 0x34), (const char*)GUEST_PTR(text), color);
+        wrf32(g->esp + 0x4c, 0.0f);
+        wrf32(g->esp + 0x50, 0.0f);
+        return;
+    }
     float kx = g_nameplate_sx, ky = g_nameplate_sy;
     if (g_nameplate_fix)
     {
@@ -263,6 +276,7 @@ static void setup_nameplates(void)
     {
         if (wanted)
             *hook = nameplate_scale;
+        overlay_set_nameplates_available(wanted);
         rt_log("[recomp] nameplates: %s, scale %gx%g\n", g_nameplate_fix ? "4:3 shape" : "as the game draws them",
             g_nameplate_sx, g_nameplate_sy);
     }

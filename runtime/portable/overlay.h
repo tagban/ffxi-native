@@ -31,6 +31,13 @@ void overlay_set_line_runner(int (*run)(const char* line));
  * and back), called every frame: the game's chat log, its party list. */
 void overlay_set_game_windows(void (*hide)(int log, int party));
 
+/* The names over heads, when the overlay draws them (host64's nameplate hook, where the build has
+ * one): whether it wants them now, and each one as the game placed it this frame (its 3D frame's
+ * pixels; the game's text, with its own codes; its color, 0x80 full in each channel). */
+void overlay_set_nameplates_available(int yes);
+int overlay_nameplates_wanted(void);
+void overlay_nameplate(float x, float y, const char* text, uint32_t color);
+
 /* The back end's part: overlay.cpp builds the frame, the back end draws it (overlay_metal.mm). */
 void overlay_build_frame(void);
 

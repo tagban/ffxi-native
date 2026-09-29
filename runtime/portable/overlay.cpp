@@ -17,17 +17,86 @@
 
 extern "C" int dsound_in_world(void);
 
+/* Fonts: Roboto is built in; the others are the player's own system's, loaded from where each
+ * system keeps them if they are there (nothing of theirs is shipped). Kept in overlay.ini by name. */
+static const struct
+{
+    const char* name;
+    const char* paths[3];
+} FONT_FILES[] = {
+    { "Arial", { "/System/Library/Fonts/Supplemental/Arial.ttf", "C:\\Windows\\Fonts\\arial.ttf", "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf" } },
+    { "Arial Bold", { "/System/Library/Fonts/Supplemental/Arial Bold.ttf", "C:\\Windows\\Fonts\\arialbd.ttf", "/usr/share/fonts/truetype/msttcorefonts/Arial_Bold.ttf" } },
+    { "Verdana", { "/System/Library/Fonts/Supplemental/Verdana.ttf", "C:\\Windows\\Fonts\\verdana.ttf", NULL } },
+    { "Verdana Bold", { "/System/Library/Fonts/Supplemental/Verdana Bold.ttf", "C:\\Windows\\Fonts\\verdanab.ttf", NULL } },
+    { "Trebuchet", { "/System/Library/Fonts/Supplemental/Trebuchet MS.ttf", "C:\\Windows\\Fonts\\trebuc.ttf", NULL } },
+    { "Trebuchet Bold", { "/System/Library/Fonts/Supplemental/Trebuchet MS Bold.ttf", "C:\\Windows\\Fonts\\trebucbd.ttf", NULL } },
+    { "Tahoma", { "/System/Library/Fonts/Supplemental/Tahoma.ttf", "C:\\Windows\\Fonts\\tahoma.ttf", NULL } },
+    { "Tahoma Bold", { "/System/Library/Fonts/Supplemental/Tahoma Bold.ttf", "C:\\Windows\\Fonts\\tahomabd.ttf", NULL } },
+    { "Georgia", { "/System/Library/Fonts/Supplemental/Georgia.ttf", "C:\\Windows\\Fonts\\georgia.ttf", NULL } },
+    { "Georgia Bold", { "/System/Library/Fonts/Supplemental/Georgia Bold.ttf", "C:\\Windows\\Fonts\\georgiab.ttf", NULL } },
+    { "Segoe UI", { NULL, "C:\\Windows\\Fonts\\segoeui.ttf", NULL } },
+    { "Segoe UI Bold", { NULL, "C:\\Windows\\Fonts\\segoeuib.ttf", NULL } },
+    { "DejaVu Sans", { NULL, NULL, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" } },
+    { "DejaVu Sans Bold", { NULL, NULL, "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" } },
+};
+static struct
+{
+    const char* name;
+    ImFont* font;
+} g_fonts[1 + sizeof FONT_FILES / sizeof *FONT_FILES];
+static int g_nfonts;
+
+static ImFont* font_named(const char* name)
+{
+    for (int i = 0; i < g_nfonts; ++i)
+        if (!strcmp(g_fonts[i].name, name))
+            return g_fonts[i].font;
+    return g_nfonts ? g_fonts[0].font : NULL;
+}
+
+/* a combo of the fonts there are; true when the choice changed */
+static bool font_combo(const char* label, char* name, size_t size)
+{
+    bool changed = false;
+    if (ImGui::BeginCombo(label, name[0] ? name : "Roboto"))
+    {
+        for (int i = 0; i < g_nfonts; ++i)
+        {
+            ImGui::PushFont(g_fonts[i].font, 0.0f);
+            if (ImGui::Selectable(g_fonts[i].name, !strcmp(name, g_fonts[i].name)))
+                snprintf(name, size, "%s", g_fonts[i].name), changed = true;
+            ImGui::PopFont();
+        }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
+
 static bool g_ready, g_shown;
 static void chat_register(void);
 static void overlay_register(void);
 static int (*g_run_line)(const char* line); /* host64: the game's parser of a typed line */
 static void (*g_hide_game)(int log, int party);  /* host64: the game's own windows off the screen */
 
+/* The names over heads this frame, as the game placed them (host64's nameplate hook) */
+static bool g_plates_available;
+static struct Plate
+{
+    float x, y;
+    ImU32 color;
+    char text[40];
+} g_plates[256];
+static int g_nplates;
+
 /* The player's choices, kept in overlay.ini ([Overlay][Settings]) */
 static struct
 {
     bool chat = true, party = true, map = true, status = false, target = true;
     bool hide_game_log = false, hide_game_party = false; /* the game's own, where ours stand in */
+    bool plates = false;       /* the names over heads drawn by the overlay */
+    char ui_font[32] = "Roboto", plate_font[32] = "Arial Bold";
+    float plate_size = 15.0f;
+    bool plate_outline = true;
     float ui_size = 15.0f;   /* the windows' text */
     float chat_size = 15.0f; /* the chat's lines */
     float map_range = 50.0f; /* yalms from the middle to the edge */
@@ -92,7 +161,27 @@ extern "C" void overlay_init(SDL_Window* window)
     /* Roboto, at a size for the screen: ImGui 1.92 renders it at the framebuffer's scale itself */
     ImFontConfig cfg;
     cfg.FontDataOwnedByAtlas = false;
-    io.Fonts->AddFontFromMemoryCompressedTTF(roboto_medium_compressed_data, (int)roboto_medium_compressed_size, 16.0f, &cfg);
+    g_fonts[g_nfonts].name = "Roboto";
+    g_fonts[g_nfonts++].font = io.Fonts->AddFontFromMemoryCompressedTTF(roboto_medium_compressed_data, (int)roboto_medium_compressed_size, 16.0f, &cfg);
+#if defined(__APPLE__)
+    const int os = 0;
+#elif defined(_WIN32)
+    const int os = 1;
+#else
+    const int os = 2;
+#endif
+    for (const auto& f : FONT_FILES)
+    {
+        const char* path = f.paths[os];
+        FILE* there = path ? fopen(path, "rb") : NULL;
+        if (!there)
+            continue;
+        fclose(there);
+        ImFontConfig fc;
+        if (ImFont* font = io.Fonts->AddFontFromFileTTF(path, 16.0f, &fc))
+            g_fonts[g_nfonts].name = f.name, g_fonts[g_nfonts++].font = font;
+    }
+    io.FontDefault = g_fonts[0].font;
     ImGuiStyle& st = ImGui::GetStyle();
     ImGui::StyleColorsDark(&st);
     st.WindowRounding = 6.0f;
@@ -100,6 +189,66 @@ extern "C" void overlay_init(SDL_Window* window)
     st.WindowBorderSize = 1.0f;
     st.Colors[ImGuiCol_WindowBg].w = 0.82f; /* the world shows through a little */
     g_ready = true;
+}
+
+extern "C" void overlay_set_nameplates_available(int yes)
+{
+    g_plates_available = yes != 0;
+}
+
+extern "C" int overlay_nameplates_wanted(void)
+{
+    return g_ready && g_shown && g_plates_available && g_set.plates;
+}
+
+extern "C" void overlay_nameplate(float x, float y, const char* text, uint32_t color)
+{
+    if (g_nplates >= (int)(sizeof g_plates / sizeof *g_plates))
+        return;
+    Plate& p = g_plates[g_nplates++];
+    p.x = x, p.y = y;
+    /* the game's colors count 0x80 as full */
+    auto c = [](uint32_t v) { return (unsigned)(v * 2 > 255 ? 255 : v * 2); };
+    p.color = IM_COL32(c(color >> 16 & 255), c(color >> 8 & 255), c(color & 255), 255);
+    /* its text: the icon codes (0xC8-0xCD) dropped, anything else not plain as '?' */
+    size_t o = 0;
+    for (const unsigned char* t = (const unsigned char*)text; *t && o + 1 < sizeof p.text; ++t)
+        if (*t >= 0x20 && *t < 0x7F)
+            p.text[o++] = (char)*t;
+        else if (*t < 0xC8 || *t > 0xCD)
+            p.text[o++] = '?';
+    p.text[o] = 0;
+}
+
+/* The names, drawn under every window, where the game put them (its 3D frame to the window) */
+static void draw_nameplates(void)
+{
+    if (!g_nplates || !g_present.frame_w || !g_present.frame_h)
+    {
+        g_nplates = 0;
+        return;
+    }
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    ImVec2 disp = ImGui::GetIO().DisplaySize;
+    float kx = disp.x / (float)g_present.frame_w, ky = disp.y / (float)g_present.frame_h;
+    ImFont* font = font_named(g_set.plate_font);
+    float size = g_set.plate_size;
+    for (int i = 0; i < g_nplates; ++i)
+    {
+        const Plate& p = g_plates[i];
+        ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, p.text);
+        ImVec2 at(p.x * kx - ts.x * 0.5f, p.y * ky - ts.y * 0.5f);
+        if (g_set.plate_outline)
+            for (int k = 0; k < 8; ++k)
+            {
+                static const float OX[8] = { -1, 0, 1, -1, 1, -1, 0, 1 }, OY[8] = { -1, -1, -1, 0, 0, 1, 1, 1 };
+                dl->AddText(font, size, ImVec2(at.x + OX[k], at.y + OY[k]), IM_COL32(0, 0, 0, 200), p.text);
+            }
+        else
+            dl->AddText(font, size, ImVec2(at.x + 1, at.y + 1), IM_COL32(0, 0, 0, 160), p.text);
+        dl->AddText(font, size, at, p.color, p.text);
+    }
+    g_nplates = 0; /* the next frame's come as the game draws them */
 }
 
 extern "C" void overlay_set_game_windows(void (*hide)(int log, int party))
@@ -173,6 +322,11 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "target=%d", &v) == 1) g_set.target = v != 0;
     else if (sscanf(line, "hide_game_log=%d", &v) == 1) g_set.hide_game_log = v != 0;
     else if (sscanf(line, "hide_game_party=%d", &v) == 1) g_set.hide_game_party = v != 0;
+    else if (sscanf(line, "plates=%d", &v) == 1) g_set.plates = v != 0;
+    else if (sscanf(line, "plate_size=%f", &f) == 1 && f >= 8 && f <= 40) g_set.plate_size = f;
+    else if (sscanf(line, "plate_outline=%d", &v) == 1) g_set.plate_outline = v != 0;
+    else if (!strncmp(line, "ui_font=", 8)) snprintf(g_set.ui_font, sizeof g_set.ui_font, "%s", line + 8);
+    else if (!strncmp(line, "plate_font=", 11)) snprintf(g_set.plate_font, sizeof g_set.plate_font, "%s", line + 11);
     else if (sscanf(line, "ui_size=%f", &f) == 1 && f >= 10 && f <= 32) g_set.ui_size = f;
     else if (sscanf(line, "chat_size=%f", &f) == 1 && f >= 10 && f <= 32) g_set.chat_size = f;
     else if (sscanf(line, "map_range=%f", &f) == 1 && f >= 10 && f <= 250) g_set.map_range = f;
@@ -186,7 +340,9 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("chat=%d\nparty=%d\nmap=%d\nstatus=%d\n", g_set.chat, g_set.party, g_set.map, g_set.status);
     out->appendf("ui_size=%g\nchat_size=%g\nmap_range=%g\n", g_set.ui_size, g_set.chat_size, g_set.map_range);
     out->appendf("map_north_up=%d\nmap_names=%d\n", g_set.map_north_up, g_set.map_names);
-    out->appendf("target=%d\nhide_game_log=%d\nhide_game_party=%d\n\n", g_set.target, g_set.hide_game_log, g_set.hide_game_party);
+    out->appendf("target=%d\nhide_game_log=%d\nhide_game_party=%d\n", g_set.target, g_set.hide_game_log, g_set.hide_game_party);
+    out->appendf("plates=%d\nplate_size=%g\nplate_outline=%d\n", g_set.plates, g_set.plate_size, g_set.plate_outline);
+    out->appendf("ui_font=%s\nplate_font=%s\n\n", g_set.ui_font, g_set.plate_font);
 }
 
 static void overlay_register(void)
@@ -218,6 +374,20 @@ static void overlay_window(void)
         dirty |= ImGui::Checkbox("Target", &g_set.target);
         ImGui::SameLine(100);
         dirty |= ImGui::Checkbox("Performance", &g_set.status);
+        if (g_plates_available)
+        {
+            ImGui::Separator();
+            ImGui::TextDisabled("Names over heads");
+            dirty |= ImGui::Checkbox("Draw them in the overlay's font", &g_set.plates);
+            if (g_set.plates)
+            {
+                ImGui::SetNextItemWidth(-60);
+                dirty |= ImGui::SliderFloat("Size##plates", &g_set.plate_size, 9, 32, "%.0f");
+                ImGui::SetNextItemWidth(-60);
+                dirty |= font_combo("Font##plates", g_set.plate_font, sizeof g_set.plate_font);
+                dirty |= ImGui::Checkbox("Outline", &g_set.plate_outline);
+            }
+        }
         if (g_hide_game)
         {
             ImGui::Separator();
@@ -231,6 +401,8 @@ static void overlay_window(void)
         dirty |= ImGui::SliderFloat("Windows##size", &g_set.ui_size, 11, 24, "%.0f");
         ImGui::SetNextItemWidth(-60);
         dirty |= ImGui::SliderFloat("Chat##size", &g_set.chat_size, 10, 28, "%.0f");
+        ImGui::SetNextItemWidth(-60);
+        dirty |= font_combo("Font##ui", g_set.ui_font, sizeof g_set.ui_font);
         ImGui::Separator();
         ImGui::TextDisabled("%s shows and hides the overlay", TOGGLE_NAME);
         if (dirty)
@@ -944,9 +1116,14 @@ static void map_window(void)
 extern "C" void overlay_build_frame(void)
 {
     ImGui::GetStyle().FontScaleMain = g_set.ui_size / 16.0f;
+    ImGui::GetIO().FontDefault = font_named(g_set.ui_font);
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
     bool was[5] = { g_set.chat, g_set.party, g_set.map, g_set.status, g_set.target };
+    if (g_shown && g_set.plates)
+        draw_nameplates();
+    else
+        g_nplates = 0;
     if (g_shown)
     {
         overlay_window();
