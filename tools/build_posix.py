@@ -55,7 +55,7 @@ IMGUI = ['third_party/imgui/imgui.cpp', 'third_party/imgui/imgui_draw.cpp', 'thi
          'third_party/imgui/imgui_widgets.cpp', 'third_party/imgui/backends/imgui_impl_sdl3.cpp']
 if GFX == 'metal':
     GFX_SOURCES = ['runtime/portable/gfx_msl.c', 'runtime/portable/gfx_msl_shaders.c', 'runtime/portable/gfx_metal.m',
-                   'runtime/portable/overlay.cpp', 'runtime/portable/overlay_metal.mm',
+                   'runtime/portable/overlay.cpp', 'runtime/portable/overlay_metal.mm', 'runtime/portable/zonemap.cpp',
                    'third_party/imgui/backends/imgui_impl_metal.mm'] + IMGUI
     GFX_LIBS = ['-framework', 'Metal', '-weak_framework', 'MetalFX', '-framework', 'QuartzCore', '-framework', 'Foundation',
                 '-lc++']

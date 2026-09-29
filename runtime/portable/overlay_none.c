@@ -11,3 +11,9 @@ void overlay_note_present(int frame_w, int frame_h, int screen_w, int screen_h, 
 }
 void overlay_build_frame(void) {}
 void overlay_set_line_runner(int (*run)(const char* line)) { (void)run; }
+
+/* no overlay, so no zone maps either (zonemap.cpp is the overlay's) */
+#include "zonemap.h"
+void zonemap_init(const char* game_dir, const uint8_t keys[256]) { (void)game_dir, (void)keys; }
+void zonemap_want(int zone, float x, float y, float z) { (void)zone, (void)x, (void)y, (void)z; }
+int zonemap_take(int zone, ZoneMap* out) { (void)zone, (void)out; return 0; }

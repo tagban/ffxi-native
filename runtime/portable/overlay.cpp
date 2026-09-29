@@ -2,6 +2,7 @@
  * end draws what overlay_build_frame makes (overlay_metal.mm). Display only. */
 #include "overlay.h"
 #include "gamestate.h"
+#include "zonemap.h"
 
 #include <float.h>
 #include <math.h>
@@ -664,6 +665,42 @@ static void party_window(void)
     ImGui::PopStyleVar(2);
 }
 
+/* --- the zone map under the radar (zonemap.h): one texture, filled again on each new zone ------- */
+static ImTextureData* g_map_tex;
+static ZoneMap g_map; /* its placement in the world (the pixels are the texture's) */
+
+static void map_texture_update(void)
+{
+    ZoneMap zm;
+    if (!zonemap_take(gamestate_zone(), &zm))
+        return;
+    if (g_map_tex && g_map_tex->Width != zm.size)
+        g_map_tex = NULL; /* a size it was not made for: a new one (the old is left, once) */
+    if (!g_map_tex)
+    {
+        g_map_tex = IM_NEW(ImTextureData)();
+        g_map_tex->Create(ImTextureFormat_RGBA32, zm.size, zm.size);
+        g_map_tex->UseColors = true;
+        memcpy(g_map_tex->GetPixels(), zm.rgba, (size_t)zm.size * zm.size * 4);
+        ImGui::RegisterUserTexture(g_map_tex);
+    }
+    else
+    {
+        memcpy(g_map_tex->GetPixels(), zm.rgba, (size_t)zm.size * zm.size * 4);
+        if (g_map_tex->Status == ImTextureStatus_OK)
+        {
+            ImTextureRect all = { 0, 0, (unsigned short)zm.size, (unsigned short)zm.size };
+            g_map_tex->Updates.resize(0);
+            g_map_tex->Updates.push_back(all);
+            g_map_tex->UpdateRect = all;
+            g_map_tex->SetStatus(ImTextureStatus_WantUpdates);
+        }
+    }
+    free(zm.rgba);
+    zm.rgba = NULL;
+    g_map = zm;
+}
+
 /* --- the map ------------------------------------------------------------------------------------- */
 /* A radar of who is around (the server's updates, gamestate.c): the player in the middle, facing up
  * (or north up), a compass ring, a dot per player, NPC and monster; the name on hover. The mouse
@@ -678,9 +715,8 @@ static void map_window(void)
         ImGui::End();
         return;
     }
-    float me_x, me_y, me_z;
-    uint8_t me_h;
-    bool known = gamestate_self(&me_x, &me_y, &me_z, &me_h) != 0;
+    float me_x, me_y, me_z, t;
+    bool known = gamestate_self(&me_x, &me_y, &me_z, &t) != 0;
     ImVec2 avail = ImGui::GetContentRegionAvail();
     float side = ImMax(60.0f, ImMin(avail.x, avail.y));
     ImVec2 at = ImGui::GetCursorScreenPos();
@@ -704,12 +740,13 @@ static void map_window(void)
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddCircleFilled(c, r, IM_COL32(12, 16, 22, 190), 64);
+    map_texture_update();
+    bool have_map = known && g_map_tex && g_map.zone == gamestate_zone() && g_map.half > 0;
     dl->AddCircle(c, r * 0.5f, IM_COL32(255, 255, 255, 28), 48);
     dl->AddCircle(c, r, IM_COL32(255, 255, 255, 70), 64, 1.5f);
 
     /* the world (x east, z north) to the radar: facing up, or north up. Facing 0 is east and grows
      * clockwise (64 south), so facing t looks along (cos t, -sin t). */
-    float t = me_h * (IM_PI * 2.0f / 256.0f);
     float ct = cosf(t), st = sinf(t);
     float scale = r / g_set.map_range;
     auto to_screen = [&](float dx, float dz) {
@@ -718,6 +755,47 @@ static void map_window(void)
         float fwd = dx * ct - dz * st, right = -dx * st - dz * ct;
         return ImVec2(c.x + right * scale, c.y - fwd * scale);
     };
+
+    /* the zone's map, a disc of it: a fan whose corners are the world points under them (the radar
+     * is an affine view of the world, so the texture interpolates exactly) */
+    if (have_map)
+    {
+        const int SEG = 72;
+        float inv = 1.0f / scale;
+        auto uv_at = [&](float sx, float sy) {
+            float dx, dz;
+            if (g_set.map_north_up)
+                dx = sx * inv, dz = -sy * inv;
+            else
+            {
+                float right = sx * inv, fwd = -sy * inv;
+                dx = fwd * ct - right * st;
+                dz = -fwd * st - right * ct;
+            }
+            float wx = me_x + dx, wz = me_z + dz;
+            return ImVec2((wx - (g_map.cx - g_map.half)) / (2.0f * g_map.half), ((g_map.cz + g_map.half) - wz) / (2.0f * g_map.half));
+        };
+        dl->PushTexture(g_map_tex->GetTexRef());
+        dl->PrimReserve(SEG * 3, SEG + 1);
+        ImDrawIdx base = (ImDrawIdx)dl->_VtxCurrentIdx;
+        dl->PrimWriteVtx(c, uv_at(0, 0), IM_COL32_WHITE);
+        for (int i = 0; i < SEG; ++i)
+        {
+            float a = (float)i / SEG * IM_PI * 2.0f;
+            float sx = cosf(a) * r, sy = sinf(a) * r;
+            dl->PrimWriteVtx(ImVec2(c.x + sx, c.y + sy), uv_at(sx, sy), IM_COL32_WHITE);
+        }
+        for (int i = 0; i < SEG; ++i)
+        {
+            dl->PrimWriteIdx(base);
+            dl->PrimWriteIdx((ImDrawIdx)(base + 1 + i));
+            dl->PrimWriteIdx((ImDrawIdx)(base + 1 + (i + 1) % SEG));
+        }
+        dl->PopTexture();
+    }
+
+    dl->AddCircle(c, r * 0.5f, IM_COL32(255, 255, 255, 28), 48);
+    dl->AddCircle(c, r, IM_COL32(255, 255, 255, 90), 64, 1.5f);
 
     /* the compass ring's letters */
     static const struct { const char* l; float dx, dz; } DIRS[] = { { "N", 0, 1 }, { "E", 1, 0 }, { "S", 0, -1 }, { "W", -1, 0 } };

@@ -56,6 +56,10 @@ typedef struct XiGameModule
     /* the game's parser of a typed line ("addresses" input_line; 0 when unknown): cdecl, the line
      * and how it came (1: typed). Its own menus run their commands through it too. */
     uint32_t input_line;
+    /* the game's table of entity pointers, by index ("addresses" entity_map; 0 when unknown) */
+    uint32_t entity_map;
+    /* the 256-byte table the game's zone layouts (MZB) are obscured with ("mzb_keys"; 0 unknown) */
+    uint32_t mzb_keys;
 } XiGameModule;
 
 /* The one symbol a module exports. */

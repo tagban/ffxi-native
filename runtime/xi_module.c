@@ -94,4 +94,14 @@ XI_EXPORT const XiGameModule xi_game_module = {
 #else
     0,
 #endif
+#ifdef FFXI_ENTITY_MAP
+    FFXI_ENTITY_MAP,
+#else
+    0,
+#endif
+#ifdef FFXI_MZB_KEYS
+    FFXI_MZB_KEYS,
+#else
+    0,
+#endif
 };

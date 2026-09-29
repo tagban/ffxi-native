@@ -1,6 +1,9 @@
 /* gamestate.h: the server's packets, split and read. The layouts are the game protocol's; fields
  * here only as the overlay needs them. */
 #include "gamestate.h"
+#include "guest.h"
+#include "gwin.h"
+#include "zonemap.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -138,6 +141,49 @@ static struct
     float x, y, z;
     uint8_t heading;
 } g_me;
+static uint16_t g_self_index;
+static uint32_t g_entity_map;
+
+void gamestate_set_entity_map(uint32_t addr) { g_entity_map = addr; }
+
+static char g_game_dir[1024];
+static uint32_t g_mzb_keys;
+void gamestate_set_zone_files(const char* game_dir, uint32_t keys_addr)
+{
+    snprintf(g_game_dir, sizeof g_game_dir, "%s", game_dir ? game_dir : "");
+    g_mzb_keys = keys_addr;
+}
+
+/* the zone's map (zonemap.h), from its layout: the key table read from the game once it is running */
+static void want_map(int zone, float x, float y, float z)
+{
+    static int ready;
+    if (!ready && g_mzb_keys && g_game_dir[0] && gwin_is_committed(g_mzb_keys) && gwin_is_committed(g_mzb_keys + 255))
+    {
+        uint8_t keys[256];
+        memcpy(keys, GUEST_PTR(g_mzb_keys), 256);
+        zonemap_init(g_game_dir, keys);
+        ready = 1;
+    }
+    if (ready)
+        zonemap_want(zone, x, y, z);
+}
+
+/* The game's own entity for an index, if it is the one with this id. Its layout, as far as read
+ * here: the position (x, height, z floats) at 0x04, the facing (radians) at 0x18, the server's id
+ * at 0x78. */
+static uint32_t entity_at(uint16_t index, uint32_t id)
+{
+    if (!g_entity_map || index >= ENTITIES)
+        return 0;
+    uint32_t slot = g_entity_map + 4u * index;
+    if (!gwin_is_committed(slot))
+        return 0;
+    uint32_t p = rd32(slot);
+    if (!p || !gwin_is_committed(p) || !gwin_is_committed(p + 0x100))
+        return 0;
+    return rd32(p + 0x78) == id ? p : 0;
+}
 
 static float f32(const uint8_t* p)
 {
@@ -151,6 +197,7 @@ static float f32(const uint8_t* p)
 static void zone_entities(const uint8_t* p)
 {
     memset(g_ents, 0, sizeof g_ents);
+    g_self_index = u16(p + 0x08);
     g_me.heading = p[0x0B];
     g_me.x = f32(p + 0x0C), g_me.y = f32(p + 0x10), g_me.z = f32(p + 0x14);
     g_me.known = 1;
@@ -201,19 +248,87 @@ static void entity_update(const uint8_t* p, uint32_t size, int pc)
     }
 }
 
+static float mem_f32(uint32_t a)
+{
+    float f;
+    uint32_t u = rd32(a);
+    memcpy(&f, &u, 4);
+    return f;
+}
+
 int gamestate_entities(GameEntity* out, int max)
 {
     int n = 0;
     for (int i = 0; i < ENTITIES && n < max; ++i)
         if (g_ents[i].id && g_ents[i].kind)
-            out[n++] = g_ents[i];
+        {
+            GameEntity* e = &out[n++];
+            *e = g_ents[i];
+            uint32_t p = entity_at((uint16_t)i, e->id);
+            if (p) /* where the game draws it now, between the server's updates */
+                e->x = mem_f32(p + 0x04), e->y = mem_f32(p + 0x08), e->z = mem_f32(p + 0x0C);
+        }
     return n;
 }
 
-int gamestate_self(float* x, float* y, float* z, uint8_t* heading)
+int gamestate_self(float* x, float* y, float* z, float* facing)
 {
-    *x = g_me.x, *y = g_me.y, *z = g_me.z, *heading = g_me.heading;
-    return g_me.known;
+    static const float STEP = 6.28318531f / 256.0f;
+    *x = g_me.x, *y = g_me.y, *z = g_me.z, *facing = g_me.heading * STEP;
+    uint32_t p = g_me.known ? entity_at(g_self_index, g_self) : 0;
+    static int told;
+    if (!p && g_me.known && g_entity_map && told < 1)
+    {
+        /* the entity is not where it was looked for: its first bytes, to learn the layout */
+        ++told;
+        extern void rt_log(const char* fmt, ...);
+        uint32_t slot = g_entity_map + 4u * g_self_index, e = gwin_is_committed(slot) ? rd32(slot) : 0;
+        rt_log("[recomp] map: no entity for index %u id %u (slot %08x -> %08x)\n", g_self_index, g_self, slot, e);
+        if (e && gwin_is_committed(e) && gwin_is_committed(e + 0x100))
+            for (uint32_t o = 0; o < 0xA0; o += 16)
+                rt_log("[recomp]   +%02x: %08x %08x %08x %08x\n", o, rd32(e + o), rd32(e + o + 4), rd32(e + o + 8), rd32(e + o + 12));
+    }
+    if (!p)
+        return g_me.known;
+    *x = mem_f32(p + 0x04), *y = mem_f32(p + 0x08), *z = mem_f32(p + 0x0C);
+    float yaw = mem_f32(p + 0x18);
+    /* The memory's facing may count the other way, or from another direction, than the packets'
+     * byte: each time a new byte comes, the eight ways it could be are scored against it, and the
+     * best so far is used. */
+    static float score[8];
+    static int last_heading = -1, best;
+    if (g_me.heading != last_heading)
+    {
+        last_heading = g_me.heading;
+        float want = g_me.heading * STEP;
+        for (int k = 0; k < 8; ++k)
+        {
+            float d = ((k & 1) ? -yaw : yaw) + (float)(k >> 1) * 1.57079633f - want;
+            d = fmodf(d, 6.28318531f);
+            if (d < 0)
+                d += 6.28318531f;
+            if (d > 3.14159265f)
+                d = 6.28318531f - d;
+            score[k] = score[k] * 0.9f + d;
+        }
+        for (int k = 1; k < 8; ++k)
+            if (score[k] < score[best])
+                best = k;
+    }
+    *facing = ((best & 1) ? -yaw : yaw) + (float)(best >> 1) * 1.57079633f;
+    if (told < 6)
+    {
+        /* the memory's facing against the packets' byte, a few times: the two should agree */
+        static uint32_t calls;
+        if (++calls % 300 == 1)
+        {
+            ++told;
+            extern void rt_log(const char* fmt, ...);
+            rt_log("[recomp] map: self at %.1f %.1f %.1f (the packets' %.1f %.1f %.1f), facing %.3f (the packets' %u = %.3f, way %d)\n",
+                *x, *y, *z, g_me.x, g_me.y, g_me.z, yaw, g_me.heading, g_me.heading * STEP, best);
+        }
+    }
+    return 1;
 }
 
 /* 0x00A, zoning in: the player's id (and name, at 0x84), the zone */
@@ -224,6 +339,7 @@ static void zone_in(const uint8_t* p, uint32_t size)
     g_self = u32(p + 0x04);
     g_zone = u16(p + 0x30);
     zone_entities(p);
+    want_map(g_zone, g_me.x, g_me.y, g_me.z);
     GameMember* m = member(g_self);
     if (m)
     {

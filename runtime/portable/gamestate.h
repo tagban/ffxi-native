@@ -59,8 +59,16 @@ typedef struct
     char name[24];
 } GameEntity;
 int gamestate_entities(GameEntity* out, int max);
-/* the player's own position and facing (their movement packets, and zoning in): 0 before known */
-int gamestate_self(float* x, float* y, float* z, uint8_t* heading);
+/* the player's own position and facing (radians, 0 east, growing clockwise as the heading byte
+ * does): from the game's own entity each frame where the build's entity table is known, else their
+ * movement packets. 0 before known. */
+int gamestate_self(float* x, float* y, float* z, float* facing);
+/* The game's table of entity pointers (meta/builds.json "entity_map"; 0 unknown): positions and
+ * facing read from it every frame, so the map moves smoothly. Read only. */
+void gamestate_set_entity_map(uint32_t addr);
+/* The install, and where the game keeps its zone layouts' key table ("mzb_keys"): each zone's map
+ * is made from its layout when the player zones in (zonemap.h). */
+void gamestate_set_zone_files(const char* game_dir, uint32_t keys_addr);
 
 #ifdef __cplusplus
 }

@@ -357,6 +357,22 @@ static void chat_add(Guest* g)
 #define INPUT_LINE 0u
 #endif
 
+#if defined(FFXI_ENTITY_MAP)
+#define ENTITY_MAP FFXI_ENTITY_MAP
+#elif defined(XI_SPLIT)
+#define ENTITY_MAP (xi_game->size >= offsetof(XiGameModule, entity_map) + sizeof(uint32_t) ? xi_game->entity_map : 0u)
+#else
+#define ENTITY_MAP 0u
+#endif
+
+#if defined(FFXI_MZB_KEYS)
+#define MZB_KEYS FFXI_MZB_KEYS
+#elif defined(XI_SPLIT)
+#define MZB_KEYS (xi_game->size >= offsetof(XiGameModule, mzb_keys) + sizeof(uint32_t) ? xi_game->mzb_keys : 0u)
+#else
+#define MZB_KEYS 0u
+#endif
+
 /* A line from the overlay (its chat box, or a window's button, on the player's click): through the
  * game's own parser of a typed line, as if typed in its input line: its /commands, or chat. The
  * game's own menus run their commands the same way. On the game's thread (the overlay's frame). */
@@ -382,6 +398,7 @@ static void setup_packets(void)
 {
     if (INPUT_LINE)
         overlay_set_line_runner(run_line);
+    gamestate_set_entity_map(ENTITY_MAP);
     GuestFn* ca = CHAT_ADD_HOOK;
     if (ca)
         *ca = chat_add;
@@ -1087,6 +1104,7 @@ int main(int argc, char** argv)
         snprintf(at, sizeof at, "%s%cROM%c76%c23.DAT", host_game, plat_path_sep, plat_path_sep, plat_path_sep);
         int n = gamestate_load_autotranslate(at);
         rt_log("[recomp] auto-translate: %d phrases\n", n);
+        gamestate_set_zone_files(host_game, MZB_KEYS); /* the overlay's zone maps */
     }
     user32_key_hook = host_key;
     if (g_live_file[0])
