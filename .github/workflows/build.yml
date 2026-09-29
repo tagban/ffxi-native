@@ -5,16 +5,13 @@
 # "Rules"); each player's launcher makes the game from their own install. The build steps are
 # tools/ci/*.sh, which run the same on a developer's machine.
 #
-# Every push and pull request: Linux only (a quick check that it builds; private repositories have
-# a monthly allowance of minutes, and a macOS minute counts ten). A v* tag, or a run started by hand
-# (Actions, Build, Run workflow): every platform, and on a tag a release with them.
+# Only a run started by hand (Actions, Build, Run workflow): every platform. Pushes, pull requests
+# and tags start nothing: a private repository has a monthly allowance of minutes (a macOS minute
+# counts ten), spent by 2026-09-28, so builds and releases are made locally (tools/build_posix.py,
+# tools/windows_dist.py, tools/linux_dist.py).
 name: Build
 
 on:
-  push:
-    branches: ['**']
-    tags: ['v*']
-  pull_request:
   workflow_dispatch:
 
 permissions:
