@@ -1732,18 +1732,7 @@ void d3d8_drop_rect(int i, int on, float x0, float y0, float x1, float y1)
 }
 uint32_t d3d8_dropped_rect_draws(void) { return g_dropped_rect_draws; }
 
-static uint32_t prim_vertices(uint32_t type, uint32_t n)
-{
-    switch (type)
-    {
-    case 1: return n;           /* points */
-    case 2: return 2 * n;       /* line list */
-    case 3: return n + 1;       /* line strip */
-    case 4: return 3 * n;       /* triangle list */
-    case 5: case 6: return n + 2; /* strip, fan */
-    default: return 0;
-    }
-}
+static uint32_t prim_vertices(uint32_t prim, uint32_t n); /* vertices a primitive count spans (below) */
 
 /* whether these vertices (guest memory, from first, count of them) all lie in one dropped rectangle */
 static int in_dropped_rect(uint32_t data, uint32_t stride, uint32_t count)
