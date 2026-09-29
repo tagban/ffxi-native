@@ -27,6 +27,9 @@ void user32_set_ui_aspect(float aspect);
 /* The window size the player last gave (points; 0 x 0: the game's): a framed window opens at it, at
  * the game's shape. */
 void user32_set_window_size(int w, int h);
+/* Asked when the player closes the window (its close button, Cmd+Q, the Dock's Quit): 1 when the host
+ * took it (a logout begun, so the server hears the player leave), and the run goes on; 0 ends it now. */
+void user32_set_close_handler(int (*fn)(void));
 /* The fraction of hwnd's width the interface keeps: 1 when off, or the window is not wider. */
 float user32_ui_squeeze(uint32_t hwnd);
 /* Set by the graphics layer: whether the interface covers this point of the window (0..1 across

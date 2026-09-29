@@ -492,6 +492,8 @@ static void apply_display_request(void)
     rt_log("[recomp] display: %s\n", full ? "full screen" : "a window");
 }
 
+static int (*g_close_handler)(void); /* host64: a logout before the run ends */
+
 static void pump(void)
 {
     apply_display_request();
@@ -587,7 +589,11 @@ static void pump(void)
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             /* Cmd+Q, the Dock's Quit, Ctrl+C, the window's close button: the player leaving. FFXI
              * only leaves from its own menus (its window procedure ignores WM_CLOSE), so the host
-             * ends the run here; nothing is lost - the registry is saved as the game changes it. */
+             * ends the run here; nothing is lost - the registry is saved as the game changes it.
+             * In the world the host logs out first (the game's /shutdown), so the server is not left
+             * holding the character: a close while that runs ends the run at once. */
+            if (g_close_handler && g_close_handler())
+                break;
             rt_log("[recomp] quit\n");
             fflush(NULL);
             _Exit(0);
@@ -671,6 +677,8 @@ static void sh_AdjustWindowRect(Guest* g) { RET(1, 3); }
 /* The size the player last gave the window (host64 --window-size, the launcher remembers it): the
  * game's window opens at it; 0 for the game's own size. */
 static int g_window_pw, g_window_ph;
+
+void user32_set_close_handler(int (*fn)(void)) { g_close_handler = fn; }
 
 void user32_set_window_size(int w, int h)
 {

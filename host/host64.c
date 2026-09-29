@@ -975,8 +975,35 @@ static void launcher_lobby_error(unsigned code)
 
 static int g_profile_shims;
 
+/* Closing the window in the world: the game's own /shutdown first, as if typed (the player's one
+ * close, one command), so the server hears the player leave. Quitting at once leaves the character
+ * in the world until the server gives up on it (LandSandBoat: a minute), and signing in again before
+ * then is refused ("same character already logged in"). The game ends the run itself once logged
+ * out; a close while it counts down ends it at once. The close button and Cmd+Q can arrive as two
+ * events for one close: those within a second are one. */
+static volatile int g_logout; /* 1 asked, 2 sent */
+static uint64_t g_logout_at;
+
+static int close_asked(void)
+{
+    uint64_t now = rt_monotonic_ns();
+    if (g_logout)
+        return now - g_logout_at < 1000000000ull;
+    if (!INPUT_LINE || !dsound_in_world())
+        return 0;
+    g_logout_at = now;
+    g_logout = 1;
+    rt_log("[recomp] quit: logging out first (/shutdown); close again to quit now\n");
+    return 1;
+}
+
 static void present_hook(void)
 {
+    if (g_logout == 1)
+    {
+        g_logout = 2;
+        run_line("/shutdown");
+    }
     live_reload();
     if (g_profile_shims)
     {
@@ -1489,6 +1516,7 @@ int main(int argc, char** argv)
     polcore_init();
     d3d8_setup();
     d3d8_set_present_hook(present_hook);
+    user32_set_close_handler(close_asked);
     setup_nameplates();
     setup_packets();
     {
