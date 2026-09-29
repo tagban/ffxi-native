@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <math.h>
 #include <stdio.h>
+#include <ctype.h>
 #include <string.h>
 #include <strings.h>
 
@@ -1186,11 +1187,39 @@ static const struct
 {
     const char *name, *prefix;
 } SEND_TO[] = {
-    { "Say", "/s " }, { "Party", "/p " }, { "Linkshell", "/l " }, { "Linkshell 2", "/l2 " },
+    { "Say", "/s " }, { "Party", "/p " }, { "Linkshell 1", "/l " }, { "Linkshell 2", "/l2 " },
     { "Shout", "/sh " }, { "Yell", "/yell " }, { "Tell", "/t " }, { "Emote", "/em " },
 };
 static int g_send_to;
 static char g_send[256];
+
+/* "/cm l", "/chatmode ls2": the game's chat mode, which the box's own follows (the line still goes to
+ * the game, so its mode is the same). The mode's names as the game takes them. */
+static void follow_chat_mode(const char* t)
+{
+    if (strncmp(t, "/cm ", 4) && strncmp(t, "/chatmode ", 10))
+        return;
+    t = strchr(t, ' ');
+    while (*t == ' ')
+        ++t;
+    char m[16] = "";
+    size_t n = 0;
+    for (; t[n] && t[n] != ' ' && n + 1 < sizeof m; ++n)
+        m[n] = (char)tolower((unsigned char)t[n]);
+    m[n] = 0;
+    static const struct
+    {
+        const char* name;
+        int to;
+    } MODES[] = {
+        { "s", 0 }, { "say", 0 }, { "p", 1 }, { "party", 1 }, { "l", 2 }, { "l1", 2 }, { "ls", 2 }, { "ls1", 2 },
+        { "linkshell", 2 }, { "linkshell1", 2 }, { "l2", 3 }, { "ls2", 3 }, { "linkshell2", 3 }, { "sh", 4 },
+        { "shout", 4 }, { "y", 5 }, { "yell", 5 },
+    };
+    for (const auto& e : MODES)
+        if (!strcmp(m, e.name))
+            g_send_to = e.to;
+}
 static bool g_send_refocus, g_send_fresh;
 
 static void chat_box(void)
@@ -1242,6 +1271,7 @@ static void chat_box(void)
             /* a /command, or a server's own ! command (a GM's, say), goes as it is: as if typed in
              * the game's own input line */
             snprintf(line, sizeof line, "%s%s", *t == '/' || *t == '!' ? "" : SEND_TO[g_send_to].prefix, t);
+            follow_chat_mode(line);
             g_run_line(line);
         }
         g_send[0] = 0; /* and the box closes, as the game's input line does */
