@@ -1704,6 +1704,52 @@ static void IDirect3DDevice8_ValidateDevice(Guest* g)
     RET(D3D_OK, 2);
 }
 
+/* Palettes: kept and handed back, as D3D8 does. Nothing samples them: paletted texture formats are not
+ * offered (format_ok), so the game's paletted art comes as ordinary textures. The game sets them all the
+ * same (character creation). Numbers past the ones kept are accepted and read back as zeros. */
+#define PALETTES 256
+static uint32_t g_palettes[PALETTES][256];
+static uint32_t g_current_palette;
+
+/* SetPaletteEntries(PaletteNumber, const PALETTEENTRY* pEntries): 256 entries of 4 bytes */
+static void IDirect3DDevice8_SetPaletteEntries(Guest* g)
+{
+    const uint32_t n = ARG(1), entries = ARG(2);
+    if (!entries)
+        RET(D3DERR_INVALIDCALL, 3);
+    if (n < PALETTES)
+        for (uint32_t i = 0; i < 256; ++i)
+            g_palettes[n][i] = rd32(entries + 4 * i);
+    RET(D3D_OK, 3);
+}
+
+/* GetPaletteEntries(PaletteNumber, PALETTEENTRY* pEntries) */
+static void IDirect3DDevice8_GetPaletteEntries(Guest* g)
+{
+    const uint32_t n = ARG(1), entries = ARG(2);
+    if (!entries)
+        RET(D3DERR_INVALIDCALL, 3);
+    for (uint32_t i = 0; i < 256; ++i)
+        wr32(entries + 4 * i, n < PALETTES ? g_palettes[n][i] : 0);
+    RET(D3D_OK, 3);
+}
+
+/* SetCurrentTexturePalette(PaletteNumber) */
+static void IDirect3DDevice8_SetCurrentTexturePalette(Guest* g)
+{
+    g_current_palette = ARG(1);
+    RET(D3D_OK, 2);
+}
+
+/* GetCurrentTexturePalette(UINT* PaletteNumber) */
+static void IDirect3DDevice8_GetCurrentTexturePalette(Guest* g)
+{
+    if (!ARG(1))
+        RET(D3DERR_INVALIDCALL, 2);
+    wr32(ARG(1), g_current_palette);
+    RET(D3D_OK, 2);
+}
+
 /* --- IDirect3DDevice8: drawing ----------------------------------------------------------------------------- */
 static void draw(uint32_t prim, uint32_t count, uint32_t start, uint32_t indices, uint32_t index_size, uint32_t up_data,
     uint32_t up_stride);
@@ -3604,6 +3650,10 @@ static const ShimDef D3D8[] = {
     D(IDirect3DDevice8, GetTextureStageState),
     D(IDirect3DDevice8, SetTextureStageState),
     D(IDirect3DDevice8, ValidateDevice),
+    D(IDirect3DDevice8, SetPaletteEntries),
+    D(IDirect3DDevice8, GetPaletteEntries),
+    D(IDirect3DDevice8, SetCurrentTexturePalette),
+    D(IDirect3DDevice8, GetCurrentTexturePalette),
     D(IDirect3DDevice8, DrawPrimitive),
     D(IDirect3DDevice8, DrawIndexedPrimitive),
     D(IDirect3DDevice8, DrawPrimitiveUP),
