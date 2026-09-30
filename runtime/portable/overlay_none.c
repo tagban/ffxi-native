@@ -28,3 +28,4 @@ void zonemap_init(const char* game_dir, const uint8_t keys[256]) { (void)game_di
 void zonemap_want(int zone, float x, float y, float z) { (void)zone, (void)x, (void)y, (void)z; }
 int zonemap_take(int zone, ZoneMap* out) { (void)zone, (void)out; return 0; }
 int zonemap_take_art(int zone, ZoneMap* out) { (void)zone, (void)out; return 0; }
+int zonemap_file_path(unsigned id, char* out, size_t n) { (void)id, (void)out, (void)n; return 0; }
