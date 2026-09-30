@@ -138,3 +138,13 @@ mouse, not an afterthought (the player's wish, 2026-09-29). Steam Deck players i
   layouts that fit 16:10.
 - FFXI's own pad scheme stays the reference (its menu button, cancel, the target cycle), so the
   overlay never fights what the game does with the same buttons.
+
+## For later: monsters of any size (the player's idea, 2026-09-29)
+
+The server can't: LandSandBoat's `mob:setModelSize(0..3)` goes to the client as `GraphSize`, a 2-bit
+field of the entity update (0x00E), which the client turns into one of four preset scales; 3 is the
+largest there is. The client can: every MogHouse player runs this launcher, so the step where the game
+turns the preset into a scale (a table of scales, or a scale on each entity in memory) can take any
+value. Plan: (1) find it and prove it here (a mob 5x); (2) say who is huge: a size list in the
+launcher, or, better, a small LandSandBoat module sending the launcher a scale with the entity (read by
+the packet hook), so a GM's `!size 5` works live; a plain client just sees the normal size.
