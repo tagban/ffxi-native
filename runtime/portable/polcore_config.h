@@ -11,6 +11,8 @@ void polcore_polpro_init(void); /* polpro client, records, mail, text (polcore_p
 /* The PlayOnline Viewer folder as the guest sees it ("C:\...\PlayOnlineViewer"): the root of
  * every POL path (slot 126). */
 void polcore_set_root(const char* guest_viewer_dir);
+/* the folder (a guest path) with our name dictionary, entryz.dic: path id 0x13 */
+void polcore_set_dic_dir(const char* guest_dir);
 /* A patch.ver (0x120 bytes, encrypted as retail's with no registry key) carrying the client
  * version string, e.g. "30260903_0", for an install that ships none (private-server installs
  * launched without the PlayOnline Viewer). 0 if the string does not fit. */

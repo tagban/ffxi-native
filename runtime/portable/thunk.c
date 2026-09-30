@@ -18,6 +18,7 @@ typedef struct Thunk
     char name[96]; /* DLL!name */
     Shim shim;
     uint64_t prof_ns, prof_calls; /* the game thread's time in it since the last report */
+    uint32_t calls, last_ret;     /* FFXI_RECOMP_FIRSTCALLS */
 } Thunk;
 
 static Thunk* g_thunks;
@@ -127,6 +128,28 @@ int thunk_dispatch(Guest* g, uint32_t target)
     {
         const char* e = getenv("FFXI_RECOMP_TRACE");
         g_trace = e && *e == '1';
+    }
+    static int first_calls = -1;
+    if (first_calls < 0)
+    {
+        const char* e = getenv("FFXI_RECOMP_FIRSTCALLS");
+        first_calls = e && *e == '1';
+    }
+    if (first_calls && !g_trace)
+    {
+        /* each import's first call, and a polcore slot's whenever its answer changes: what the game
+         * starts doing at a given moment (a menu, an error), in order, without a full trace's volume */
+        Thunk* t = &g_thunks[(target - THUNK_BASE) / THUNK_STRIDE];
+        uint32_t site = rd32(g->esp), a0 = rd32(g->esp + 4), a1 = rd32(g->esp + 8), a2 = rd32(g->esp + 12);
+        t_depth++;
+        s(g);
+        t_depth--;
+        /* polcore: every call, up to 300 a slot (the per-frame pumps fall silent after that) */
+        const int pol = !strncmp(name, "polcore.dll", 11);
+        if (t->calls++ == 0 || (pol && (t->calls <= 300 || g->eax != t->last_ret)))
+            rt_log("[first] %08x %-44s (%08x %08x %08x) = %08x%s\n", site, name, a0, a1, a2, g->eax, t->calls > 1 ? " (changed)" : "");
+        t->last_ret = g->eax;
+        return 1;
     }
     if (g_trace)
     {

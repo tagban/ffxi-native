@@ -9,6 +9,7 @@
  * patch.ver keyed from the registry's PlayOnline Interface value, as retail; option.bin read, not
  * written back; the profanity filter off (LSB checks names server-side); no POL storage server
  * ("NO DATA"); English wording for the POL message lines. */
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -231,6 +232,18 @@ void polcore_set_root(const char* guest_viewer_dir)
         strcat(g_root, "\\");
 }
 
+/* The dictionaries' folder (path id 0x13), when ours: the launcher's data folder, with our own
+ * name dictionary (entryz.dic, below), so a new character can be named without PlayOnline. */
+static char g_dic_dir[512];
+
+void polcore_set_dic_dir(const char* guest_dir)
+{
+    snprintf(g_dic_dir, sizeof g_dic_dir - 1, "%s", guest_dir);
+    size_t n = strlen(g_dic_dir);
+    if (n && g_dic_dir[n - 1] != '\\')
+        strcat(g_dic_dir, "\\");
+}
+
 static const char* const EU_LANG[] = { "EN", "FR", "DE", "IT", "ES", "EL", "PT" };
 
 static int title_component(int32_t extra, char* out, size_t n)
@@ -277,7 +290,12 @@ static void pol_path(uint32_t id, int32_t extra, const char* extra_str, char* ou
     case 0x10: snprintf(out, n, "%spub\\%s\\mail\\adr\\", g_root, home); break;
     case 0x11: snprintf(out, n, "%spub\\%s\\", g_root, home); break;
     case 0x12: snprintf(out, n, "%spub\\all\\", g_root); break;
-    case 0x13: snprintf(out, n, "%sdata\\dic\\", g_root); break;
+    case 0x13:
+        if (g_dic_dir[0])
+            snprintf(out, n, "%s", g_dic_dir);
+        else
+            snprintf(out, n, "%sdata\\dic\\", g_root);
+        break;
     case 0x14:
         if (lang >= 2 && lang <= 8)
             snprintf(out, n, "%sEU\\%s\\db\\", g_root, EU_LANG[lang - 2]);
@@ -846,17 +864,69 @@ void polcore_idle_tick(void)
 static void s362_dic_open(Guest* g) { RETC(ARG(0)); }
 static void s363_dic_filter(Guest* g) { RETC(0); }
 
+/* The names new characters may not have. Ours: entryz.dic in our own format, a text list -
+ * "#xi-name-dic" on its first line, then a word a line ('#' lines are notes): a name containing
+ * one, in any letter case, is refused (the game says "That name is already in use"). Anything
+ * else goes to the server, which has its own filter (LandSandBoat's). A retail entryz.dic (from a
+ * PlayOnline install) is accepted and matches nothing, as before. */
+#define NAME_WORDS 64
+static char g_name_words[NAME_WORDS][32];
+static int g_name_nwords;
+
 static void s1109_name_dic_open(Guest* g)
 {
     uint32_t buf = ARG(0);
     int32_t size = (int32_t)ARG(1);
+    static const char MAGIC[] = "#xi-name-dic";
+    if (buf && size >= (int32_t)sizeof MAGIC - 1 && !memcmp(GUEST_PTR(buf), MAGIC, sizeof MAGIC - 1))
+    {
+        const char* t = (const char*)GUEST_PTR(buf);
+        g_name_nwords = 0;
+        for (int32_t i = 0; i < size && g_name_nwords < NAME_WORDS;)
+        {
+            int32_t e = i;
+            while (e < size && t[e] != '\n' && t[e] != '\r')
+                e++;
+            int32_t a = i, b = e;
+            while (a < b && (t[a] == ' ' || t[a] == '\t'))
+                a++;
+            while (b > a && (t[b - 1] == ' ' || t[b - 1] == '\t'))
+                b--;
+            if (b > a && t[a] != '#' && b - a < 32)
+            {
+                for (int32_t k = 0; k < b - a; ++k)
+                    g_name_words[g_name_nwords][k] = (char)tolower((unsigned char)t[a + k]);
+                g_name_words[g_name_nwords][b - a] = 0;
+                g_name_nwords++;
+            }
+            i = e + 1;
+        }
+        rt_log("[recomp] polcore: name dictionary, %d words\n", g_name_nwords);
+        RETC(buf);
+    }
     uint32_t total = 0x20;
     for (int i = 0; i < 4; ++i)
         total += rd32(buf + 4 + 8 * (uint32_t)i);
     RETC(buf && (uint32_t)size == total ? buf : 0);
 }
 
-static void s1110_name_forbidden(Guest* g) { RETC(0); }
+/* NameIsForbidden(h, name, len): 1 when the name contains one of our words */
+static void s1110_name_forbidden(Guest* g)
+{
+    uint32_t name = ARG(1);
+    int32_t len = (int32_t)ARG(2);
+    if (!ARG(0) || !name || len <= 0 || !g_name_nwords)
+        RETC(0);
+    char n[64];
+    int32_t m = len < (int32_t)sizeof n - 1 ? len : (int32_t)sizeof n - 1;
+    for (int32_t i = 0; i < m; ++i)
+        n[i] = (char)tolower(rd8(name + (uint32_t)i));
+    n[m] = 0;
+    for (int w = 0; w < g_name_nwords; ++w)
+        if (strstr(n, g_name_words[w]))
+            RETC(1);
+    RETC(0);
+}
 
 static const PolcoreSlot FILES_SLOTS[] = {
     { 0x1f8, s126_path },

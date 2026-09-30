@@ -41,6 +41,9 @@ pub struct LaunchRequest {
     pub account: Account,
     pub password: String,
     pub otp: String,
+    /// The player's own install, when the game runs from a version kept for a server (the vault's
+    /// copies hold FINAL FANTASY XI only): its PlayOnlineViewer is used.
+    pub own_game_path: String,
 }
 
 fn state(app: &AppHandle, state: &'static str, message: impl Into<String>) {
@@ -74,15 +77,20 @@ fn log_line(app: &AppHandle, log: &Mutex<Option<File>>, line: &str) {
 }
 
 /// host64's command line (without the password, which goes in FFXI_PASSWORD).
-fn host_args(cfg: &LauncherConfig, paths: &Paths, account: &Account, session: Option<&str>, otp: &str) -> Vec<String> {
+fn host_args(cfg: &LauncherConfig, paths: &Paths, account: &Account, session: Option<&str>, otp: &str, own_game: &str) -> Vec<String> {
     let mut a: Vec<String> = vec!["--game".into(), cfg.game_path.clone()];
     if let Some(m) = &paths.module {
         a.extend(["--module".into(), m.to_string_lossy().into_owned()]);
     }
-    // PlayOnlineViewer, when it is not where the game looks (beside FINAL FANTASY XI)
+    // PlayOnlineViewer, when it is not where the game looks (beside FINAL FANTASY XI). A version
+    // kept for a server (<vault>/installs/<version>/FINAL FANTASY XI) has none: the player's own
+    // install's. Without it the game has no data\dic (its name dictionary): every new character's
+    // name is refused as "already in use" (error 3322).
     let game = std::path::Path::new(&cfg.game_path);
-    if let Some(v) = crate::setup::find_viewer(game) {
-        if !game.join("../PlayOnlineViewer").is_dir() {
+    if !game.join("../PlayOnlineViewer").is_dir() {
+        let viewer = crate::setup::find_viewer(game)
+            .or_else(|| (!own_game.is_empty()).then(|| crate::setup::find_viewer(std::path::Path::new(own_game))).flatten());
+        if let Some(v) = viewer {
             a.extend(["--viewer".into(), v.to_string_lossy().into_owned()]);
         }
     }
@@ -189,7 +197,7 @@ fn run(app: &AppHandle, running: &Running, cfg: &LauncherConfig, paths: &Paths, 
     // the session before stays beside it (a crash, then a retry)
     let _ = fs::rename(&log_path, paths.log_dir.join("host64.previous.log"));
     let log = Arc::new(Mutex::new(File::create(&log_path).ok()));
-    let args = host_args(cfg, paths, account, session.as_deref(), &req.otp);
+    let args = host_args(cfg, paths, account, session.as_deref(), &req.otp, &req.own_game_path);
     log_line(app, &log, &format!("> {} {}", paths.host.display(), args.join(" ")));
 
     let mut cmd = Command::new(&paths.host);

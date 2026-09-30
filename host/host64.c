@@ -1644,6 +1644,41 @@ int main(int argc, char** argv)
         if (vfs_full_path(viewer, full, sizeof full))
             polcore_set_root(full);
     }
+    if (data_dir)
+    {
+        /* Our name dictionary, <data dir>/dic/entryz.dic, written the first time (and editable):
+         * the words a new character's name may not contain. The game loads it where PlayOnline keeps
+         * its dictionaries; without one it refuses every name ("already in use", 3322). The server
+         * checks names as well. */
+        static const char DEFAULT_WORDS[] =
+            "#xi-name-dic\n"
+            "# Character names containing one of these words (any letter case) are refused before\n"
+            "# they are sent to the server, which checks names with its own filter as well.\n"
+            "# One word a line.\n"
+            "fuck\n"
+            "nazi\n";
+        char dir[1100], file[1200];
+        snprintf(dir, sizeof dir, "%s%cdic", data_dir, plat_path_sep);
+        snprintf(file, sizeof file, "%s%centryz.dic", dir, plat_path_sep);
+        PlatStat st;
+        plat_mkdir(dir);
+        if (!plat_stat(file, &st))
+        {
+            FILE* f = fopen(file, "wb");
+            if (f)
+            {
+                fwrite(DEFAULT_WORDS, 1, sizeof DEFAULT_WORDS - 1, f);
+                fclose(f);
+            }
+        }
+        if (plat_path_sep == '\\')
+            polcore_set_dic_dir(dir);
+        else
+        {
+            vfs_mount("C:\\PlayOnline\\SquareEnix\\XiDic", dir);
+            polcore_set_dic_dir("C:\\PlayOnline\\SquareEnix\\XiDic");
+        }
+    }
 
     /* the images first, before the heap spreads through the low window */
     snprintf(path, sizeof path, "%s%cFFXiMain.dll", host_game, plat_path_sep);

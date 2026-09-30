@@ -172,11 +172,12 @@ fn launch(
         password
     };
     // the account's own version of the game, when its server wants another (versions.rs)
+    let own_game_path = cfg.game_path.clone();
     if !account.game_path.is_empty() {
         cfg.game_path = account.game_path.clone();
     }
     let paths = paths(&app, &cfg)?;
-    game::launch(app, running.inner().clone(), cfg, paths, LaunchRequest { account, password, otp })?;
+    game::launch(app, running.inner().clone(), cfg, paths, LaunchRequest { account, password, otp, own_game_path })?;
     Ok(saved)
 }
 
