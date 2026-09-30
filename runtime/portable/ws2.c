@@ -95,7 +95,11 @@ typedef struct Sock
     uint32_t enabled;     /* which events may be recorded again */
     int errors[10];       /* iErrorCode by FD_*_BIT */
     int zone;             /* a UDP socket the game has sent on: its talk with a zone server */
+    int lobby;            /* a TCP connection to the login server's view or data port: logged */
 } Sock;
+
+static uint16_t g_lobby_ports[2]; /* data, view; 0: no LSB sign-in */
+static void lobby_log(const Sock* s, const char* what, long a, long b, long c);
 
 /* UDP sockets the game has sent on: while there are any, it is in the world (the lobby is TCP) */
 static int g_zone_socks;
@@ -265,9 +269,11 @@ static void sh_closesocket(Guest* g)
     Sock* s = sock(ARG(0));
     if (!s)
         RET(GUEST_SOCKET_ERROR, 1);
+    lobby_log(s, "close", 0, 0, 0);
     lock();
     host_sock h = s->h;
     s->used = 0;
+    s->lobby = 0;
     if (s->zone && --g_zone_socks == 0)
         dsound_set_in_world(0);
     s->zone = 0;
@@ -320,6 +326,8 @@ static void sh_connect(Guest* g)
         gt_set_error(WSAEFAULT);
         RET(GUEST_SOCKET_ERROR, 3);
     }
+    const uint16_t port = ntohs(a.sin_port);
+    s->lobby = s->type == 1 && g_lobby_ports[0] && (port == g_lobby_ports[0] || port == g_lobby_ports[1]);
     int nb = s->nonblocking;
     if (!nb)
         gt_unlock();
@@ -327,6 +335,7 @@ static void sh_connect(Guest* g)
     int e = host_errno();
     if (!nb)
         gt_lock();
+    lobby_log(s, "connect port/result/error", port, r, r ? e : 0);
     if (r != 0)
     {
         gt_set_error(wsa_error(e));
@@ -397,7 +406,13 @@ static void io_done(Sock* s, uint32_t bit, int would_block)
 static int host_flags(uint32_t f) { return (f & 1 ? MSG_OOB : 0) | (f & 2 ? MSG_PEEK : 0); }
 
 static uint8_t g_lobby_hash[16];
-static uint16_t g_lobby_ports[2]; /* data, view; 0: no LSB sign-in */
+/* The lobby's talk, to the log: a few dozen lines a login, for the lobby errors (3101) that
+ * otherwise leave nothing behind. Times are milliseconds within the minute. */
+static void lobby_log(const Sock* s, const char* what, long a, long b, long c)
+{
+    if (s && s->lobby)
+        rt_log("[recomp] lobby %05u: %s %ld %ld %ld\n", (unsigned)(plat_wall_ms() % 60000u), what, a, b, c);
+}
 
 void ws2_set_lobby_session(const uint8_t hash[16], uint16_t data_port, uint16_t view_port)
 {
@@ -438,6 +453,11 @@ static void sh_send(Guest* g)
     int e = host_errno();
     if (!nb)
         gt_lock();
+    if (s->lobby)
+    {
+        const uint8_t* b = (const uint8_t*)ARGP(1);
+        lobby_log(s, "send size/command/sent", (long)ARG(2), ARG(2) >= 9 && !memcmp(b + 4, "IXFF", 4) ? b[8] : -1, n < 0 ? -e : n);
+    }
     if (n < 0)
     {
         gt_set_error(wsa_error(e));
@@ -503,6 +523,8 @@ static void sh_recv(Guest* g)
     int e = host_errno();
     if (!nb)
         gt_lock();
+    /* asked, flags (2: a peek), got (0: the server closed; negative: the error) */
+    lobby_log(s, "recv asked/flags/got", (long)ARG(2), (long)ARG(3), n < 0 ? -e : n);
     io_done(s, FD_READ, 0);
     if (n < 0)
     {
@@ -585,6 +607,7 @@ static void sh_ioctlsocket(Guest* g)
         ioctl(s->h, FIONREAD, &n);
 #endif
         wr32(ARG(2), (uint32_t)n);
+        lobby_log(s, "fionread", n, 0, 0);
         RET(0, 3);
     }
     gt_set_error(WSAEINVAL);

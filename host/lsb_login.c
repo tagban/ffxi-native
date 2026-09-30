@@ -477,9 +477,12 @@ static void data_thread(void* arg)
         long n = (long)recv(d->s, (char*)in, (int)sizeof in, 0);
         if (n <= 0)
         {
-            fprintf(stderr, "[lsb] login data connection closed\n");
+            fprintf(stderr, "[lsb] login data connection closed (%ld)\n", n);
             return;
         }
+        /* what the server asked, to the log (a few lines a login): with ws2's "lobby" lines, a lobby
+         * error (3101) can be read back. Several commands can arrive in one read. */
+        fprintf(stderr, "[lsb] data %05u: got %ld bytes, command 0x%02X\n", (unsigned)(plat_wall_ms() % 60000u), n, in[0]);
         memset(out, 0, sizeof out);
         switch (in[0])
         {
