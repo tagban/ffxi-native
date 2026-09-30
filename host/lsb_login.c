@@ -463,8 +463,17 @@ typedef struct DataConn
 {
     sock_t s;
     uint32_t account, server;
+    uint16_t port;
     uint8_t hash[16];
 } DataConn;
+
+/* the data connection's first word: 0xFE and the session hash (the server files the connection under it) */
+static int data_register(DataConn* d)
+{
+    uint8_t first[28] = { 0xFE };
+    memcpy(first + 12, d->hash, 16);
+    return send(d->s, (const char*)first, sizeof first, 0) > 0;
+}
 
 static DataConn g_data;
 
@@ -472,14 +481,33 @@ static void data_thread(void* arg)
 {
     DataConn* d = (DataConn*)arg;
     uint8_t in[4096], out[28];
+    int heard = 0, retries = 0;
     for (;;)
     {
         long n = (long)recv(d->s, (char*)in, (int)sizeof in, 0);
+        if (n <= 0 && !heard && retries < 3)
+        {
+            /* Closed before the server asked anything: LandSandBoat's sign-in replies before it records
+             * the session, so a connection made at once can be turned away ("Session requested without
+             * valid sessionHash"). Once more, a moment later, when the session is there. */
+            char err[160];
+            sock_close(d->s);
+            plat_sleep_ms(250u * (unsigned)++retries);
+            d->s = tcp_connect(d->server, d->port, 0, err, sizeof err);
+            if (d->s != SOCK_BAD && data_register(d))
+            {
+                fprintf(stderr, "[lsb] login data connection turned away; registered again (%d)\n", retries);
+                continue;
+            }
+            fprintf(stderr, "[lsb] login data connection: could not connect again: %s\n", err);
+            return;
+        }
         if (n <= 0)
         {
             fprintf(stderr, "[lsb] login data connection closed (%ld)\n", n);
             return;
         }
+        heard = 1;
         /* what the server asked, to the log (a few lines a login): with ws2's "lobby" lines, a lobby
          * error (3101) can be read back. Several commands can arrive in one read. */
         fprintf(stderr, "[lsb] data %05u: got %ld bytes, command 0x%02X\n", (unsigned)(plat_wall_ms() % 60000u), n, in[0]);
@@ -662,11 +690,9 @@ int lsb_login(const LsbLogin* l, char* err, size_t errn)
     g_data.s = tcp_connect(l->server, l->data_port, 0, err, errn);
     if (g_data.s == SOCK_BAD)
         return 0;
-    g_data.account = (uint32_t)account, g_data.server = l->server;
+    g_data.account = (uint32_t)account, g_data.server = l->server, g_data.port = l->data_port;
     memcpy(g_data.hash, hash, 16);
-    uint8_t first[28] = { 0xFE };
-    memcpy(first + 12, hash, 16);
-    if (send(g_data.s, (const char*)first, sizeof first, 0) <= 0 || !plat_thread_start(data_thread, &g_data))
+    if (!data_register(&g_data) || !plat_thread_start(data_thread, &g_data))
     {
         snprintf(err, errn, "the login data connection failed");
         sock_close(g_data.s);
