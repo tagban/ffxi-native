@@ -30,6 +30,12 @@ computer:
   center (GNOME Software, KDE Discover) installs it; then open **FFXI Launcher** from your apps. On
   Debian or Ubuntu, the `.deb` installs the same way. Or the AppImage: in its Properties, allow it
   to run as a program, then double-click it.
+- **Steam Deck**: in Desktop Mode, open the `.flatpak` (Discover installs it), or from a terminal:
+  `flatpak install --user ./FFXI-Launcher-x86_64.flatpak`. To play in Game Mode, add it to Steam: in
+  Steam (Desktop Mode), **Games, Add a Non-Steam Game**, and pick **FFXI Launcher**. In Game Mode, open
+  its controller settings and choose the **Gamepad with Mouse Trackpad** layout: the right trackpad is
+  then the mouse (for the launcher's buttons), and the sticks and buttons a gamepad, which the game
+  takes as its own. The game's gamepad setup is in its own config (as on Windows).
 
 You also need FINAL FANTASY XI installed (the official installer, updated or not: the launcher
 brings it to the version your server needs).
