@@ -983,7 +983,9 @@ static void watcher(void* arg)
                         if (want & FD_CLOSE)
                             got |= FD_CLOSE, s->enabled &= ~(FD_CLOSE | FD_READ), s->errors[5] = (int)WSAECONNRESET;
                     }
-                    else if (want & FD_READ)
+                    /* TCP: data there (a peek of 1), not a would-block, which a
+                     * readable that another thread's read has drained since gives */
+                    else if ((want & FD_READ) && (n > 0 || s->type != 1))
                         got |= FD_READ, s->enabled &= ~FD_READ, s->errors[0] = 0;
                 }
             }
@@ -1027,6 +1029,21 @@ static void sh_WSAEnumNetworkEvents(Guest* g)
     lock();
     uint32_t ev = s->pending;
     s->pending = 0;
+    /* A readable recorded before the game's own read drained the socket is stale: Winsock's AFD
+     * does not report it, and the game's lobby, resuming a reply that came in two TCP segments
+     * (the 2272-byte character list over the internet), takes the would-block of its next read
+     * for a lost connection: "Recv Client error!", the lobby error 3101. Checked here, as the game
+     * collects its events; dropped, and FD_READ enabled again, if nothing is there. */
+    if ((ev & FD_READ) && s->type == 1 && !s->listening)
+    {
+        char c;
+        if ((int)recv(s->h, &c, 1, MSG_PEEK) < 0 && wsa_error(host_errno()) == WSAEWOULDBLOCK)
+        {
+            ev &= ~FD_READ;
+            s->enabled |= FD_READ;
+            lobby_log(s, "stale readable dropped", 0, 0, 0);
+        }
+    }
     uint32_t p = ARG(2);
     wr32(p, ev);
     for (int i = 0; i < 10; ++i)

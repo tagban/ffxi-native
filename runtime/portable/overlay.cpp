@@ -17,6 +17,7 @@
 #include "imgui.h"
 #include "imgui_internal.h" /* ImGuiSettingsHandler: the chat's settings in overlay.ini */
 #include "backends/imgui_impl_sdl3.h"
+#include <SDL3/SDL.h>
 #include "fonts/roboto_medium.h"
 
 extern "C" int dsound_in_world(void);
@@ -2544,6 +2545,25 @@ extern "C" void overlay_build_frame(void)
                 snprintf(last, sizeof last, "%.8s", f);
                 extern void rt_log(const char* fmt, ...);
                 rt_log("[recomp] the game's keyboard: %s%s\n", f[0] ? last : "(none)", game_asks ? " (the overlay fades)" : "");
+            }
+        }
+        {
+            /* XI_TEST_ENTER=<window>: Enter pressed once, a second and a half after that window has
+             * the keyboard; for unattended tests of the lobby (XI_TEST_ENTER=ptc8lice: its license
+             * screen). Nothing when unset. */
+            static const char* test_enter = getenv("XI_TEST_ENTER");
+            static int test_frames;
+            if (test_enter && test_frames < 100 && f[0] && !strncmp(f, test_enter, strlen(test_enter)))
+            {
+                if (++test_frames == 90 || test_frames == 96)
+                {
+                    SDL_Event e = {};
+                    e.type = test_frames == 90 ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+                    e.key.scancode = SDL_SCANCODE_RETURN;
+                    e.key.key = SDLK_RETURN;
+                    e.key.down = test_frames == 90;
+                    SDL_PushEvent(&e);
+                }
             }
         }
         g_asking = false;
