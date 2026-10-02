@@ -631,6 +631,40 @@ static void menu_drawn(Guest* g)
     d3d8_drop_draws(0);
 }
 
+/* its cursor: the choice it is on (+0x4C; a Yes/No's 1 Yes, 2 No), -1 for none */
+static int game_focus_cursor(void)
+{
+    if (!MENU_MGR || !gwin_is_committed(MENU_MGR + 0x54))
+        return -1;
+    uint32_t win = rd32(MENU_MGR + 0x54);
+    return win && game_window_name(win) && gwin_is_committed(win + 0x50) ? (int)rd32(win + 0x4C) : -1;
+}
+
+/* The game's death menu ("dead": its time left and Back to Home Point, at the top left) not drawn
+ * while the overlay's knocked-out screen is up: what it draws in its rectangle (rectangle 3) dropped.
+ * Its place is learned while it has the keyboard, as it has from the knock-out on. */
+static void hide_death_menu(int on)
+{
+    static int16_t at[4];
+    static int known;
+    if (!on)
+    {
+        d3d8_drop_rect(3, 0, 0, 0, 0, 0);
+        known = 0;
+        return;
+    }
+    uint32_t win = MENU_MGR && gwin_is_committed(MENU_MGR + 0x54) ? rd32(MENU_MGR + 0x54) : 0;
+    const char* name = win ? game_window_name(win) : NULL;
+    if (name && !memcmp(name, "dead    ", 8) && gwin_is_committed(win + 0x42))
+    {
+        const int16_t* r = (const int16_t*)GUEST_PTR(win + 0x3A);
+        if (r[2] > r[0] && r[3] > r[1])
+            memcpy(at, r, sizeof at), known = 1;
+    }
+    if (known)
+        d3d8_drop_rect(3, 1, (float)at[0] - 4, (float)at[1] - 4, (float)at[2] + 4, (float)at[3] + 4);
+}
+
 /* the game's window with the keyboard now (the manager's +0x54): its name, "" for none */
 static const char* game_focus(void)
 {
@@ -838,11 +872,14 @@ static void placed_again(uint32_t win)
     }
 }
 
+static void lift_tick(void); /* //xi lift (below) */
+
 /* each frame (the overlay's): which of the game's windows the overlay stands in for now */
 static void hide_game_windows(int log, int party, int target)
 {
     static unsigned frame;
     static int any_moved;
+    lift_tick();
     g_party_hidden = party;
     if (g_keep_frames && !--g_keep_frames)
         d3d8_keep_rect(0, 0, 0, 0, 0);
@@ -964,8 +1001,104 @@ static void hide_game_windows(int log, int party, int target)
 /* A line from the overlay (its chat box, or a window's button, on the player's click): through the
  * game's own parser of a typed line, as if typed in its input line: its /commands, or chat. The
  * game's own menus run their commands the same way. On the game's thread (the overlay's frame). */
+/* Learning how the player could jump (as the "POS hacks" move them): //xi lift <yalms> holds the
+ * player that far above where the game puts them (0 lets go), //xi pos logs their entity's first
+ * bytes as floats, //xi snap and //xi diff what changed in it between. Typed in the overlay's chat box; nothing goes to the game's parser or the server
+ * from these lines. Each frame (lift_tick) the height the game has is compared with what was written:
+ * a change is the game putting them back on the ground, the new ground. */
+static float g_lift, g_lift_wrote, g_lift_ground;
+
+static float f32_at(uint32_t a)
+{
+    uint32_t v = rd32(a);
+    float f;
+    memcpy(&f, &v, sizeof f);
+    return f;
+}
+static int g_lift_frames;
+
+static void lift_tick(void)
+{
+    uint32_t p = gamestate_self_entity();
+    if (!p || !gwin_is_committed(p + 0x40))
+        return;
+    float* y = (float*)GUEST_PTR(p + 0x08);
+    if (g_lift == 0.0f)
+    {
+        if (g_lift_frames)
+            *y = g_lift_ground, g_lift_frames = 0; /* back down; the game takes it from there */
+        return;
+    }
+    int reset = !g_lift_frames || fabsf(*y - g_lift_wrote) > 0.0005f;
+    if (reset)
+        g_lift_ground = *y;
+    if (g_lift_frames < 600 && (g_lift_frames % 60 == 0 || (reset && g_lift_frames < 120)))
+        rt_log("[recomp] lift: frame %d, the game's height %.3f%s, ground %.3f, written %.3f\n", g_lift_frames, *y,
+            reset ? " (put back by the game)" : "", g_lift_ground, g_lift_ground - g_lift);
+    *y = g_lift_wrote = g_lift_ground - g_lift;
+    ++g_lift_frames;
+}
+
+static int xi_line(const char* t)
+{
+    float v;
+    if (sscanf(t, "lift %f", &v) == 1)
+    {
+        g_lift = v;
+        rt_log("[recomp] lift: %.2f yalms\n", v);
+        return 1;
+    }
+    if (!strncmp(t, "pos", 3))
+    {
+        uint32_t p = gamestate_self_entity();
+        if (!p || !gwin_is_committed(p + 0xC0))
+            return rt_log("[recomp] pos: no entity\n"), 1;
+        rt_log("[recomp] pos: entity %08x\n", p);
+        for (uint32_t o = 0; o < 0xC0; o += 16)
+            rt_log("[recomp]   +%02x: %10.3f %10.3f %10.3f %10.3f  (%08x %08x %08x %08x)\n", o, f32_at(p + o), f32_at(p + o + 4),
+                f32_at(p + o + 8), f32_at(p + o + 12), rd32(p + o), rd32(p + o + 4), rd32(p + o + 8), rd32(p + o + 12));
+        return 1;
+    }
+    if (!strncmp(t, "snap", 4) || !strncmp(t, "diff", 4))
+    {
+        /* the entity's first 0x800 bytes kept (snap), and each word changed since logged (diff): to
+         * find where the client keeps what a server packet set (the wallhack flag) */
+        static uint8_t kept[0x800];
+        static uint32_t kept_at;
+        uint32_t p = gamestate_self_entity();
+        if (!p || !gwin_is_committed(p + sizeof kept - 1))
+            return rt_log("[recomp] snap: no entity\n"), 1;
+        if (t[0] == 's' || kept_at != p)
+        {
+            memcpy(kept, GUEST_PTR(p), sizeof kept), kept_at = p;
+            return rt_log("[recomp] snap: entity %08x kept\n", p), 1;
+        }
+        int n = 0;
+        for (uint32_t o = 0; o < sizeof kept; o += 4)
+        {
+            uint32_t a, b;
+            memcpy(&a, kept + o, 4), memcpy(&b, GUEST_PTR(p + o), 4);
+            if (a != b && n++ < 80)
+                rt_log("[recomp] diff: +%03x %08x > %08x\n", o, a, b);
+        }
+        rt_log("[recomp] diff: %d words changed\n", n);
+        memcpy(kept, GUEST_PTR(p), sizeof kept);
+        return 1;
+    }
+    if (sscanf(t, "out %f", &v) == 1)
+    {
+        gamestate_log_out(v);
+        rt_log("[recomp] out: logging what the game sends for %.0f seconds\n", v);
+        return 1;
+    }
+    rt_log("[recomp] //xi: lift <yalms> | pos | snap | diff | out <seconds>\n");
+    return 1;
+}
+
 static int run_line(const char* line)
 {
+    if (line && !strncmp(line, "//xi ", 5))
+        return xi_line(line + 5);
     static uint32_t buf;
     uint32_t fn = INPUT_LINE;
     if (!fn || !line || !line[0])
@@ -993,7 +1126,8 @@ static void setup_packets(void)
     if (MENU_MGR && MENU_CLOSE)
         overlay_set_game_window_closer(close_game_window);
     if (MENU_MGR)
-        overlay_set_focus_rect(game_focus_rect, place_game_focus);
+        overlay_set_focus_rect(game_focus_rect, place_game_focus), overlay_set_death_menu_hider(hide_death_menu),
+            overlay_set_focus_cursor(game_focus_cursor);
     overlay_set_settings_opener(open_launcher_settings);
     overlay_set_log_placer(place_game_log);
     if (MENU_DRAW_HOOK && MENU_DRAWN_HOOK)

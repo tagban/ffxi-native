@@ -89,8 +89,14 @@ and its own menus use), exactly as if they had typed it.
   the one with the keyboard at the manager's +0x54). The log is moved off the screen (the game
   leaves it there); the party list is laid out again every frame, so its draws are dropped
   instead: hooks on the manager's draw of each window ("menu_draw", "menu_drawn").
-- **Typing**: with the game's log hidden, Space and "/" open the overlay's chat box while none of
-  the game's menus has the keyboard.
+- **Typing**: with the game's log hidden, Enter (nothing targeted), "/" and "!" open the overlay's
+  chat box while none of the game's menus has the keyboard (knocked out, its death menu does not
+  count). Space is /jump (a setting; off, Space opens the box too). Up and Down in the box go
+  through what was sent. Knocked out, Say, Shout and Yell are held back; Party, Linkshell and Tell go.
+- **Knocked out** (the player's server_status 3 in 0x037, the time left from its dead_counter1): the
+  game's picture goes grey at the present (gfx_set_grey; Metal), the game's death menu is not drawn
+  (its rectangle dropped), and the overlay shows the time and Return to Home Point (Enter on the
+  death menu, then Left on its Yes/No until its cursor, +0x4C, is on Yes, and Enter) and Wait for a Raise (a strip at the top).
 - **Marks**: GM (and level), mentor, new adventurer, seeking a party, away, bazaar, and the
   linkshell's pearl in its color, from the players' flags (0x00D; the player's own 0x037), drawn
   as vector shapes by names over heads and in the Target and Party windows.

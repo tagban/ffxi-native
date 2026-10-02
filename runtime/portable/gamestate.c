@@ -348,10 +348,52 @@ static struct
     uint32_t ls;
 } g_self_marks;
 
+/* Knocked out (the player's own server_status 3, LandSandBoat's Animation DEATH), and the seconds
+ * then left until the game sends the player home itself: 0x037's dead_counter1 at 0x3C is 60 times
+ * the seconds left plus six minutes (below six, the client returns the player home) */
+static struct
+{
+    int dead;
+    double home_secs;
+    uint64_t at;
+} g_death;
+
+extern uint64_t rt_monotonic_ns(void);
+
+static void self_death(uint8_t status, const uint8_t* counter)
+{
+    int dead = status == 3;
+    if (dead && counter)
+    {
+        double left = (double)u32(counter) / 60.0 - 360.0;
+        g_death.home_secs = left > 0 ? left : 0, g_death.at = rt_monotonic_ns();
+    }
+    else if (dead && !g_death.dead)
+        g_death.home_secs = -1, g_death.at = rt_monotonic_ns(); /* the time comes with the next 0x037 */
+    g_death.dead = dead;
+}
+
+int gamestate_dead(double* home_secs)
+{
+    if (home_secs)
+    {
+        double left = g_death.home_secs;
+        if (left > 0)
+        {
+            left -= (double)(rt_monotonic_ns() - g_death.at) / 1e9;
+            if (left < 0)
+                left = 0;
+        }
+        *home_secs = left;
+    }
+    return g_death.dead;
+}
+
 static void self_status(const uint8_t* p, uint32_t size)
 {
     if (size < 0x3C)
         return;
+    self_death(p[0x30], size >= 0x40 ? p + 0x3C : NULL);
     uint32_t f0 = u32(p + 0x28), f1 = u32(p + 0x2C), f3 = u32(p + 0x38);
     g_self_marks.gm = (uint8_t)(f0 >> 29 & 7);
     g_self_marks.marks = (uint16_t)((g_self_marks.gm || (f1 >> 31 & 1) ? MARK_GM : 0) | (f3 >> 4 & 1 ? MARK_MENTOR : 0) |
@@ -611,6 +653,11 @@ int gamestate_target(GameEntity* out, int* is_self)
     return 1;
 }
 
+uint32_t gamestate_self_entity(void)
+{
+    return g_me.known ? entity_at(g_self_index, g_self) : 0;
+}
+
 int gamestate_self(float* x, float* y, float* z, float* facing)
 {
     static const float STEP = 6.28318531f / 256.0f;
@@ -678,6 +725,7 @@ static void zone_in(const uint8_t* p, uint32_t size)
         return;
     g_self = u32(p + 0x04);
     g_zone = u16(p + 0x30);
+    self_death(p[0x1F], NULL);
     zone_entities(p);
     want_map(g_zone, g_me.x, g_me.y, g_me.z);
     GameMember* m = member(g_self);
@@ -779,6 +827,12 @@ int gamestate_chat(int n, int* kind, const char** sender, const char** text)
 
 /* 0x0B5 from the client: the player's own chat line (kind, a spare byte, the text); the server does
  * not send it back to them */
+static uint64_t g_out_log_until; /* gamestate_log_out: every outgoing packet logged until then */
+void gamestate_log_out(double seconds)
+{
+    g_out_log_until = rt_monotonic_ns() + (uint64_t)(seconds * 1e9);
+}
+
 void gamestate_feed_out(const uint8_t* buf, uint32_t len)
 {
     if (!buf || len <= HEADER)
@@ -788,6 +842,14 @@ void gamestate_feed_out(const uint8_t* buf, uint32_t len)
         uint32_t id = (buf[at] | buf[at + 1] << 8) & 0x1FF, size = 2u * (buf[at + 1] & 0xFEu);
         if (size < 4 || at + size > len)
             break;
+        if (g_out_log_until && rt_monotonic_ns() < g_out_log_until && id != 0x015)
+        {
+            extern void rt_log(const char* fmt, ...);
+            char hex[3 * 24 + 1] = "";
+            for (uint32_t i = 4; i < size && i < 28; ++i)
+                snprintf(hex + 3 * (i - 4), 4, "%02x ", buf[at + i]);
+            rt_log("[recomp] out: %03x size %u: %s\n", id, size, hex);
+        }
         if (id == 0x015 && size >= 0x18)
         {
             /* the player's position report: x, height, z, and facing at 0x14 */
@@ -795,6 +857,15 @@ void gamestate_feed_out(const uint8_t* buf, uint32_t len)
             g_me.x = f32(p + 0x04), g_me.y = f32(p + 0x08), g_me.z = f32(p + 0x0C);
             g_me.heading = p[0x14];
             g_me.known = 1;
+        }
+        if (id == 0x05D && size >= 0x10)
+        {
+            /* an emote (LandSandBoat's GP_CLI_COMMAND_MOTION): its number at 0x0A, mode 0x0B, param
+             * 0x0C, to the log (a few), for the server's own uses of them (a jump) */
+            static int told;
+            extern void rt_log(const char* fmt, ...);
+            if (told++ < 20)
+                rt_log("[recomp] emote: number %u, mode %u, param %u\n", buf[at + 0x0A], buf[at + 0x0B], u16(buf + at + 0x0C));
         }
         if (0 && id == 0x0B5 && size > 6) /* the game's log has the player's lines too */
         {

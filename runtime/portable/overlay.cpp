@@ -94,6 +94,17 @@ static ImVec2 g_ask0, g_ask1;                      /* where, on the screen (the 
 static int g_send_open;                           /* the box asked to open: 1 empty, 2 with "/", 3 with "!" */
 static bool g_swallow_text;                        /* the key's own character, not to be typed */
 static SDL_Scancode g_swallow_up = SDL_SCANCODE_UNKNOWN; /* and its release (the game opens its own line on /'s) */
+/* knocked out (ko_window): the screen's state */
+static struct
+{
+    bool on;          /* the screen up (dead, and the setting on) */
+    bool waiting; /* Wait for a Raise: the strip */
+    float grey;
+    int step;    /* Return to Home Point: 1 open the game's menu, 2 its Yes/No coming, 3 at it */
+    double step_at;
+    const char* note; /* why Return did nothing, for a while */
+    double note_at;
+} g_ko = { false, false, 0.0f, 0, 0.0, NULL, 0.0 };
 
 /* The names over heads this frame, as the game placed them (host64's nameplate hook) */
 static bool g_plates_available;
@@ -151,6 +162,8 @@ static struct
     bool chat_shrink = true;
     int chat_quiet_lines = 4;
     float chat_quiet_secs = 12.0f;
+    bool death_screen = true; /* knocked out: the screen grey, the time, the buttons */
+    bool space_jumps = true;  /* Space: /jump (not the chat box; Enter and / open that) */
 } g_set;
 static char g_ini[1024];
 static struct
@@ -574,10 +587,12 @@ static bool typing_is_ours(const SDL_KeyboardEvent& k)
         return false;
     bool bang = k.key == SDLK_EXCLAIM || (k.key == SDLK_1 && (k.mod & SDL_KMOD_SHIFT));
     bool enter = k.key == SDLK_RETURN || k.key == SDLK_KP_ENTER;
-    if (k.key != SDLK_SPACE && k.key != SDLK_SLASH && !bang && !enter)
+    if ((k.key != SDLK_SPACE || g_set.space_jumps) && k.key != SDLK_SLASH && !bang && !enter)
         return false;
     const char* focus = g_game_focus ? g_game_focus() : "";
-    if (focus[0] && strncmp(focus, "logwin", 6) && strncmp(focus, "fulllog", 7))
+    /* knocked out, the game's death menu has the keyboard; the screen's buttons stand in for it */
+    bool ko_menu = g_ko.on && !strncmp(focus, "dead", 4);
+    if (focus[0] && strncmp(focus, "logwin", 6) && strncmp(focus, "fulllog", 7) && !ko_menu)
         return false;
     /* Enter only with nothing targeted: with a target it is the game's (talk, attack, confirm) */
     return !enter || !gamestate_targeting();
@@ -621,6 +636,21 @@ extern "C" int overlay_event(const SDL_Event* e)
     {
         g_swallow_text = false; /* the Space or / that opened the box */
         return 1;
+    }
+    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_SPACE && g_set.space_jumps && g_shown && !ImGui::GetIO().WantTextInput &&
+        !(e->key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) && dsound_in_world())
+    {
+        /* Space: a jump (the game's /jump), while none of the game's windows has the keyboard.
+         * Its text and release go nowhere. */
+        const char* focus = g_game_focus ? g_game_focus() : "";
+        bool free = !focus[0] || !strncmp(focus, "logwin", 6) || !strncmp(focus, "fulllog", 7);
+        if (free)
+        {
+            if (!e->key.repeat && !g_ko.on && g_run_line)
+                g_run_line("/jump");
+            g_swallow_text = true, g_swallow_up = e->key.scancode;
+            return 1;
+        }
     }
     if (e->type == SDL_EVENT_KEY_DOWN && !ImGui::GetIO().WantTextInput && typing_is_ours(e->key))
     {
@@ -713,6 +743,8 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     }
     else if (!strncmp(line, "plate_font=", 11)) snprintf(g_set.plate_font, sizeof g_set.plate_font, "%s", line + 11);
     else if (sscanf(line, "chat_shrink=%d", &v) == 1) g_set.chat_shrink = v != 0;
+    else if (sscanf(line, "death_screen=%d", &v) == 1) g_set.death_screen = v != 0;
+    else if (sscanf(line, "space_jumps=%d", &v) == 1) g_set.space_jumps = v != 0;
     else if (sscanf(line, "chat_quiet_lines=%d", &v) == 1 && v >= 1 && v <= 20) g_set.chat_quiet_lines = v;
     else if (sscanf(line, "chat_quiet_secs=%f", &f) == 1 && f >= 2 && f <= 120) g_set.chat_quiet_secs = f;
     else if (!strncmp(line, "win_bg=", 7) || !strncmp(line, "chat_bg=", 8))
@@ -747,6 +779,7 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("ui_font=%s\nplate_font=%s\n", g_set.ui_font, g_set.plate_font);
     out->appendf("chat_shrink=%d\nchat_quiet_lines=%d\nchat_quiet_secs=%g\n", g_set.chat_shrink, g_set.chat_quiet_lines,
         g_set.chat_quiet_secs);
+    out->appendf("death_screen=%d\nspace_jumps=%d\n", g_set.death_screen, g_set.space_jumps);
     out->appendf("win_bg=%.3f,%.3f,%.3f,%.3f\nchat_bg=%.3f,%.3f,%.3f,%.3f\n", g_set.win_bg[0], g_set.win_bg[1], g_set.win_bg[2],
         g_set.win_bg[3], g_set.chat_bg[0], g_set.chat_bg[1], g_set.chat_bg[2], g_set.chat_bg[3]);
     for (int k = 0; k < MC_COUNT; ++k)
@@ -829,6 +862,10 @@ static void overlay_window(void)
             ImGui::SetNextItemWidth(-60);
             dirty |= ImGui::SliderFloat("After##quiet", &g_set.chat_quiet_secs, 3, 60, "%.0f seconds");
         }
+        dirty |= ImGui::Checkbox("Space jumps (/jump); Enter or / to type", &g_set.space_jumps);
+        ImGui::Separator();
+        ImGui::TextDisabled("Knocked out");
+        dirty |= ImGui::Checkbox("The screen goes grey, with the time and Return to Home Point", &g_set.death_screen);
         ImGui::Separator();
         ImGui::TextDisabled("Background (color and how solid)");
         const ImGuiColorEditFlags cf = ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_NoInputs;
@@ -1355,6 +1392,64 @@ static struct
 } g_at_used[16];
 static int g_at_nused;
 
+/* What was sent, newest last: Up in the box brings back the one before, Down the one after (and at
+ * the end, what was being typed). Each keeps its phrases, so their braces still go as their keys. */
+static struct
+{
+    char text[256];
+    int nused;
+    struct
+    {
+        char text[64];
+        uint32_t key;
+    } used[16];
+} g_sent[32];
+static int g_nsent, g_sent_at = -1; /* -1: not looking back */
+static char g_draft[256];
+
+static void remember_sent(const char* text)
+{
+    if (g_nsent && !strcmp(g_sent[g_nsent - 1].text, text))
+        return; /* the same line again: once */
+    if (g_nsent == (int)(sizeof g_sent / sizeof *g_sent))
+        memmove(g_sent, g_sent + 1, sizeof g_sent - sizeof *g_sent), --g_nsent;
+    snprintf(g_sent[g_nsent].text, sizeof g_sent[0].text, "%s", text);
+    g_sent[g_nsent].nused = g_at_nused;
+    memcpy(g_sent[g_nsent].used, g_at_used, sizeof g_at_used);
+    ++g_nsent;
+}
+
+static void recall_sent(ImGuiInputTextCallbackData* d, bool older)
+{
+    if (!g_nsent)
+        return;
+    int at = g_sent_at;
+    if (older)
+    {
+        if (at < 0)
+            snprintf(g_draft, sizeof g_draft, "%s", d->Buf), at = g_nsent - 1;
+        else if (at > 0)
+            --at;
+        else
+            return;
+    }
+    else
+    {
+        if (at < 0)
+            return;
+        at = at + 1 < g_nsent ? at + 1 : -1;
+    }
+    g_sent_at = at;
+    const char* text = at < 0 ? g_draft : g_sent[at].text;
+    if (at >= 0)
+    {
+        g_at_nused = g_sent[at].nused;
+        memcpy(g_at_used, g_sent[at].used, sizeof g_at_used);
+    }
+    d->DeleteChars(0, d->BufTextLen);
+    d->InsertChars(0, text);
+}
+
 static int chat_box_callback(ImGuiInputTextCallbackData* d)
 {
     if (d->EventFlag == ImGuiInputTextFlags_CallbackAlways)
@@ -1386,6 +1481,8 @@ static int chat_box_callback(ImGuiInputTextCallbackData* d)
     {
         g_at.sel = (g_at.sel + (d->EventKey == ImGuiKey_UpArrow ? g_at.n - 1 : 1)) % g_at.n, g_at.moved = true;
     }
+    else if (d->EventFlag == ImGuiInputTextFlags_CallbackHistory)
+        recall_sent(d, d->EventKey == ImGuiKey_UpArrow);
     return 0;
 }
 
@@ -1447,6 +1544,18 @@ static void with_phrases(char* out, size_t n, const char* in)
     out[o] = 0;
 }
 
+/* Knocked out, the player cannot speak aloud: Say, Shout and Yell (by the box's choice or typed as
+ * a /command) are held back; Party, Linkshell and Tell still go. */
+static bool aloud(const char* typed)
+{
+    static const char* const ALOUD[] = { "/s ", "/say ", "/sh ", "/shout ", "/y ", "/yell " };
+    for (const char* a : ALOUD)
+        if (!strncasecmp(typed, a, strlen(a)))
+            return true;
+    return false;
+}
+static double g_chat_note_at = -10;
+
 static void chat_box(void)
 {
     if (!g_run_line)
@@ -1463,6 +1572,7 @@ static void chat_box(void)
     ImGui::SetNextItemWidth(-1);
     if (g_send_open)
     {
+        g_sent_at = -1;
         /* opened by the game's own keys: Space empty, "/" with it typed */
         if (g_send_open == 2)
             snprintf(g_send, sizeof g_send, "/");
@@ -1477,7 +1587,9 @@ static void chat_box(void)
         g_send_refocus = false;
         g_send_fresh = true;
     }
-    const char* hint = g_send_to == 6 ? "name, then the message" : "Space, Enter, / or ! to type; Tab: auto-translate; Enter sends";
+    const char* hint = g_send_to == 6                 ? "name, then the message"
+                       : g_set.space_jumps ? "Enter, / or ! to type; Tab: auto-translate; Enter sends"
+                                           : "Space, Enter, / or ! to type; Tab: auto-translate; Enter sends";
     ImGui::PushItemFlag(ImGuiItemFlags_NoTabStop, true);
     bool entered = ImGui::InputTextWithHint("##send", hint, g_send, sizeof g_send,
         ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways | ImGuiInputTextFlags_CallbackCompletion |
@@ -1485,6 +1597,15 @@ static void chat_box(void)
         chat_box_callback);
     ImGui::PopItemFlag();
     ImVec2 box0 = ImGui::GetItemRectMin(), box1 = ImGui::GetItemRectMax();
+    if (ImGui::GetTime() - g_chat_note_at < 5.0)
+    {
+        /* why the line did not go: over the box */
+        const char* note = "Knocked out: no Say, Shout or Yell. Party, Linkshell and Tell still work.";
+        ImVec2 ts = ImGui::CalcTextSize(note);
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        fg->AddRectFilled(ImVec2(box0.x, box0.y - ts.y - 8), ImVec2(box0.x + ts.x + 12, box0.y - 2), IM_COL32(90, 20, 20, 230), 4);
+        fg->AddText(ImVec2(box0.x + 6, box0.y - ts.y - 5), IM_COL32(255, 220, 210, 255), note);
+    }
     bool active = ImGui::IsItemActive();
     int clicked = -1;
     bool list_hovered = false;
@@ -1539,12 +1660,19 @@ static void chat_box(void)
             /* a /command, or a server's own ! command (a GM's, say), goes as it is: as if typed in
              * the game's own input line */
             snprintf(typed, sizeof typed, "%s%s", *t == '/' || *t == '!' ? "" : SEND_TO[g_send_to].prefix, t);
+            if (aloud(typed) && gamestate_dead(NULL))
+            {
+                g_chat_note_at = ImGui::GetTime(); /* kept in the box, to send another way */
+                g_send_refocus = true;
+                return;
+            }
             follow_chat_mode(typed);
             with_phrases(line, sizeof line, typed);
             g_run_line(line);
+            remember_sent(t);
         }
         g_send[0] = 0; /* and the box closes, as the game's input line does */
-        g_at_nused = 0;
+        g_at_nused = 0, g_sent_at = -1;
     }
 }
 
@@ -2519,6 +2647,212 @@ static void map_window(void)
     ImGui::End();
 }
 
+/* --- Knocked out ------------------------------------------------------------------------------------
+ * The game's picture goes grey (the present's, gfx_set_grey; the overlay keeps its colors), and over
+ * it the time until the game sends the player home itself, and two buttons: Return to Home Point (the game's own menus answered for them: its "dead" window,
+ * then its Yes/No, by the keys the player would press) and Wait for a Raise (down to a strip at the
+ * top). Any other window of the game's asking (a Raise offered)
+ * and it steps back to the strip, so the game's question is answered as ever. */
+extern "C" void gfx_set_grey(float amount);
+static int (*g_focus_cursor)(void); /* host64: the cursor in the game's window with the keyboard (1 the first choice), -1 none */
+extern "C" void overlay_set_focus_cursor(int (*cursor)(void)) { g_focus_cursor = cursor; }
+static void (*g_hide_death_menu)(int on); /* host64: the game's own death menu (its time left) not drawn */
+extern "C" void overlay_set_death_menu_hider(void (*hide)(int on)) { g_hide_death_menu = hide; }
+
+
+/* one key at a time, as the player presses it: down, held a few frames (the game reads the
+ * keyboard's state each frame), up */
+static struct
+{
+    SDL_Keycode key;
+    SDL_Scancode sc;
+    int frames; /* 0 none */
+} g_press;
+
+static void press_key(SDL_Keycode key, SDL_Scancode sc)
+{
+    if (!g_press.frames)
+        g_press.key = key, g_press.sc = sc, g_press.frames = 1;
+}
+
+static void press_tick(void)
+{
+    if (!g_press.frames)
+        return;
+    int f = g_press.frames++;
+    if (f == 1 || f == 6)
+    {
+        SDL_Event e = {};
+        e.type = f == 1 ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+        e.key.scancode = g_press.sc;
+        e.key.key = g_press.key;
+        e.key.down = f == 1;
+        SDL_PushEvent(&e);
+    }
+    if (f >= 12)
+        g_press.frames = 0; /* and a few frames for the game to act on it */
+}
+
+static bool focus_is(const char* f, const char* name) { return !strncmp(f, name, strlen(name)); }
+
+/* Return to Home Point, a frame at a time: Enter on the game's "dead" window opens its question
+ * ("comyn": Yes and No side by side, its cursor at +0x4C 1 Yes, 2 No; it opens on the last answer
+ * given), Left until it is on Yes, then Enter */
+static void ko_return_tick(const char* f)
+{
+    if (!g_ko.step || g_press.frames)
+        return;
+    double now = ImGui::GetTime();
+    if (now - g_ko.step_at > 4.0)
+    {
+        g_ko.step = 0, g_ko.note = "The game's menu did not answer: use its own (Enter).", g_ko.note_at = now;
+        return;
+    }
+    if (g_ko.step == 1)
+    {
+        if (focus_is(f, "comyn"))
+            g_ko.step = 3, g_ko.step_at = now;
+        else if (focus_is(f, "dead"))
+            press_key(SDLK_RETURN, SDL_SCANCODE_RETURN), g_ko.step = 2, g_ko.step_at = now;
+        else
+            g_ko.step = 0, g_ko.note = "The game's death menu is closed.", g_ko.note_at = now;
+    }
+    else if (g_ko.step == 2)
+    {
+        if (focus_is(f, "comyn"))
+            g_ko.step = 3, g_ko.step_at = now;
+    }
+    else if (g_ko.step == 3)
+    {
+        if (!focus_is(f, "comyn"))
+        {
+            g_ko.step = 0;
+            return;
+        }
+        if (now - g_ko.step_at < 0.3)
+            return; /* a moment to open */
+        int at = g_focus_cursor ? g_focus_cursor() : -1;
+        if (at == 2)
+            press_key(SDLK_LEFT, SDL_SCANCODE_LEFT);
+        else if (at == 1)
+            press_key(SDLK_RETURN, SDL_SCANCODE_RETURN), g_ko.step = 0;
+        else
+            g_ko.step = 0, g_ko.note = "Choose Yes in the game's question.", g_ko.note_at = now; /* not knowing where it is */
+    }
+}
+
+/* each frame: whether knocked out (the screen's state, the grey), the presses Return makes */
+static void ko_tick(const char* focus)
+{
+    double home;
+    bool dead = gamestate_dead(&home) != 0 || getenv("XI_DEATH_PREVIEW");
+    bool on = dead && g_shown && g_set.death_screen;
+    if (on && !g_ko.on)
+        g_ko.waiting = false, g_ko.step = 0, g_ko.note = NULL;
+    g_ko.on = on;
+    float want = on ? 1.0f : 0.0f, dt = ImGui::GetIO().DeltaTime;
+    g_ko.grey += (want - g_ko.grey) * ImMin(1.0f, dt * (on ? 1.2f : 3.0f));
+    if (fabsf(want - g_ko.grey) < 0.01f)
+        g_ko.grey = want;
+    gfx_set_grey(g_ko.grey);
+    press_tick();
+    if (g_hide_death_menu)
+        g_hide_death_menu(on); /* the screen says what it says: its time left, its Return */
+    if (on)
+        ko_return_tick(focus);
+    else
+        g_ko.step = 0;
+}
+
+static bool g_ko_other_asks; /* knocked out, and another of the game's windows asks (a Raise offered) */
+
+static void ko_window(bool game_asks_else)
+{
+    if (!g_ko.on)
+        return;
+    double home;
+    gamestate_dead(&home);
+    if (getenv("XI_DEATH_PREVIEW"))
+        home = 3600.0 - ImGui::GetTime();
+    ImVec2 d = ImGui::GetIO().DisplaySize;
+    char time_left[64];
+    if (home < 0)
+        snprintf(time_left, sizeof time_left, "The way home opens soon");
+    else
+        snprintf(time_left, sizeof time_left, "Home Point in %d:%02d", (int)home / 60, (int)home % 60);
+    const ImGuiWindowFlags fixed = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoNav |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_AlwaysAutoResize;
+    if (g_ko.waiting || game_asks_else)
+    {
+        /* a strip at the top: the time, the buttons */
+        ImGui::SetNextWindowPos(ImVec2(d.x * 0.5f, 10), ImGuiCond_Always, ImVec2(0.5f, 0));
+        ImGui::SetNextWindowBgAlpha(0.8f);
+        if (ImGui::Begin("##knockedout", NULL, fixed))
+        {
+            ImGui::Text("Knocked out: waiting for a Raise");
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", time_left);
+            if (!game_asks_else)
+            {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Return to Home Point"))
+                    g_ko.step = 1, g_ko.step_at = ImGui::GetTime(), g_ko.note = NULL;
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Bigger"))
+                    g_ko.waiting = false;
+            }
+        }
+        ImGui::End();
+        return;
+    }
+    /* the whole screen: dimmed, the words and the time (behind every window of the overlay's, so the
+     * chat stays to hand), and the buttons in a window of their own */
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    dl->AddRectFilled(ImVec2(0, 0), d, IM_COL32(0, 0, 0, 70));
+    ImFont* f = ImGui::GetFont();
+    float cx = d.x * 0.5f, y = d.y * 0.3f;
+    auto centered = [&](float size, ImU32 col, const char* text) {
+        ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0, text);
+        dl->AddText(f, size, ImVec2(cx - ts.x * 0.5f + 2, y + 2), IM_COL32(0, 0, 0, 170), text);
+        dl->AddText(f, size, ImVec2(cx - ts.x * 0.5f, y), col, text);
+        y += ts.y;
+    };
+    centered(ImGui::GetFontSize() * 2.4f, IM_COL32(255, 255, 255, 255), "Knocked out");
+    y += 6;
+    centered(ImGui::GetFontSize() * 1.1f, IM_COL32(225, 225, 230, 255), "Waiting for a Raise...");
+    y += 4;
+    centered(ImGui::GetFontSize() * 1.1f, IM_COL32(255, 210, 120, 255), time_left);
+    y += 18;
+    ImGui::SetNextWindowPos(ImVec2(cx, y), ImGuiCond_Always, ImVec2(0.5f, 0));
+    ImGui::SetNextWindowBgAlpha(0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    if (ImGui::Begin("##knockedoutbuttons", NULL, fixed))
+    {
+        ImVec2 bs(ImMax(220.0f, d.y * 0.2f), ImGui::GetFrameHeight() * 1.8f);
+        bool busy = g_ko.step != 0;
+        ImGui::BeginDisabled(busy);
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(150, 60, 50, 230));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(185, 75, 60, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(120, 45, 40, 255));
+        if (ImGui::Button(busy ? "Returning..." : "Return to Home Point", bs))
+            g_ko.step = 1, g_ko.step_at = ImGui::GetTime(), g_ko.note = NULL;
+        ImGui::PopStyleColor(3);
+        ImGui::SameLine(0, 16);
+        if (ImGui::Button("Wait for a Raise", bs))
+            g_ko.waiting = true;
+        ImGui::EndDisabled();
+        const char* hint = g_ko.note && ImGui::GetTime() - g_ko.note_at < 6.0 ? g_ko.note
+                                                                             : "Enter, / or ! to chat. A controller works the game's own menu.";
+        float w = ImGui::GetContentRegionAvail().x, hw = ImGui::CalcTextSize(hint).x;
+        if (hw < w)
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (w - hw) * 0.5f);
+        ImGui::TextDisabled("%s", hint);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
+}
+
 extern "C" void overlay_build_frame(void)
 {
     ImGui::GetStyle().FontScaleMain = g_set.ui_size / 16.0f;
@@ -2535,6 +2869,18 @@ extern "C" void overlay_build_frame(void)
         for (const char* p : PASSIVE)
             if (!strncmp(f, p, strlen(p)))
                 game_asks = false;
+        ko_tick(f);
+        /* knocked out: the game's death menu (and its Yes/No, while Return answers it) is the
+         * screen's own business, not a question to fade for; anything else asking (a Raise
+         * offered) is, and the screen steps back to its strip */
+        g_ko_other_asks = false;
+        if (g_ko.on && game_asks)
+        {
+            if (!strncmp(f, "dead", 4) || (g_ko.step && !strncmp(f, "comyn", 5)))
+                game_asks = false;
+            else
+                g_ko_other_asks = true;
+        }
         {
             /* which of the game's windows take the keyboard, while this is learned */
             static char last[9];
@@ -2623,6 +2969,7 @@ extern "C" void overlay_build_frame(void)
             equipment_window();
         if (g_set.items)
             items_window();
+        ko_window(g_ko_other_asks);
     }
     g_send_open = 0; /* not taken up by the chat box this frame: dropped, so no key stays caught */
     /* the game's own windows the overlay's stand in for: back whenever the overlay is hidden */

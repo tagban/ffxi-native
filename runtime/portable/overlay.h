@@ -1,5 +1,6 @@
 /* The overlay (docs/OVERLAY.md): windows the host draws over the game, at the screen's own
- * resolution. Display only: it sends nothing to the server and presses nothing for the player.
+ * resolution. It sends only what the player asks of it: a line from its chat box, Space's /jump,
+ * and the keys its knocked-out screen's Return to Home Point presses in the game's own menus.
  * overlay.cpp (Dear ImGui) with overlay_metal.mm on Metal; overlay_none.c where a back end has no
  * overlay yet (everything a no-op). */
 #pragma once
@@ -57,6 +58,13 @@ void overlay_set_log_placer(void (*place)(float x0, float y0, float x1, float y1
  * pixels), so the overlay's windows can keep out of its way */
 /* and moves it (its top left, fractions of the screen; x < 0 lets it go) */
 void overlay_set_focus_rect(int (*rect)(float* x, float* y, float* w, float* h), void (*place)(float x, float y)); /* fractions of the screen */
+
+/* host64: the cursor in the game's window with the keyboard (its choice, 1 the first; -1 none), for
+ * the knocked-out screen's Return to Home Point, which answers the game's Yes/No */
+void overlay_set_focus_cursor(int (*cursor)(void));
+/* host64: the game's own death menu (its time left, Back to Home Point) not drawn while the overlay's
+ * knocked-out screen is up (on), drawn again after */
+void overlay_set_death_menu_hider(void (*hide)(int on));
 
 /* The back end's part: overlay.cpp builds the frame, the back end draws it (overlay_metal.mm). */
 void overlay_build_frame(void);

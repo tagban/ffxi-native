@@ -134,6 +134,7 @@ void gfx_fx_set(const char* key, float v) { (void)key, (void)v; }
 int gfx_has_scene_effects(void) { return 0; }
 uint64_t gfx_window_flags(void) { return 0; }
 void gfx_show_overlay(int on) { (void)on; }
+void gfx_set_grey(float amount) { (void)amount; }
 void gfx_trace_dump(const char* path) { (void)path; }
 void gfx_finish(void) {}
 uint32_t gfx_failures(void) { return 0; }
