@@ -275,6 +275,54 @@ static int by_name(const void* a, const void* b)
     return strcmp(*(char* const*)a, *(char* const*)b);
 }
 
+/* --- a version overlay ------------------------------------------------------------------------------
+ * Another version of the game over the install: a folder with the files that version has and the
+ * install does not (FFXiMain.dll, FFXi.dll, the top-level tables, ROM...), as the launcher keeps
+ * them (xi-vault). Its files go into the same table as the DAT overlays, after them (a DAT overlay
+ * wins), keyed by their path under the install; top-level files are found through g_game_root. */
+static char g_game_root[1024]; /* the install's normalised guest path, lower case */
+
+static int ov_add_version_dir(const char* host, const char* key, int depth)
+{
+    PlatDir* d = plat_dir_open(host);
+    if (!d)
+        return 0;
+    int added = 0;
+    for (const char* e; (e = plat_dir_next(d));)
+    {
+        char name[256], sub_host[1400], sub_key[512];
+        PlatStat st;
+        snprintf(name, sizeof name, "%s", e);
+        if (name[0] == '.' || (!depth && !strcmp(name, "xi-version.json")))
+            continue;
+        snprintf(sub_host, sizeof sub_host, "%s%c%s", host, plat_path_sep, name);
+        snprintf(sub_key, sizeof sub_key, "%s%s%s", key, key[0] ? "\\" : "", name);
+        for (char* p = sub_key; *p; ++p)
+            *p = (char)lower((unsigned char)*p);
+        if (!plat_stat(sub_host, &st))
+            continue;
+        if (st.is_dir)
+            added += depth < 6 ? ov_add_version_dir(sub_host, sub_key, depth + 1) : 0;
+        else
+            added += ov_add(sub_key, sub_host);
+    }
+    plat_dir_close(d);
+    return added;
+}
+
+unsigned vfs_set_version(const char* guest_game, const char* host_dir)
+{
+    char full[1024];
+    if (!vfs_full_path(guest_game, full, sizeof full))
+        return 0;
+    size_t l = strlen(full);
+    while (l && full[l - 1] == '\\')
+        full[--l] = 0;
+    for (size_t i = 0; i <= l; ++i)
+        g_game_root[i] = (char)lower((unsigned char)full[i]);
+    return (unsigned)ov_add_version_dir(host_dir, "", 0);
+}
+
 unsigned vfs_add_overlay(const char* host_dir, void (*report)(const char* name, unsigned files))
 {
     long direct = ov_add_one(host_dir);
@@ -339,10 +387,28 @@ static int ov_key(const char* full, char* key, size_t n)
     return 0;
 }
 
+/* A path under the install, relative and lower case (a version overlay's top-level files). */
+static int game_key(const char* full, char* key, size_t n)
+{
+    size_t r = strlen(g_game_root);
+    if (!r || strlen(full) <= r + 1 || full[r] != '\\')
+        return 0;
+    for (size_t i = 0; i < r; ++i)
+        if (lower((unsigned char)full[i]) != g_game_root[i])
+            return 0;
+    const char* rel = full + r + 1;
+    size_t k = strlen(rel);
+    if (k + 1 > n)
+        return 0;
+    for (size_t i = 0; i <= k; ++i)
+        key[i] = (char)lower((unsigned char)rel[i]);
+    return 1;
+}
+
 int vfs_overlay_path(const char* guest, char* host, size_t n)
 {
     char full[1024], key[512];
-    if (!g_ov_n || !vfs_full_path(guest, full, sizeof full) || !ov_key(full, key, sizeof key))
+    if (!g_ov_n || !vfs_full_path(guest, full, sizeof full) || !(ov_key(full, key, sizeof key) || game_key(full, key, sizeof key)))
         return 0;
     Overlay* s = ov_slot(key);
     if (g_ov_trace < 0)

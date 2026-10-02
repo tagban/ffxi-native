@@ -18,6 +18,10 @@ void vfs_mount(const char* guest_prefix, const char* host_prefix);
 int vfs_full_path(const char* guest, char* out, size_t n);
 /* The host path for a guest path. 0 if it maps nowhere. */
 int vfs_host_path(const char* guest, char* host, size_t n);
+/* Another version of the game over the install at guest_game: its files (host_dir, as the
+ * launcher keeps a version, any path under the install) replace the install's, after the DAT
+ * overlays (which win). The number of files. */
+unsigned vfs_set_version(const char* guest_game, const char* host_dir);
 
 /* DAT overlays, as XIPivot does them: a host folder laid out like the install's ROM*\ and sound*\
  * folders. A guest path through "ROM<n>\" or "sound<n>\" whose rest is in an overlay opens the
