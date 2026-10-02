@@ -78,6 +78,7 @@ async function select(id) {
   accountForm.elements.otp.value = "";
   accountForm.elements.password.placeholder = a.password_saved ? "stored in the keychain" : "";
   showKind(a.kind);
+  refreshAccountVersion();
 }
 
 accountForm.addEventListener("change", async (e) => {
@@ -480,6 +481,21 @@ function buildName(b) {
   return b && b.label ? `version ${b.version || "?"} (build ${b.label})` : "";
 }
 
+// the version the selected account plays, when its server's version is kept apart from the player's
+// install (<vault>/installs/<version>): the chip shows that, not the install's
+let accountVersion = null;
+async function refreshAccountVersion() {
+  const a = account();
+  accountVersion = null;
+  if (a && a.game_path) {
+    try {
+      const gs = await invoke("game_status", { gamePath: a.game_path });
+      if (gs && gs.ready && gs.build && gs.build.version) accountVersion = gs.build.version;
+    } catch {}
+  }
+  renderChip();
+}
+
 // the chip in the tab bar: what the launcher will play, or what it still needs
 function renderChip() {
   const chip = $("#game-chip");
@@ -492,7 +508,7 @@ function renderChip() {
     chip.textContent = st.error ? "Game: not supported" : "Make the game";
     chip.classList.add("attention");
   } else {
-    chip.textContent = `FFXI ${st.build.version}` + (st.outdated ? " · update ready" : "");
+    chip.textContent = `FFXI ${accountVersion || st.build.version}` + (st.outdated && !accountVersion ? " · update ready" : "");
     chip.classList.add(st.outdated ? "attention" : "ready");
   }
 }
