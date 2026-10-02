@@ -704,6 +704,59 @@ static void study_asking(uint32_t win, const char* name)
     last_win = win;
 }
 
+/* frames left of the kept rectangle (set while a window asks; hide_game_windows lets it go) */
+static int g_keep_frames;
+
+/* While a window asks, what the dropped rectangles take (a second at a time, for its first few
+ * seconds): a question lying in one of them is not seen. Logged for each window once. */
+static void asking_dropped(const char* name, const int16_t* r)
+{
+    static char last[9];
+    static uint64_t next;
+    static int left, lines;
+    uint64_t now = rt_monotonic_ns();
+    if (strncmp(last, name, 8))
+    {
+        static char seen[64][8];
+        static int nseen;
+        int known = 0;
+        for (int k = 0; k < nseen && !known; ++k)
+            known = !memcmp(seen[k], name, 8);
+        if (!known && nseen < 64)
+            memcpy(seen[nseen++], name, 8);
+        snprintf(last, sizeof last, "%.8s", name);
+        left = known ? 0 : 4, next = now + 1000000000ull;
+        for (int i = 0; i < 4; ++i)
+        {
+            int on;
+            uint32_t n;
+            float q[4], b[4];
+            d3d8_drop_rect_seen(i, &on, q, &n, b); /* counted from here */
+        }
+        d3d8_kept_draws();
+        return;
+    }
+    if (!left || now < next || lines > 200)
+        return;
+    --left, next = now + 1000000000ull;
+    char out[600];
+    int o = snprintf(out, sizeof out, "[recomp] asking %.8s at %d,%d %d,%d: kept %u;", name, r[0], r[1], r[2], r[3], d3d8_kept_draws());
+    for (int i = 0; i < 4; ++i)
+    {
+        int on;
+        uint32_t n;
+        float q[4], b[4];
+        d3d8_drop_rect_seen(i, &on, q, &n, b);
+        if (on || n)
+            o += snprintf(out + o, sizeof out - (size_t)o, " rect %d %.0f,%.0f %.0f,%.0f dropped %u%s", i, q[0], q[1], q[2], q[3], n,
+                n ? "" : ";");
+        if (n && o < (int)sizeof out)
+            o += snprintf(out + o, sizeof out - (size_t)o, " in %.0f,%.0f %.0f,%.0f;", b[0], b[1], b[2], b[3]);
+    }
+    rt_log("%s\n", out);
+    ++lines;
+}
+
 /* where that window is: its rectangle (+0x3A: left, top, right, bottom, shorts) in the game's own
  * units (its back buffer's pixels), as fractions of the screen; 0 when none has the keyboard */
 static int game_focus_rect(float* x, float* y, float* w, float* h)
@@ -720,6 +773,11 @@ static int game_focus_rect(float* x, float* y, float* w, float* h)
     if (r[2] <= r[0] || r[3] <= r[1])
         return 0;
     *x = (float)r[0] / bw, *y = (float)r[1] / bh, *w = (float)(r[2] - r[0]) / bw, *h = (float)(r[3] - r[1]) / bh;
+    /* what it draws is never dropped, though it lie where the game's log is hidden (the bottom left:
+     * the "Return to home point" question vanished with the log) */
+    d3d8_keep_rect(1, (float)r[0] - 4, (float)r[1] - 4, (float)r[2] + 4, (float)r[3] + 4);
+    g_keep_frames = 3;
+    asking_dropped(game_window_name(win), r);
     {
         /* each window that takes the keyboard, once: its rectangle and the start of it (what its
          * list is made of, for the overlay's own in its place later) */
@@ -786,6 +844,8 @@ static void hide_game_windows(int log, int party, int target)
     static unsigned frame;
     static int any_moved;
     g_party_hidden = party;
+    if (g_keep_frames && !--g_keep_frames)
+        d3d8_keep_rect(0, 0, 0, 0, 0);
     if (!party)
         d3d8_drop_rect(0, 0, 0, 0, 0, 0);
     {

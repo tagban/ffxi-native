@@ -2539,7 +2539,7 @@ extern "C" void overlay_build_frame(void)
             /* which of the game's windows take the keyboard, while this is learned */
             static char last[9];
             static int told;
-            if (told < 40 && strncmp(last, f, 8))
+            if (told < 400 && strncmp(last, f, 8))
             {
                 ++told;
                 snprintf(last, sizeof last, "%.8s", f);

@@ -19,6 +19,12 @@ void d3d8_drop_draws(int on);
 /* while on, the interface's draws wholly inside rectangle i (0-3; the game's units) are dropped */
 void d3d8_drop_rect(int i, int on, float x0, float y0, float x1, float y1);
 uint32_t d3d8_dropped_rect_draws(void);
+/* while on, the interface's draws wholly inside this rectangle are never dropped (a window asking) */
+void d3d8_keep_rect(int on, float x0, float y0, float x1, float y1);
+/* rectangle i: whether on, where, and what it dropped since the last call (a count, the box around
+ * it); and the draws kept since the last call */
+void d3d8_drop_rect_seen(int i, int* on, float r[4], uint32_t* n, float box[4]);
+uint32_t d3d8_kept_draws(void);
 /* the game's back buffer, in its own units (what its interface lays out in) */
 void d3d8_backbuffer_size(uint32_t* w, uint32_t* h);
 /* Adds a texture pack: <dir>/<hash>_<w>x<h>.dds replacements for the game's textures (see d3d8.c,

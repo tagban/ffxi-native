@@ -1778,6 +1778,34 @@ void d3d8_drop_rect(int i, int on, float x0, float y0, float x1, float y1)
 }
 uint32_t d3d8_dropped_rect_draws(void) { return g_dropped_rect_draws; }
 
+/* Never dropped: the interface's draws wholly inside a kept rectangle (the game's window asking
+ * something, where it may lie in a dropped one: the log's, at the bottom left) */
+static int g_keep_rect;
+static float g_keep[4];
+void d3d8_keep_rect(int on, float x0, float y0, float x1, float y1)
+{
+    g_keep_rect = on, g_keep[0] = x0, g_keep[1] = y0, g_keep[2] = x1, g_keep[3] = y1;
+}
+
+/* what each rectangle dropped since the last call (a count, and the box around it all), and kept */
+static uint32_t g_drop_n[4], g_kept_n;
+static float g_drop_box[4][4];
+void d3d8_drop_rect_seen(int i, int* on, float r[4], uint32_t* n, float box[4])
+{
+    if (i < 0 || i >= 4)
+        return;
+    *on = g_drop_rects >> i & 1, *n = g_drop_n[i];
+    memcpy(r, g_drop_rect[i], sizeof g_drop_rect[i]);
+    memcpy(box, g_drop_box[i], sizeof g_drop_box[i]);
+    g_drop_n[i] = 0;
+}
+uint32_t d3d8_kept_draws(void)
+{
+    uint32_t n = g_kept_n;
+    g_kept_n = 0;
+    return n;
+}
+
 static uint32_t prim_vertices(uint32_t prim, uint32_t n); /* vertices a primitive count spans (below) */
 
 /* whether these vertices (guest memory, from first, count of them) all lie in one dropped rectangle */
@@ -1799,6 +1827,25 @@ static int in_dropped_rect(uint32_t data, uint32_t stride, uint32_t count)
         }
         if (i == count)
         {
+            float b[4] = { 1e9f, 1e9f, -1e9f, -1e9f };
+            int kept = g_keep_rect;
+            for (i = 0; i < count; ++i)
+            {
+                float x = u2f(rd32(data + i * stride)), y = u2f(rd32(data + i * stride + 4));
+                b[0] = fminf(b[0], x), b[1] = fminf(b[1], y), b[2] = fmaxf(b[2], x), b[3] = fmaxf(b[3], y);
+                if (x < g_keep[0] || x > g_keep[2] || y < g_keep[1] || y > g_keep[3])
+                    kept = 0;
+            }
+            if (kept)
+            {
+                ++g_kept_n;
+                return 0;
+            }
+            float* box = g_drop_box[r];
+            if (!g_drop_n[r]++)
+                memcpy(box, b, sizeof b);
+            else
+                box[0] = fminf(box[0], b[0]), box[1] = fminf(box[1], b[1]), box[2] = fmaxf(box[2], b[2]), box[3] = fmaxf(box[3], b[3]);
             ++g_dropped_rect_draws;
             return 1;
         }
