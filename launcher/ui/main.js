@@ -4,6 +4,12 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const dialog = window.__TAURI__.dialog;
 
+// A yes/no question, answered before going on. Not window.confirm: the dialog plugin makes that one
+// return a promise, which reads as "yes" at once (it asked nothing, and went ahead).
+async function ask(message, okLabel = "OK") {
+  return await dialog.ask(message, { title: "FFXI Launcher", kind: "info", okLabel, cancelLabel: "Cancel" });
+}
+
 const $ = (s) => document.querySelector(s);
 let cfg = null;
 let selected = null; // account id
@@ -117,7 +123,7 @@ $("#add-account").addEventListener("click", async () => {
 
 $("#delete-account").addEventListener("click", async () => {
   const a = account();
-  if (!a || !confirm(`Delete ${a.name || a.login || "this account"}? Its stored password goes too.`)) return;
+  if (!a || !(await ask(`Delete ${a.name || a.login || "this account"}? Its stored password goes too.`, "Delete"))) return;
   cfg.accounts = cfg.accounts.filter((x) => x.id !== a.id);
   await save();
   await select(cfg.accounts[0]?.id ?? null);
@@ -170,10 +176,12 @@ async function readyForServer(a) {
   cfg = await invoke("get_config"); // the address, when it was found on the server itself
   if (!sv.supported) throw `The server wants version ${sv.current}, which this launcher cannot run yet: the game's code changed in that version and needs new metadata (see "Supporting a new client version" in the README).`;
   if (!sv.have) {
-    if (!confirm(`${a.name || a.server} wants version ${sv.current} of the game. Get it now? Only the files you do not have are downloaded (none, if it is on the shelf); it is laid over your install, which is not changed.`))
-      throw "The server needs another version of the game.";
+    const question = sv.update_install
+      ? `${a.name || a.server} uses version ${sv.current} of the game, newer than yours. Update your game now? Only the files that changed are downloaded; your current version is kept (compressed), for a server that still uses it.`
+      : `${a.name || a.server} wants version ${sv.current} of the game. Get it now? Only the files you do not have are downloaded (none, if it is on the shelf); it is laid over your install, which is not changed.`;
+    if (!(await ask(question, sv.update_install ? "Update" : "Get it"))) throw "The server needs another version of the game.";
     const done = waitFor("task-done", "update");
-    playProgress(0, `Getting version ${sv.current}…`);
+    playProgress(0, sv.update_install ? `Updating your game to version ${sv.current}…` : `Getting version ${sv.current}…`);
     await invoke("update_for_server", { accountId: a.id });
     const r = await done;
     if (!r.ok) throw r.message;
@@ -823,7 +831,7 @@ $("#check-files").addEventListener("click", async () => {
   $("#repair-files").hidden = !(r?.ok && r.detail && r.detail.missing + r.detail.wrong > 0);
 });
 $("#repair-files").addEventListener("click", async () => {
-  if (!confirm("Put the missing and damaged files back from the backup? Only those files in the game folder are written.")) return;
+  if (!(await ask("Put the missing and damaged files back from the backup? Only those files in the game folder are written.", "Repair"))) return;
   const r = await startTask("check_install", { full: true, repair: true }, "repair");
   if (r?.ok) $("#repair-files").hidden = true;
 });

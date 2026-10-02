@@ -59,6 +59,8 @@ fn step_text(what: &str, done: u64, total: u64) -> String {
         "unpack" => "Unpacking",
         "materialize" => "Putting the version together",
         "overlay" => "Laying the version over your install",
+        "install" => "Updating your game",
+        "download" => "Downloading",
         "pack" => "Compressing the version",
         _ => what,
     };
@@ -218,6 +220,14 @@ pub struct ServerVersion {
     /// the overlay of that version over the player's install, when it is another version; empty
     /// when the install (or game_path) is that version as it is
     pub version_dir: String,
+    /// the server's version is newer than the player's install: Play updates the install to it
+    /// (the version it was is kept, shelved), rather than laying it over
+    pub update_install: bool,
+}
+
+/// Version names order by date ("30260904_1" after "30260805_0").
+fn newer(a: &str, b: &str) -> bool {
+    a > b
 }
 
 /// Where the account's server publishes its game versions: the address it names, else the first
@@ -320,11 +330,22 @@ pub fn check_server(app: &AppHandle, account_id: &str) -> Result<ServerVersion, 
     // the player's own install, if it is that version; else an overlay over it; else (an install
     // whose version is not known) one put together from the vault
     let own = Path::new(&cfg.game_path);
+    // the install's version: as the vault knows it, else as the install says (patch.cfg: a player
+    // whose vault is still empty)
+    let known = version_of(&vault, own);
+    let installed = own.join("FFXiMain.dll").is_file();
+    let own_version = known.as_ref().map(|m| m.version.clone()).or_else(|| if installed { xi_vault::patched_version(own) } else { None });
+    let mut update_install = false;
     let (have, game_path, version_dir) = if xi_vault::is_version(&vault, own, &want) {
         (true, cfg.game_path.clone(), String::new())
-    } else if let Some(base) = version_of(&vault, own) {
+    } else if own_version.as_deref().is_some_and(|b| newer(&want, b)) {
+        // a newer version: the install itself is brought to it
+        update_install = true;
+        (false, cfg.game_path.clone(), String::new())
+    } else if installed {
+        // an older one: laid over the install (made on Play, after the install is backed up)
         let dir = vault.overlay_dir(&want);
-        let ok = xi_vault::overlay_info(&dir).is_some_and(|o| o.version == want && o.base == base.version);
+        let ok = known.is_some_and(|base| xi_vault::overlay_info(&dir).is_some_and(|o| o.version == want && o.base == base.version));
         (ok, cfg.game_path.clone(), dir.to_string_lossy().into_owned())
     } else {
         // one put together before (a server that went back to an older version, or another
@@ -357,6 +378,7 @@ pub fn check_server(app: &AppHandle, account_id: &str) -> Result<ServerVersion, 
         have,
         game_path,
         version_dir,
+        update_install,
     })
 }
 
@@ -370,8 +392,9 @@ pub fn update_for_server(app: AppHandle, tasks: Arc<Tasks>, account_id: String) 
     run_task(app, tasks, "update", move |app, progress| {
         let vault = Vault::open(&dir)?;
         // the player's install first, if it is not backed up: its files are most of any version
+        let mut snapshot = None;
         if !cfg.game_path.is_empty() && version_of(&vault, Path::new(&cfg.game_path)).is_none() {
-            vault.snapshot(Path::new(&cfg.game_path), None, progress)?;
+            snapshot = Some(vault.snapshot(Path::new(&cfg.game_path), None, progress)?);
         }
         // the version: in the vault already, or on its shelf, or from the server's address
         let m = match vault.load(&want) {
@@ -381,6 +404,17 @@ pub fn update_for_server(app: AppHandle, tasks: Arc<Tasks>, account_id: String) 
         };
         let own = Path::new(&cfg.game_path);
         let (game_path, version_dir) = if xi_vault::is_version(&vault, own, &m.version) {
+            (cfg.game_path.clone(), String::new())
+        } else if let Some(base) = version_of(&vault, own).filter(|b| newer(&m.version, &b.version)) {
+            // newer than the install: the install is updated in place (the files it replaces are
+            // kept in the vault), and the version it was is shelved, compressed: a server that
+            // still wants it brings it back as an overlay
+            let now = match snapshot {
+                Some(m) => m, // just hashed
+                None => xi_vault::hash_install(own, Some(&vault), "verify", progress)?,
+            };
+            xi_vault::update_install(own, &now, &m, &vault, Some(&url), progress)?;
+            let _ = xi_vault::shelve(&vault, &base.version, &m.version, 19, progress);
             (cfg.game_path.clone(), String::new())
         } else if let Some(base) = version_of(&vault, own) {
             // only what this version changes, over the install
