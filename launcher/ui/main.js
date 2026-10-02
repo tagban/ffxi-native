@@ -168,7 +168,7 @@ async function readyForServer(a) {
   cfg = await invoke("get_config"); // the address, when it was found on the server itself
   if (!sv.supported) throw `The server wants version ${sv.current}, which this launcher cannot run yet: the game's code changed in that version and needs new metadata (see "Supporting a new client version" in the README).`;
   if (!sv.have) {
-    if (!confirm(`${a.name || a.server} wants version ${sv.current} of the game. Download it now? Only the files you do not have are downloaded; your install is not changed.`))
+    if (!confirm(`${a.name || a.server} wants version ${sv.current} of the game. Get it now? Only the files you do not have are downloaded (none, if it is on the shelf); it is laid over your install, which is not changed.`))
       throw "The server needs another version of the game.";
     const done = waitFor("task-done", "update");
     playProgress(0, `Getting version ${sv.current}…`);
@@ -177,11 +177,13 @@ async function readyForServer(a) {
     if (!r.ok) throw r.message;
     cfg = await invoke("get_config");
   }
-  const gs = await invoke("game_status", { gamePath: sv.game_path });
+  // the game for that version: made from its own FFXiMain.dll (the overlay's, when it is one)
+  const from = sv.version_dir || sv.game_path;
+  const gs = await invoke("game_status", { gamePath: from });
   if (!gs.ready) {
     const done = waitFor("build-done");
     playProgress(0, `Making the game for version ${sv.current}…`);
-    await invoke("start_build", { gamePath: sv.game_path });
+    await invoke("start_build", { gamePath: from });
     const r = await done;
     if (!r.ok) throw r.message;
   }
@@ -221,7 +223,7 @@ accountForm.addEventListener("submit", async (e) => {
   try {
     await readyForServer(a);
     a = account();
-    await ensureGame(a.game_path || cfg.game_path);
+    await ensureGame(a.version_dir || a.game_path || cfg.game_path);
     a.password_saved = await invoke("launch", {
       accountId: a.id,
       password: accountForm.elements.password.value,
@@ -487,9 +489,9 @@ let accountVersion = null;
 async function refreshAccountVersion() {
   const a = account();
   accountVersion = null;
-  if (a && a.game_path) {
+  if (a && (a.version_dir || a.game_path)) {
     try {
-      const gs = await invoke("game_status", { gamePath: a.game_path });
+      const gs = await invoke("game_status", { gamePath: a.version_dir || a.game_path });
       if (gs && gs.ready && gs.build && gs.build.version) accountVersion = gs.build.version;
     } catch {}
   }
@@ -757,13 +759,37 @@ async function refreshVersions() {
   $("#check-files").disabled = !st.install_version;
   const ul = $("#versions");
   ul.innerHTML = "";
+  const action = (label, title, command, version, task) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "secondary small";
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener("click", () => startTask(command, { version }, task));
+    return b;
+  };
   for (const v of st.versions) {
     const li = document.createElement("li");
     const name = document.createElement("span");
     name.textContent = `${v.version}` + (v.build ? ` (build ${v.build})` : "");
     const info = document.createElement("small");
-    info.textContent = `${v.files} files · ${(v.bytes / 1e9).toFixed(2)} GB` + (v.installed ? " · put together" : "") + (v.version === st.install_version ? " · your install" : "");
+    const mine = v.version === st.install_version;
+    info.textContent = `${v.files} files · ${(v.bytes / 1e9).toFixed(2)} GB` + (v.installed ? " · put together" : "") + (v.overlay ? " · over your install" : "") + (mine ? " · your install" : "");
     li.append(name, info);
+    if (!mine && st.install_version) {
+      li.append(action("Shelve", "Compress it and free its files; a server that wants it brings it back on Play.", "shelve_version", v.version, "shelve"));
+      li.append(action("Remove", "Remove it for good (a server that wants it downloads it again).", "forget_version", v.version, "forget"));
+    }
+    ul.append(li);
+  }
+  for (const v of st.shelves || []) {
+    if (st.versions.some((x) => x.version === v.version)) continue;
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.textContent = `${v.version}` + (v.build ? ` (build ${v.build})` : "");
+    const info = document.createElement("small");
+    info.textContent = `shelved · ${(v.shelf_bytes / 1e6).toFixed(1)} MB (the whole version: ${(v.bytes / 1e9).toFixed(2)} GB)`;
+    li.append(name, info, action("Remove", "Remove it for good (a server that wants it downloads it again).", "forget_version", v.version, "forget"));
     ul.append(li);
   }
 }

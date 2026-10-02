@@ -65,6 +65,12 @@ fn default_registry(app: &AppHandle) -> PathBuf {
 }
 
 fn paths(app: &AppHandle, cfg: &LauncherConfig) -> Result<Paths, String> {
+    paths_for(app, cfg, &cfg.game_path)
+}
+
+/// `build_from`: the folder whose FFXiMain.dll says which game to run - the install, or the overlay
+/// of another version over it (its own FFXiMain.dll and FFXi.dll).
+fn paths_for(app: &AppHandle, cfg: &LauncherConfig, build_from: &str) -> Result<Paths, String> {
     Ok(Paths {
         config_dir: config_dir(app)?,
         log_dir: app.path().app_log_dir().map_err(|e| e.to_string())?,
@@ -72,9 +78,9 @@ fn paths(app: &AppHandle, cfg: &LauncherConfig) -> Result<Paths, String> {
         host: if !cfg.host_program.is_empty() {
             PathBuf::from(&cfg.host_program)
         } else {
-            setup::game_for(app, &cfg.game_path).map(|g| g.host).unwrap_or_else(default_host)
+            setup::game_for(app, build_from).map(|g| g.host).unwrap_or_else(default_host)
         },
-        module: if cfg.host_program.is_empty() { setup::game_for(app, &cfg.game_path).and_then(|g| g.module) } else { None },
+        module: if cfg.host_program.is_empty() { setup::game_for(app, build_from).and_then(|g| g.module) } else { None },
         base_registry: if cfg.base_registry.is_empty() { default_registry(app) } else { PathBuf::from(&cfg.base_registry) },
     })
 }
@@ -176,7 +182,8 @@ fn launch(
     if !account.game_path.is_empty() {
         cfg.game_path = account.game_path.clone();
     }
-    let paths = paths(&app, &cfg)?;
+    let build_from = if account.version_dir.is_empty() { cfg.game_path.clone() } else { account.version_dir.clone() };
+    let paths = paths_for(&app, &cfg, &build_from)?;
     game::launch(app, running.inner().clone(), cfg, paths, LaunchRequest { account, password, otp, own_game_path })?;
     Ok(saved)
 }
@@ -257,6 +264,16 @@ async fn create_account(server: String, port: u16, login: String, password: Stri
 #[tauri::command]
 fn check_server(app: AppHandle, account_id: String) -> Result<versions::ServerVersion, String> {
     versions::check_server(&app, &account_id)
+}
+
+#[tauri::command]
+fn shelve_version(app: AppHandle, tasks: State<Arc<Tasks>>, version: String) -> Result<(), String> {
+    versions::shelve(app, tasks.inner().clone(), version)
+}
+
+#[tauri::command]
+fn forget_version(app: AppHandle, tasks: State<Arc<Tasks>>, version: String) -> Result<(), String> {
+    versions::forget(app, tasks.inner().clone(), version)
 }
 
 #[tauri::command]
@@ -418,6 +435,8 @@ fn main() {
             check_install,
             check_server,
             update_for_server,
+            shelve_version,
+            forget_version,
             create_account
         ])
         .build(tauri::generate_context!())

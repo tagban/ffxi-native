@@ -42,6 +42,10 @@ pub struct Account {
     /// The FINAL FANTASY XI folder this account plays from, when not the launcher's (a version
     /// put together for its server, versions.rs). Empty: the launcher's.
     pub game_path: String,
+    /// The version over the launcher's install this account plays, when its server wants another:
+    /// an overlay of the files that version changes (<vault>/overlays/<version>, versions.rs), laid
+    /// over the install by the game host. Empty: the install as it is.
+    pub version_dir: String,
     /// Lsb: the xiloader protocol its login server speaks ("2.2.0"), as it last said (versions.rs);
     /// empty: the host finds out when signing in.
     pub loader: String,
@@ -64,6 +68,7 @@ impl Default for Account {
             update_url: String::new(),
             loader: String::new(),
             game_path: String::new(),
+            version_dir: String::new(),
         }
     }
 }

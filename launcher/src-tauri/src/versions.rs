@@ -2,8 +2,13 @@
 //! repairing it, and bringing the version a server wants from the address it publishes them at.
 //!
 //! A version is FFXiMain.dll, FFXi.dll and the DATs together (FFXiMain.dll decides how the DATs are
-//! read), so a server's version is never mixed into the player's install: it is put together
-//! beside it, in <vault>/installs/<version>/FINAL FANTASY XI, and the account plays from there.
+//! read). The player's install is kept on the newest version; another version a server wants is an
+//! overlay: the files that version changes (FFXiMain.dll and FFXi.dll with them), in
+//! <vault>/overlays/<version>, which the game host lays over the install (--version-dir), so the
+//! account plays the whole of that version and the install is not changed. A version not needed for
+//! now is shelved (compressed, its files freed) and comes back on its own when a server wants it.
+//! An install whose version is not known gets a version put together beside it instead
+//! (<vault>/installs/<version>), as before.
 
 use crate::config::{self, LauncherConfig};
 use serde::Serialize;
@@ -53,6 +58,8 @@ fn step_text(what: &str, done: u64, total: u64) -> String {
         "fetch" => "Downloading",
         "unpack" => "Unpacking",
         "materialize" => "Putting the version together",
+        "overlay" => "Laying the version over your install",
+        "pack" => "Compressing the version",
         _ => what,
     };
     format!("{verb}… {} of {}", xi_vault::human(done), xi_vault::human(total))
@@ -107,6 +114,8 @@ pub struct VersionInfo {
     bytes: u64,
     /// put together as an install of its own
     installed: String,
+    /// an overlay of it is ready (over the player's install)
+    overlay: bool,
 }
 
 #[derive(Serialize)]
@@ -115,6 +124,8 @@ pub struct VersionsStatus {
     versions: Vec<VersionInfo>,
     /// the version the chosen install is, when it is backed up
     install_version: String,
+    /// versions shelved (compressed, their files freed): they come back when a server wants one
+    shelves: Vec<xi_vault::ShelfInfo>,
 }
 
 pub fn status(app: &AppHandle) -> Result<VersionsStatus, String> {
@@ -128,6 +139,7 @@ pub fn status(app: &AppHandle) -> Result<VersionsStatus, String> {
             let inst = install_path(&dir, &m.version);
             VersionInfo {
                 installed: if inst.join("FFXiMain.dll").is_file() { inst.to_string_lossy().into_owned() } else { String::new() },
+                overlay: xi_vault::overlay_info(&vault.overlay_dir(&m.version)).is_some(),
                 files: m.files.len(),
                 bytes: m.bytes(),
                 version: m.version,
@@ -140,7 +152,8 @@ pub fn status(app: &AppHandle) -> Result<VersionsStatus, String> {
     } else {
         version_of(&vault, Path::new(&cfg.game_path)).map(|m| m.version).unwrap_or_default()
     };
-    Ok(VersionsStatus { vault_dir: dir.to_string_lossy().into_owned(), versions, install_version })
+    let shelves = xi_vault::shelves(&vault);
+    Ok(VersionsStatus { vault_dir: dir.to_string_lossy().into_owned(), versions, install_version, shelves })
 }
 
 fn install_path(vault_dir: &Path, version: &str) -> PathBuf {
@@ -202,6 +215,9 @@ pub struct ServerVersion {
     pub have: bool,
     /// the install folder for it: the player's own, or one put together in the vault
     pub game_path: String,
+    /// the overlay of that version over the player's install, when it is another version; empty
+    /// when the install (or game_path) is that version as it is
+    pub version_dir: String,
 }
 
 /// Where the account's server publishes its game versions: the address it names, else the first
@@ -301,16 +317,21 @@ pub fn check_server(app: &AppHandle, account_id: &str) -> Result<ServerVersion, 
     let vault = Vault::open(&dir)?;
     // as this vault knows it: another server's version of that name is kept apart
     let want = site.local(&vault);
-    // the player's own install, if it is that version; else one put together from the vault
+    // the player's own install, if it is that version; else an overlay over it; else (an install
+    // whose version is not known) one put together from the vault
     let own = Path::new(&cfg.game_path);
-    let (have, game_path) = if xi_vault::is_version(&vault, own, &want) {
-        (true, cfg.game_path.clone())
+    let (have, game_path, version_dir) = if xi_vault::is_version(&vault, own, &want) {
+        (true, cfg.game_path.clone(), String::new())
+    } else if let Some(base) = version_of(&vault, own) {
+        let dir = vault.overlay_dir(&want);
+        let ok = xi_vault::overlay_info(&dir).is_some_and(|o| o.version == want && o.base == base.version);
+        (ok, cfg.game_path.clone(), dir.to_string_lossy().into_owned())
     } else {
         // one put together before (a server that went back to an older version, or another
         // server on it): all of it, not a copy cut short
         let p = install_path(&dir, &want);
         let whole = p.join("FFXiMain.dll").is_file() && xi_vault::is_version(&vault, &p, &want);
-        (whole, p.to_string_lossy().into_owned())
+        (whole, p.to_string_lossy().into_owned(), String::new())
     };
     if have {
         if game_path != cfg.game_path && !cfg.game_path.is_empty() {
@@ -322,8 +343,9 @@ pub fn check_server(app: &AppHandle, account_id: &str) -> Result<ServerVersion, 
         let own_path = cfg.game_path.clone();
         if let Some(a) = cfg.accounts.iter_mut().find(|a| a.id == account_id) {
             let want = if game_path == own_path { String::new() } else { game_path.clone() };
-            if a.game_path != want {
+            if a.game_path != want || a.version_dir != version_dir {
                 a.game_path = want;
+                a.version_dir = version_dir.clone();
                 config::save(&cdir, &cfg)?;
             }
         }
@@ -334,6 +356,7 @@ pub fn check_server(app: &AppHandle, account_id: &str) -> Result<ServerVersion, 
         current: site.want.clone(),
         have,
         game_path,
+        version_dir,
     })
 }
 
@@ -350,24 +373,71 @@ pub fn update_for_server(app: AppHandle, tasks: Arc<Tasks>, account_id: String) 
         if !cfg.game_path.is_empty() && version_of(&vault, Path::new(&cfg.game_path)).is_none() {
             vault.snapshot(Path::new(&cfg.game_path), None, progress)?;
         }
-        let m = xi_vault::fetch(&vault, &url, Some(&want), progress)?;
-        let game_path = if xi_vault::is_version(&vault, Path::new(&cfg.game_path), &m.version) {
-            cfg.game_path.clone()
+        // the version: in the vault already, or on its shelf, or from the server's address
+        let m = match vault.load(&want) {
+            Ok(m) if vault.missing(&m).is_empty() => m,
+            _ if vault.shelf_path(&want).is_file() => xi_vault::unshelve(&vault, &want, progress)?,
+            _ => xi_vault::fetch(&vault, &url, Some(&want), progress)?,
+        };
+        let own = Path::new(&cfg.game_path);
+        let (game_path, version_dir) = if xi_vault::is_version(&vault, own, &m.version) {
+            (cfg.game_path.clone(), String::new())
+        } else if let Some(base) = version_of(&vault, own) {
+            // only what this version changes, over the install
+            let (dir, _) = xi_vault::make_overlay(&vault, &base, &m, progress)?;
+            (cfg.game_path.clone(), dir.to_string_lossy().into_owned())
         } else {
             let p = install_path(&dir, &m.version);
             vault.materialize(&m.version, &p, progress)?;
             if !cfg.game_path.is_empty() {
                 xi_vault::share_player_dirs(Path::new(&cfg.game_path), &p)?;
             }
-            p.to_string_lossy().into_owned()
+            (p.to_string_lossy().into_owned(), String::new())
         };
         // the account plays that version from now on
         let cdir = config_dir(app)?;
         let mut cfg = config::load(&cdir);
         if let Some(a) = cfg.accounts.iter_mut().find(|a| a.id == account.id) {
             a.game_path = if game_path == cfg.game_path { String::new() } else { game_path.clone() };
+            a.version_dir = version_dir.clone();
         }
         config::save(&cdir, &cfg)?;
-        Ok((format!("Version {} is ready.", m.version), serde_json::json!({ "version": m.version, "game_path": game_path, "build": m.build })))
+        Ok((format!("Version {} is ready.", m.version), serde_json::json!({ "version": m.version, "game_path": game_path, "version_dir": version_dir, "build": m.build })))
+    })
+}
+
+/// Shelves a version the player's install is not: packed (compressed) against the install's
+/// version, and its files and overlay removed. A server that wants it again brings it back on Play.
+pub fn shelve(app: AppHandle, tasks: Arc<Tasks>, version: String) -> Result<(), String> {
+    let cfg = config::load(&config_dir(&app)?);
+    let dir = vault_dir(&app, &cfg)?;
+    run_task(app, tasks, "shelve", move |_, progress| {
+        let vault = Vault::open(&dir)?;
+        let own = version_of(&vault, Path::new(&cfg.game_path))
+            .ok_or("Back up this install first: a version is shelved against the install's.")?;
+        if own.version == version {
+            return Err(format!("{version} is this install's version."));
+        }
+        let (_, packed, freed) = xi_vault::shelve(&vault, &version, &own.version, 19, progress)?;
+        let _ = std::fs::remove_dir_all(install_path(&dir, &version).parent().unwrap());
+        Ok((
+            format!("Version {version} shelved: {} on the shelf, {} freed.", xi_vault::human(packed), xi_vault::human(freed)),
+            serde_json::json!({ "version": version }),
+        ))
+    })
+}
+
+/// Removes a version entirely (its shelf too). Not the install's.
+pub fn forget(app: AppHandle, tasks: Arc<Tasks>, version: String) -> Result<(), String> {
+    let cfg = config::load(&config_dir(&app)?);
+    let dir = vault_dir(&app, &cfg)?;
+    run_task(app, tasks, "forget", move |_, _| {
+        let vault = Vault::open(&dir)?;
+        if version_of(&vault, Path::new(&cfg.game_path)).is_some_and(|m| m.version == version) {
+            return Err(format!("{version} is this install's version: it stays."));
+        }
+        let freed = xi_vault::forget(&vault, &version)?;
+        let _ = std::fs::remove_dir_all(install_path(&dir, &version).parent().unwrap());
+        Ok((format!("Version {version} removed: {} freed.", xi_vault::human(freed)), serde_json::json!({ "version": version })))
     })
 }

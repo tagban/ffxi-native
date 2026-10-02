@@ -94,6 +94,10 @@ fn host_args(cfg: &LauncherConfig, paths: &Paths, account: &Account, session: Op
             a.extend(["--viewer".into(), v.to_string_lossy().into_owned()]);
         }
     }
+    // another version over the install (versions.rs): its files laid over the install's
+    if !account.version_dir.is_empty() && std::path::Path::new(&account.version_dir).join("FFXiMain.dll").is_file() {
+        a.extend(["--version-dir".into(), account.version_dir.clone()]);
+    }
     a.extend(["--reg".into(), paths.base_registry.to_string_lossy().into_owned()]);
     a.extend(["--reg-overlay".into(), paths.config_dir.join("saved.reg").to_string_lossy().into_owned()]);
     a.extend(["--reg-final".into(), paths.config_dir.join("settings.reg").to_string_lossy().into_owned()]);
