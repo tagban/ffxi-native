@@ -34,6 +34,8 @@ document.querySelectorAll(".tab").forEach((t) =>
     document.querySelectorAll(".tab, .page").forEach((e) => e.classList.remove("active"));
     t.classList.add("active");
     $("#" + t.dataset.tab).classList.add("active");
+    // the game's versions as they are now (a Play may have brought one back, or laid one over)
+    if (t.dataset.tab === "launcher") refreshVersions();
   })
 );
 
