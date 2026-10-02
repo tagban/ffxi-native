@@ -38,6 +38,8 @@
  * An app bundle's FFXINameplates and FFXINameplateScale keys are the defaults for both.
  *
  * --viewer <folder>: the PlayOnlineViewer folder, when it is not beside FINAL FANTASY XI.
+ * --version-dir <folder>: another version of the game over the install (the launcher's xi-vault
+ *   overlay: FFXiMain.dll, FFXi.dll and every file that version has the install does not).
  *
  * --live <file>: settings the launcher changes while the game runs (live_reload): lines of
  * key = value, looked at twice a second. With it, the host also answers the launcher's hotkey
@@ -861,8 +863,18 @@ static void hide_game_windows(int log, int party, int target)
             {
                 /* under the overlay's chat, its size, and nothing it draws there shown */
                 float r[4] = { g_log_at[0] * bw, g_log_at[1] * bh, g_log_at[2] * bw, g_log_at[3] * bh };
+                /* and wherever the game laid it out this frame: some states of the log (typing,
+                 * its wide form) are laid out again every frame, so the move above does not stay,
+                 * and the log drew at its own place, wider than the chat. Its draws are dropped in
+                 * both (one rectangle around the two). */
+                float d[4] = { r[0], r[1], r[2], r[3] };
+                if (w->x1 > w->x && w->y1 > w->y && w->x > -4000)
+                {
+                    d[0] = fminf(d[0], w->x), d[1] = fminf(d[1], w->y);
+                    d[2] = fmaxf(d[2], w->x1), d[3] = fmaxf(d[3], w->y1);
+                }
                 pos[0] = (int16_t)r[0], pos[1] = (int16_t)r[1], pos[2] = (int16_t)r[2], pos[3] = (int16_t)r[3];
-                d3d8_drop_rect(2, 1, r[0] - 2, r[1] - 2, r[2] + 2, r[3] + 2);
+                d3d8_drop_rect(2, 1, d[0] - 2, d[1] - 2, d[2] + 2, d[3] + 2);
                 static int said;
                 if (!said++)
                     rt_log("[recomp] game window %.8s: kept under the overlay's chat, at %d,%d to %d,%d\n", w->name, pos[0], pos[1], pos[2], pos[3]);
@@ -1220,6 +1232,20 @@ static void report_overlay(const char* name, unsigned files)
 #include <signal.h>
 #endif
 
+/* A file of the game (rel: Windows-style, under the install) as the game sees it: from a DAT or
+ * version overlay if one has it, else the install's. */
+static void game_file(const char* game, const char* host_game, const char* rel, char* out, size_t n)
+{
+    char g[1024];
+    snprintf(g, sizeof g, "%s\\%s", game, rel);
+    if (vfs_host_path(g, out, n))
+        return;
+    snprintf(out, n, "%s%c%s", host_game, plat_path_sep, rel);
+    for (char* p = out + strlen(host_game); *p; ++p)
+        if (*p == '\\' || *p == '/')
+            *p = plat_path_sep;
+}
+
 int main(int argc, char** argv)
 {
 #ifndef _WIN32
@@ -1264,6 +1290,7 @@ int main(int argc, char** argv)
     static char base_reg[1100];
     const char* server_name = NULL; /* --server as given, for the sign-in screen */
     const char* viewer_dir = NULL;  /* --viewer: PlayOnlineViewer, when not beside the game */
+    const char* version_dir = NULL; /* --version-dir: another version's files over the install */
 #ifdef XI_SPLIT
     const char* module_path = NULL; /* --module: the game itself */
 #endif
@@ -1280,6 +1307,8 @@ int main(int argc, char** argv)
             snprintf(g_live_file, sizeof g_live_file, "%s", argv[i + 1]);
         else if (!strcmp(argv[i], "--viewer"))
             viewer_dir = argv[i + 1];
+        else if (!strcmp(argv[i], "--version-dir"))
+            version_dir = argv[i + 1];
         else if (!strcmp(argv[i], "--game"))
             game = argv[i + 1];
         else if (!strcmp(argv[i], "--reg") && nregs < 8)
@@ -1587,6 +1616,8 @@ int main(int argc, char** argv)
         if (!vfs_add_overlay(dats[i], report_overlay))
             rt_log("[recomp] dats: no ROM or sound files in %s\n", dats[i]);
     }
+    if (version_dir)
+        rt_log("[recomp] version: %s, %u files over the install\n", version_dir, vfs_set_version(game, version_dir));
     {
         /* texture packs: --textures, else <data dir>/textures if there is one */
         char def[1100];
@@ -1607,7 +1638,7 @@ int main(int argc, char** argv)
          * to the host), and mounted over the game's path. The install itself is never written. */
         char pv[760];
         PlatStat st;
-        snprintf(pv, sizeof pv, "%s%cpatch.ver", host_game, plat_path_sep);
+        game_file(game, host_game, "patch.ver", pv, sizeof pv);
         if (!plat_stat(pv, &st))
         {
             uint8_t file[0x120];
@@ -1681,10 +1712,10 @@ int main(int argc, char** argv)
     }
 
     /* the images first, before the heap spreads through the low window */
-    snprintf(path, sizeof path, "%s%cFFXiMain.dll", host_game, plat_path_sep);
+    game_file(game, host_game, "FFXiMain.dll", path, sizeof path);
     if (!pe_load(path))
         return 1;
-    snprintf(path, sizeof path, "%s%cFFXi.dll", host_game, plat_path_sep);
+    game_file(game, host_game, "FFXi.dll", path, sizeof path);
     if (!pe_load_module(path, &rt_module_ffxi, FFXI_BASE))
         return 1;
     k32_add_module("FFXi.dll", FFXI_BASE);
@@ -1700,7 +1731,7 @@ int main(int argc, char** argv)
     {
         /* the auto-translate phrases, for the overlay's chat */
         char at[1024];
-        snprintf(at, sizeof at, "%s%cROM%c76%c23.DAT", host_game, plat_path_sep, plat_path_sep, plat_path_sep);
+        game_file(game, host_game, "ROM\\76\\23.DAT", at, sizeof at);
         int n = gamestate_load_autotranslate(at);
         rt_log("[recomp] auto-translate: %d phrases\n", n);
         gamestate_set_zone_files(host_game, MZB_KEYS); /* the overlay's zone maps */
