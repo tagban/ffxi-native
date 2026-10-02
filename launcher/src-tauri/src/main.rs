@@ -65,14 +65,17 @@ fn default_registry(app: &AppHandle) -> PathBuf {
 }
 
 fn paths(app: &AppHandle, cfg: &LauncherConfig) -> Result<Paths, String> {
-    paths_for(app, cfg, &cfg.game_path)
+    paths_for(app, cfg, &cfg.game_path, None)
 }
 
 /// `build_from`: the folder whose FFXiMain.dll says which game to run - the install, or the overlay
-/// of another version over it (its own FFXiMain.dll and FFXi.dll).
-fn paths_for(app: &AppHandle, cfg: &LauncherConfig, build_from: &str) -> Result<Paths, String> {
+/// of another version over it (its own FFXiMain.dll and FFXi.dll). `account`: the profile whose
+/// folder the game keeps its files in.
+fn paths_for(app: &AppHandle, cfg: &LauncherConfig, build_from: &str, account: Option<&str>) -> Result<Paths, String> {
+    let config_dir = config_dir(app)?;
     Ok(Paths {
-        config_dir: config_dir(app)?,
+        data_dir: account.map(|id| config::profile_dir(&config_dir, id)).unwrap_or_else(|| config_dir.clone()),
+        config_dir,
         log_dir: app.path().app_log_dir().map_err(|e| e.to_string())?,
         // the one named in Settings, else the game made for this install (setup.rs), else a bundled one
         host: if !cfg.host_program.is_empty() {
@@ -101,17 +104,21 @@ fn get_config(app: AppHandle) -> Result<LauncherConfig, String> {
 #[tauri::command]
 fn save_config(app: AppHandle, cfg: LauncherConfig) -> Result<(), String> {
     let dir = config_dir(&app)?;
-    // accounts that went away take their stored password with them
+    // profiles the player deleted take their stored password and their folder with them
     for old in config::load(&dir).accounts {
         if !cfg.accounts.iter().any(|a| a.id == old.id) {
             if let Ok(e) = keychain(&old.id) {
                 let _ = e.delete_credential();
             }
+            config::remove_profile(&dir, &old.id);
         }
     }
-    // the settings that hold while the game runs: a game that is running picks them up
-    let _ = std::fs::write(dir.join("live.txt"), cfg.game.to_live());
-    config::save(&dir, &cfg)
+    config::save(&dir, &cfg)?;
+    // the settings that hold while the game runs: each profile's game, if it is running, picks them up
+    for a in &cfg.accounts {
+        let _ = std::fs::write(config::profile_dir(&dir, &a.id).join("live.txt"), a.game.to_live());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -183,7 +190,7 @@ fn launch(
         cfg.game_path = account.game_path.clone();
     }
     let build_from = if account.version_dir.is_empty() { cfg.game_path.clone() } else { account.version_dir.clone() };
-    let paths = paths_for(&app, &cfg, &build_from)?;
+    let paths = paths_for(&app, &cfg, &build_from, Some(&account.id))?;
     game::launch(app, running.inner().clone(), cfg, paths, LaunchRequest { account, password, otp, own_game_path })?;
     Ok(saved)
 }
@@ -291,14 +298,21 @@ fn is_building(building: State<Arc<Building>>) -> bool {
     setup::is_building(&building)
 }
 
+/// Stops a profile's game (or every game, with no profile).
 #[tauri::command]
-fn stop(running: State<Arc<Running>>) {
-    game::stop(&running);
+fn stop(running: State<Arc<Running>>, account_id: Option<String>) {
+    game::stop(&running, account_id.as_deref());
 }
 
 #[tauri::command]
 fn is_running(running: State<Arc<Running>>) -> bool {
     game::is_running(&running)
+}
+
+/// The profiles playing (or signing in) now.
+#[tauri::command]
+fn running_accounts(running: State<Arc<Running>>) -> Vec<String> {
+    game::running_accounts(&running)
 }
 
 /// `ffxi-launcher --make-game <FINAL FANTASY XI folder> [--data <dir>]`: makes the game for an
@@ -421,6 +435,7 @@ fn main() {
             launch,
             stop,
             is_running,
+            running_accounts,
             setup_status,
             detect_installs,
             set_game_folder,

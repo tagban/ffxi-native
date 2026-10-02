@@ -1,5 +1,6 @@
-// The launcher window. Everything persistent lives in the Rust side's launcher.json (and the
-// keychain, for passwords); this page edits it and saves on every change.
+// The launcher window. Everything persistent lives in the Rust side's launcher.json and the profiles'
+// own files (and the keychain, for passwords); this page edits them and saves on every change.
+// Each profile (account) has its own game settings, and several can play at once.
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const dialog = window.__TAURI__.dialog;
@@ -13,7 +14,9 @@ async function ask(message, okLabel = "OK") {
 const $ = (s) => document.querySelector(s);
 let cfg = null;
 let selected = null; // account id
-let running = false;
+let running = new Set(); // profiles signing in or playing
+const logs = {}; // profile -> its game's output this run
+const statuses = {}; // profile -> [its last status line, whether an error]
 let gameDefaults = null;
 
 const accountForm = $("#account");
@@ -52,6 +55,14 @@ function account() {
   return cfg.accounts.find((a) => a.id === selected);
 }
 
+// the selected profile's game settings
+function gs() {
+  const a = account();
+  if (!a) return null;
+  if (!a.game) a.game = structuredClone(gameDefaults);
+  return a.game;
+}
+
 function renderAccounts() {
   const ul = $("#accounts");
   ul.innerHTML = "";
@@ -87,6 +98,15 @@ async function select(id) {
   accountForm.elements.password.placeholder = a.password_saved ? "stored in the keychain" : "";
   showKind(a.kind);
   refreshAccountVersion();
+  // its own game settings, status and log
+  fillSettings(gameForm, gs());
+  renderFx();
+  $("#game-for").textContent = `Settings for ${a.name || a.login || "this profile"}. Each profile has its own.`;
+  const [text, error] = statuses[a.id] || ["", false];
+  setStatus(text, error);
+  $("#log").textContent = logs[a.id] || "";
+  $("#log").scrollTop = $("#log").scrollHeight;
+  showRunning();
 }
 
 accountForm.addEventListener("change", async (e) => {
@@ -111,9 +131,11 @@ accountForm.addEventListener("change", async (e) => {
 });
 
 $("#add-account").addEventListener("click", async () => {
+  // a new profile starts with the selected one's game settings
   const a = {
     id: newId(), name: "", kind: "lsb", login: "", server: "127.0.0.1", pol_server: "",
     save_password: true, password_saved: false, auth_port: 0, data_port: 0, view_port: 0, update_url: "", game_path: "",
+    game: structuredClone(gs() || gameDefaults),
   };
   cfg.accounts.push(a);
   await save();
@@ -123,20 +145,30 @@ $("#add-account").addEventListener("click", async () => {
 
 $("#delete-account").addEventListener("click", async () => {
   const a = account();
-  if (!a || !(await ask(`Delete ${a.name || a.login || "this account"}? Its stored password goes too.`, "Delete"))) return;
+  if (!a || !(await ask(`Delete ${a.name || a.login || "this account"}? Its stored password and its game settings go too.`, "Delete"))) return;
   cfg.accounts = cfg.accounts.filter((x) => x.id !== a.id);
   await save();
   await select(cfg.accounts[0]?.id ?? null);
 });
 
 // --- playing ---------------------------------------------------------------------------------------
-function setStatus(text, error) {
+// the status line of a profile (the selected one's is shown)
+function setStatus(text, error, id = selected) {
+  if (id) statuses[id] = [text, !!error];
+  if (id !== selected) return;
   $("#status").textContent = text;
   $("#status").className = error ? "error" : "";
 }
 
-function setRunning(r) {
-  running = r;
+function setRunning(id, r) {
+  if (r) running.add(id);
+  else running.delete(id);
+  showRunning();
+}
+
+// Play and Stop for the selected profile: another profile playing doesn't stop this one starting
+function showRunning() {
+  const r = running.has(selected);
   document.querySelectorAll(".running-note").forEach((e) => (e.hidden = !r));
   $("#play-button").disabled = r;
   $("#stop").hidden = !r;
@@ -220,16 +252,17 @@ listen("task-progress", ({ payload }) => {
   else taskProgress(payload.fraction, payload.step);
 });
 listen("build-progress", ({ payload }) => {
-  if (running) playProgress(payload.fraction, payload.step);
+  if (running.size) playProgress(payload.fraction, payload.step);
 });
 
 accountForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   let a = account();
-  if (!a || running) return;
+  if (!a || running.has(a.id)) return;
+  logs[a.id] = "";
   $("#log").textContent = "";
   setStatus("Starting…");
-  setRunning(true);
+  setRunning(a.id, true);
   try {
     await readyForServer(a);
     a = account();
@@ -245,36 +278,41 @@ accountForm.addEventListener("submit", async (e) => {
     accountForm.elements.otp.value = "";
     accountForm.elements.password.placeholder = a.password_saved ? "stored in the keychain" : "";
   } catch (err) {
-    setRunning(false);
+    setRunning(a.id, false);
     playProgress(null);
-    setStatus(String(err), true);
+    setStatus(String(err), true, a.id);
   }
 });
 
-$("#stop").addEventListener("click", () => invoke("stop"));
+$("#stop").addEventListener("click", () => invoke("stop", { accountId: selected }));
 
 listen("lobby-error", ({ payload }) => {
-  if (payload !== 331) return;
-  const a = account();
+  if (payload.code !== 331) return;
+  const a = cfg.accounts.find((x) => x.id === payload.account);
   setStatus(
     a?.update_url
       ? "The server needs a different version of the game. Press Play again to get it."
       : "The server needs a different version of the game. If it publishes its versions, add its game updates address under Advanced.",
-    true
+    true,
+    payload.account
   );
 });
 
 listen("game-state", ({ payload }) => {
-  setStatus(payload.message, payload.state === "error");
-  setRunning(payload.state === "signing-in" || payload.state === "running");
+  setStatus(payload.message, payload.state === "error", payload.account);
+  setRunning(payload.account, payload.state === "signing-in" || payload.state === "running");
 });
 
 const log = $("#log");
 listen("game-log", ({ payload }) => {
+  // each profile's game keeps its own lines (bounded: the game can log a lot); the selected one's show
+  let text = (logs[payload.account] || "") + payload.line + "\n";
+  if (text.length > 400000) text = text.slice(-300000);
+  logs[payload.account] = text;
+  if (payload.account !== selected) return;
   const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
-  log.append(payload + "\n");
-  // keep the view bounded: the game can log a lot
-  if (log.textContent.length > 400000) log.textContent = log.textContent.slice(-300000);
+  if (text.length < log.textContent.length) log.textContent = text;
+  else log.append(payload.line + "\n");
   if (atEnd) log.scrollTop = log.scrollHeight;
 });
 
@@ -290,27 +328,30 @@ function fillSettings(form, obj) {
 
 // the size the player gave the game's window, saved by the launcher: kept here too, so a later save
 // of these settings does not put the old one back
-listen("window-size", (e) => {
-  if (cfg?.game) cfg.game.window_points = e.payload;
+listen("window-size", ({ payload }) => {
+  const a = cfg?.accounts.find((x) => x.id === payload.account);
+  if (a?.game) a.game.window_points = payload.size;
 });
 
 // the background resolution fields only for a custom 3D quality
 function syncQuality() {
-  $("#background-custom").hidden = (cfg.game?.render_quality ?? "quality") !== "custom";
+  $("#background-custom").hidden = (gs()?.render_quality ?? "quality") !== "custom";
 }
 
 gameForm.addEventListener("change", async (e) => {
   const el = e.target;
   if (el.dataset.fx) return setFx(el.dataset.fx, el.type === "checkbox" ? (el.checked ? 1 : 0) : parseFloat(el.value), true);
-  if (!el.name) return;
-  cfg.game[el.name] = el.type === "checkbox" ? el.checked : "num" in el.dataset ? parseInt(el.value, 10) || 0 : el.value;
+  if (!el.name || !gs()) return;
+  gs()[el.name] = el.type === "checkbox" ? el.checked : "num" in el.dataset ? parseInt(el.value, 10) || 0 : el.value;
   if (el.name === "render_quality") syncQuality();
   await save(gameForm);
 });
 
 $("#game-defaults").addEventListener("click", async () => {
-  cfg.game = { ...gameDefaults, fx: { ...gameDefaults.fx } };
-  fillSettings(gameForm, cfg.game);
+  const a = account();
+  if (!a) return;
+  a.game = { ...gameDefaults, fx: { ...gameDefaults.fx } };
+  fillSettings(gameForm, a.game);
   renderFx();
   await save(gameForm);
 });
@@ -345,7 +386,7 @@ const FX_PRESETS = {
 };
 
 function fxValue(key) {
-  const v = cfg.game.fx?.[key];
+  const v = gs()?.fx?.[key];
   return v === undefined ? fxDefaults[key] : v;
 }
 
@@ -402,7 +443,8 @@ function currentPreset() {
 // a slider being dragged saves at most every 150 ms; the game reads the file twice a second
 let fxTimer = null;
 function setFx(key, value, now) {
-  cfg.game.fx = { ...(cfg.game.fx || {}), [key]: value };
+  if (!gs()) return;
+  gs().fx = { ...(gs().fx || {}), [key]: value };
   if (key === "fx") $("#fx-sliders").classList.toggle("off", !value);
   document.querySelectorAll("[data-preset]").forEach((b) => b.classList.toggle("active", b.dataset.preset === currentPreset()));
   clearTimeout(fxTimer);
@@ -411,16 +453,20 @@ function setFx(key, value, now) {
 
 document.querySelectorAll("[data-preset]").forEach((b) =>
   b.addEventListener("click", async () => {
-    cfg.game.fx = { ...fxDefaults, ...FX_PRESETS[b.dataset.preset] };
+    if (!gs()) return;
+    gs().fx = { ...fxDefaults, ...FX_PRESETS[b.dataset.preset] };
     renderFx();
     await save(gameForm);
   })
 );
 
 // the game asked for this page (its hotkey), or the lobby turned it away
-listen("open-page", ({ payload }) => {
+listen("open-page", async ({ payload }) => {
   closeSetup();
-  document.querySelector(`.tab[data-tab="${payload}"]`)?.click();
+  const page = typeof payload === "string" ? payload : payload.page;
+  // a game's settings key: that game's profile
+  if (payload.account && payload.account !== selected) await select(payload.account);
+  document.querySelector(`.tab[data-tab="${page}"]`)?.click();
 });
 
 // --- launcher settings -----------------------------------------------------------------------------
@@ -845,10 +891,8 @@ $("#repair-files").addEventListener("click", async () => {
   $("#paths").textContent = `Settings: ${d.config_dir} · Logs: ${d.log_dir}`;
   gameDefaults = await invoke("game_defaults");
   fxDefaults = await invoke("fx_defaults");
-  fillSettings(gameForm, cfg.game);
-  renderFx();
   fillLauncher();
-  setRunning(await invoke("is_running"));
+  running = new Set(await invoke("running_accounts"));
   await select(cfg.accounts.some((a) => a.id === cfg.last_account) ? cfg.last_account : cfg.accounts[0]?.id ?? null);
   refreshVersions();
   foundInstalls = await invoke("detect_installs");

@@ -24,6 +24,8 @@
 #include <stdatomic.h>
 #include <sys/stat.h>
 #include <stddef.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1083,11 +1085,13 @@ static void record_job(const PipeJob* j)
     if (j->nps)
         memcpy(w, j->ps, 4u * j->nps);
     dispatch_async(g_pipe_file_queue, ^{
-        FILE* f = fopen(g_pipe_cache, "ab");
-        if (f)
+        /* one write of the whole record to a file opened to append: two games running at once
+         * (two accounts) add theirs whole, never interleaved */
+        int fd = open(g_pipe_cache, O_WRONLY | O_APPEND | O_CREAT, 0644);
+        if (fd >= 0)
         {
-            fwrite(rec, 1, n, f);
-            fclose(f);
+            (void)!write(fd, rec, n);
+            close(fd);
         }
         free(rec);
     });
@@ -1641,13 +1645,17 @@ static const char CLEAR_MSL[] =
     "  }\n"
     "  return float4(0, 0, 0, 0.55);\n"
     "}\n"
-    "fragment float4 present_fs(PO in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]]) {\n"
-    "  return float4(t.sample(s, in.uv).rgb, 1.0);\n"
+    /* u: the sharpening (present_cas_fs), how grey (both) */
+    "float3 grey(float3 c, float g) { return mix(c, float3(dot(c, float3(0.299, 0.587, 0.114))), g); }\n"
+    "fragment float4 present_fs(PO in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]],\n"
+    "                           constant float2& u [[buffer(0)]]) {\n"
+    "  return float4(grey(t.sample(s, in.uv).rgb, u.y), 1.0);\n"
     "}\n"
     /* the same, sharpened by k (0..1): contrast-adaptive, a negative lobe over the four neighbors
      * that shrinks where the neighborhood is already near black or white (no halos on hard edges) */
     "fragment float4 present_cas_fs(PO in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]],\n"
-    "                               constant float& k [[buffer(0)]]) {\n"
+    "                               constant float2& u [[buffer(0)]]) {\n"
+    "  float k = u.x;\n"
     "  float2 tx = 1.0 / float2(t.get_width(), t.get_height());\n"
     "  float3 c = t.sample(s, in.uv).rgb;\n"
     "  float3 n = t.sample(s, in.uv - float2(0, tx.y)).rgb, so = t.sample(s, in.uv + float2(0, tx.y)).rgb;\n"
@@ -1655,7 +1663,7 @@ static const char CLEAR_MSL[] =
     "  float3 mn = min(c, min(min(n, so), min(w, e))), mx = max(c, max(max(n, so), max(w, e)));\n"
     "  float3 amp = sqrt(saturate(min(mn, 2.0 - mx) / max(mx, 1e-4)));\n"
     "  float3 lobe = -amp * mix(0.125, 0.2, saturate(k));\n"
-    "  return float4(saturate((c + (n + so + w + e) * lobe) / (1.0 + 4.0 * lobe)), 1.0);\n"
+    "  return float4(grey(saturate((c + (n + so + w + e) * lobe) / (1.0 + 4.0 * lobe)), u.y), 1.0);\n"
     "}\n";
 
 static id<MTLLibrary> g_util;
@@ -2221,6 +2229,8 @@ static float* fx_setting(const char* key)
 }
 
 void gfx_show_overlay(int on) { g_overlay = on != 0; }
+static float g_grey;
+void gfx_set_grey(float amount) { g_grey = amount < 0 ? 0 : amount > 1 ? 1 : amount; }
 
 int gfx_has_scene_effects(void) { return 1; }
 /* every pixel of a Retina or scaled display (the drawable at the window's pixels, not its points):
@@ -3288,7 +3298,8 @@ void gfx_present(GfxTex* bb)
                 /* MetalFX sharpens as it scales: not twice */
                 float sharpen = g_fxs.fx != 0.0f && !up ? g_fxs.sharpen : 0.0f;
                 [e setRenderPipelineState:sharpen > 0.0f && g_present_cas_pipe ? g_present_cas_pipe : g_present_pipe];
-                [e setFragmentBytes:&sharpen length:sizeof sharpen atIndex:0];
+                float pu[2] = { sharpen, g_grey };
+                [e setFragmentBytes:pu length:sizeof pu atIndex:0];
                 [e setFragmentTexture:up ? up : bb->view atIndex:0];
                 [e setFragmentSamplerState:g_present_samp atIndex:0];
                 [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];

@@ -651,6 +651,11 @@ static void sh_setsockopt(Guest* g)
         RET(GUEST_SOCKET_ERROR, 5);
     if (!host_option(ARG(1), ARG(2), &hl, &hn))
         RET(0, 5); /* an option this host does not have: accepted, as harmless */
+    /* SO_REUSEADDR on a UDP socket lets a second game (two accounts at once) bind the first one's
+     * port 54090 on Linux and Windows and take half its packets. Without it the second bind fails
+     * and FFXiMain moves on to the next port (54346, ...), as it means to: accepted, not applied. */
+    if (hn == SO_REUSEADDR && s->type == 2 /* SOCK_DGRAM */)
+        RET(0, 5);
     int r;
     if (hn == SO_LINGER)
     {

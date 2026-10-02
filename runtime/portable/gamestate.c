@@ -348,10 +348,58 @@ static struct
     uint32_t ls;
 } g_self_marks;
 
+/* Knocked out (the player's own server_status 3, LandSandBoat's Animation DEATH), and the seconds
+ * then left until the game sends the player home itself: 0x037's dead_counter1 at 0x3C is 60 times
+ * the seconds left plus six minutes (below six, the client returns the player home) */
+static struct
+{
+    int dead;
+    double home_secs;
+    uint64_t at;
+} g_death;
+static uint8_t g_race;
+
+extern uint64_t rt_monotonic_ns(void);
+
+static void self_death(uint8_t status, const uint8_t* counter)
+{
+    int dead = status == 3;
+    if (dead && counter)
+    {
+        double left = (double)u32(counter) / 60.0 - 360.0;
+        g_death.home_secs = left > 0 ? left : 0, g_death.at = rt_monotonic_ns();
+    }
+    else if (dead && !g_death.dead)
+        g_death.home_secs = -1, g_death.at = rt_monotonic_ns(); /* the time comes with the next 0x037 */
+    g_death.dead = dead;
+}
+
+int gamestate_dead(double* home_secs)
+{
+    if (home_secs)
+    {
+        double left = g_death.home_secs;
+        if (left > 0)
+        {
+            left -= (double)(rt_monotonic_ns() - g_death.at) / 1e9;
+            if (left < 0)
+                left = 0;
+        }
+        *home_secs = left;
+    }
+    return g_death.dead;
+}
+
+int gamestate_race(void)
+{
+    return g_race;
+}
+
 static void self_status(const uint8_t* p, uint32_t size)
 {
     if (size < 0x3C)
         return;
+    self_death(p[0x30], size >= 0x40 ? p + 0x3C : NULL);
     uint32_t f0 = u32(p + 0x28), f1 = u32(p + 0x2C), f3 = u32(p + 0x38);
     g_self_marks.gm = (uint8_t)(f0 >> 29 & 7);
     g_self_marks.marks = (uint16_t)((g_self_marks.gm || (f1 >> 31 & 1) ? MARK_GM : 0) | (f3 >> 4 & 1 ? MARK_MENTOR : 0) |
@@ -678,6 +726,8 @@ static void zone_in(const uint8_t* p, uint32_t size)
         return;
     g_self = u32(p + 0x04);
     g_zone = u16(p + 0x30);
+    g_race = p[0x45]; /* the look's first entry (0x44): the face, the race above it */
+    self_death(p[0x1F], NULL);
     zone_entities(p);
     want_map(g_zone, g_me.x, g_me.y, g_me.z);
     GameMember* m = member(g_self);

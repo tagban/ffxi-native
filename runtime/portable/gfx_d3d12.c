@@ -1459,22 +1459,33 @@ static void record_job(const PipeJob* j)
 {
     if (!g_pipe_cache[0])
         return;
+    /* the whole record in one buffer, appended with one write: two games running at once (two
+     * accounts) add theirs whole, never interleaved */
+    size_t n = 8 + sizeof j->k + 4 + 4u * j->nvs + 4 + 4u * j->nps;
+    uint8_t* rec = (uint8_t*)malloc(n);
+    if (!rec)
+        return;
+    uint8_t* w = rec;
     uint32_t hdr[2] = { PIPE_MAGIC, (uint32_t)sizeof(PipeKey) };
+    memcpy(w, hdr, 8), w += 8;
+    memcpy(w, &j->k, sizeof j->k), w += sizeof j->k;
+    memcpy(w, &j->nvs, 4), w += 4;
+    if (j->nvs)
+        memcpy(w, j->vs, 4u * j->nvs), w += 4u * j->nvs;
+    memcpy(w, &j->nps, 4), w += 4;
+    if (j->nps)
+        memcpy(w, j->ps, 4u * j->nps);
     EnterCriticalSection(&g_pipe_file_lock);
-    FILE* f = fopen(g_pipe_cache, "ab");
-    if (f)
+    HANDLE h = CreateFileA(g_pipe_cache, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE)
     {
-        fwrite(hdr, 4, 2, f);
-        fwrite(&j->k, sizeof j->k, 1, f);
-        fwrite(&j->nvs, 4, 1, f);
-        if (j->nvs)
-            fwrite(j->vs, 4, j->nvs, f);
-        fwrite(&j->nps, 4, 1, f);
-        if (j->nps)
-            fwrite(j->ps, 4, j->nps, f);
-        fclose(f);
+        DWORD wrote = 0;
+        WriteFile(h, rec, (DWORD)n, &wrote, NULL);
+        CloseHandle(h);
     }
     LeaveCriticalSection(&g_pipe_file_lock);
+    free(rec);
 }
 
 static void run_job(PipeJob* j)
@@ -2001,6 +2012,7 @@ void gfx_fx_set(const char* key, float v) { (void)key, (void)v; }
 int gfx_has_scene_effects(void) { return 0; }
 uint64_t gfx_window_flags(void) { return 0; }
 void gfx_show_overlay(int on) { g_overlay = on != 0; }
+void gfx_set_grey(float amount) { (void)amount; }
 void gfx_trace_dump(const char* path) { (void)path; }
 
 void gfx_present(GfxTex* bb)

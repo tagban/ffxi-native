@@ -270,6 +270,9 @@ int gfx_has_scene_effects(void);
 void gfx_fx_set(const char* key, float v);
 /* The frame-rate overlay on (1) or off (0), while the game runs (FFXI_FPS=0 starts it off). */
 void gfx_show_overlay(int on);
+/* The game's picture drained of color by amount (0 none, 1 grey), at the present (the overlay keeps
+ * its colors): the player knocked out. Metal only for now; the others ignore it. */
+void gfx_set_grey(float amount);
 /* The scene effects' last frames (what the shadows were drawn from), one line each, to a file. */
 void gfx_trace_dump(const char* path);
 

@@ -1,5 +1,9 @@
-//! The launcher's persistent configuration: accounts, paths and the game's settings, kept in
-//! <app config dir>/launcher.json. Passwords are not in it; they go to the OS keychain (secrets.rs).
+//! The launcher's persistent configuration. Shared things (the install, the game program, the
+//! list of profiles) are in <app config dir>/launcher.json; each profile (an account to play, with
+//! its own game settings) has a folder, profiles/<id>/, holding its profile.json and the game's own
+//! files for it (its saved settings, the overlay's layout, its sign-in choices), so two profiles
+//! can play at once without writing each other's files. Passwords are not in any of them; they go
+//! to the OS keychain.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -49,6 +53,8 @@ pub struct Account {
     /// Lsb: the xiloader protocol its login server speaks ("2.2.0"), as it last said (versions.rs);
     /// empty: the host finds out when signing in.
     pub loader: String,
+    /// This profile's game settings (each its own: two playing at once can differ).
+    pub game: GameSettings,
 }
 
 impl Default for Account {
@@ -69,6 +75,7 @@ impl Default for Account {
             loader: String::new(),
             game_path: String::new(),
             version_dir: String::new(),
+            game: GameSettings::default(),
         }
     }
 }
@@ -278,26 +285,233 @@ pub struct LauncherConfig {
     pub vault_dir: String,
     /// DAT overlay folders (host64 --dats), the first wins.
     pub dats: Vec<String>,
+    /// The profiles, each with its own settings (profiles/<id>/profile.json on disk).
     pub accounts: Vec<Account>,
     pub last_account: String,
-    pub game: GameSettings,
+}
+
+/// One profile in launcher.json's list: which folder, and its name for people reading the file.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+struct ProfileEntry {
+    id: String,
+    name: String,
+}
+
+/// launcher.json as it is on disk. `accounts` and `game` are how it was before profiles had folders
+/// of their own (read once, to move them).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+struct MasterFile {
+    game_path: String,
+    loader: String,
+    host_program: String,
+    base_registry: String,
+    vault_dir: String,
+    dats: Vec<String>,
+    profiles: Vec<ProfileEntry>,
+    last_account: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    accounts: Vec<Account>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    game: Option<GameSettings>,
 }
 
 pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join("launcher.json")
 }
 
-pub fn load(config_dir: &Path) -> LauncherConfig {
-    fs::read_to_string(path(config_dir))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+/// A profile's folder name: its id, kept to letters, digits, - and _.
+fn folder_name(id: &str) -> String {
+    let s: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    if s.is_empty() { "profile".into() } else { s }
 }
 
-pub fn save(config_dir: &Path, cfg: &LauncherConfig) -> Result<(), String> {
-    fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
-    let text = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
-    let tmp = config_dir.join("launcher.json.tmp");
+/// Where a profile keeps its settings and the game's files for it (host64 --data-dir).
+pub fn profile_dir(config_dir: &Path, id: &str) -> PathBuf {
+    config_dir.join("profiles").join(folder_name(id))
+}
+
+/// The name a profile's log goes by: its name (or account name), as a file name can have it.
+pub fn log_name(account: &Account) -> String {
+    let raw = if account.name.trim().is_empty() { &account.login } else { &account.name };
+    let s: String = raw.chars().map(|c| if c.is_alphanumeric() || " -_.".contains(c) { c } else { '_' }).collect();
+    let s = s.trim().trim_matches('.').to_string();
+    if s.is_empty() { folder_name(&account.id) } else { s }
+}
+
+/// Writes a file through a temporary name of this process's own (two launchers, or a launcher and
+/// a game, never share one), then puts it in place.
+fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
     fs::write(&tmp, text).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path(config_dir)).map_err(|e| e.to_string())
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+pub fn load_profile(config_dir: &Path, id: &str) -> Option<Account> {
+    let text = fs::read_to_string(profile_dir(config_dir, id).join("profile.json")).ok()?;
+    let mut a: Account = serde_json::from_str(&text).ok()?;
+    a.id = id.to_string();
+    Some(a)
+}
+
+pub fn save_profile(config_dir: &Path, account: &Account) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(account).map_err(|e| e.to_string())?;
+    write_atomic(&profile_dir(config_dir, &account.id).join("profile.json"), &text)
+}
+
+/// The game's own files that were shared by every account before profiles had folders: each
+/// profile starts with a copy, so nothing set before is lost.
+const SHARED_BEFORE: &[&str] = &["saved.reg", "signin.cfg", "overlay.ini", "background.png", "background.jpg"];
+
+fn copy_shared_into(config_dir: &Path, dest: &Path) {
+    let _ = fs::create_dir_all(dest);
+    for name in SHARED_BEFORE {
+        let from = config_dir.join(name);
+        if from.is_file() && !dest.join(name).exists() {
+            let _ = fs::copy(&from, dest.join(name));
+        }
+    }
+}
+
+pub fn load(config_dir: &Path) -> LauncherConfig {
+    let master: MasterFile = fs::read_to_string(path(config_dir))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let mut cfg = LauncherConfig {
+        game_path: master.game_path.clone(),
+        loader: master.loader.clone(),
+        host_program: master.host_program.clone(),
+        base_registry: master.base_registry.clone(),
+        vault_dir: master.vault_dir.clone(),
+        dats: master.dats.clone(),
+        accounts: Vec::new(),
+        last_account: master.last_account.clone(),
+    };
+    if !master.accounts.is_empty() && master.profiles.is_empty() {
+        // launcher.json from before: every account takes the one set of game settings there was,
+        // and a copy of the game's files; the old file is kept beside it
+        let game = master.game.clone().unwrap_or_default();
+        for mut a in master.accounts {
+            a.game = game.clone();
+            copy_shared_into(config_dir, &profile_dir(config_dir, &a.id));
+            cfg.accounts.push(a);
+        }
+        let _ = fs::copy(path(config_dir), config_dir.join("launcher.before-profiles.json"));
+        let _ = save(config_dir, &cfg);
+        return cfg;
+    }
+    for p in master.profiles {
+        let a = load_profile(config_dir, &p.id).unwrap_or_else(|| Account { id: p.id.clone(), name: p.name.clone(), ..Account::default() });
+        cfg.accounts.push(a);
+    }
+    cfg
+}
+
+/// Saves launcher.json and every profile. Profiles no longer listed keep their folders: only the
+/// window's Delete removes one (remove_profile).
+pub fn save(config_dir: &Path, cfg: &LauncherConfig) -> Result<(), String> {
+    for a in &cfg.accounts {
+        save_profile(config_dir, a)?;
+    }
+    let master = MasterFile {
+        game_path: cfg.game_path.clone(),
+        loader: cfg.loader.clone(),
+        host_program: cfg.host_program.clone(),
+        base_registry: cfg.base_registry.clone(),
+        vault_dir: cfg.vault_dir.clone(),
+        dats: cfg.dats.clone(),
+        profiles: cfg.accounts.iter().map(|a| ProfileEntry { id: a.id.clone(), name: log_name(a) }).collect(),
+        last_account: cfg.last_account.clone(),
+        accounts: Vec::new(),
+        game: None,
+    };
+    let text = serde_json::to_string_pretty(&master).map_err(|e| e.to_string())?;
+    write_atomic(&path(config_dir), &text)
+}
+
+/// A profile the player deleted: its folder (its settings and the game's files for it) goes too.
+pub fn remove_profile(config_dir: &Path, id: &str) {
+    let dir = profile_dir(config_dir, id);
+    if dir.starts_with(config_dir.join("profiles")) && dir.is_dir() {
+        let _ = fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ffxi-launcher-test-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn launcher_json_from_before_becomes_profiles() {
+        let dir = temp("migrate");
+        let mut game = GameSettings::default();
+        game.window_width = 1280;
+        let old = serde_json::json!({
+            "game_path": "/games/FINAL FANTASY XI",
+            "accounts": [
+                { "id": "acct-a", "name": "Tagban", "login": "tagban", "server": "ffxi.cc" },
+                { "id": "acct-b", "name": "Mule", "login": "mule", "server": "ffxi.cc" }
+            ],
+            "last_account": "acct-b",
+            "game": game,
+        });
+        fs::write(path(&dir), old.to_string()).unwrap();
+        fs::write(dir.join("saved.reg"), "REGEDIT4 saved").unwrap();
+        fs::write(dir.join("overlay.ini"), "[Window]").unwrap();
+
+        let cfg = load(&dir);
+        assert_eq!(cfg.accounts.len(), 2);
+        assert!(cfg.accounts.iter().all(|a| a.game.window_width == 1280));
+        assert_eq!(cfg.last_account, "acct-b");
+        for id in ["acct-a", "acct-b"] {
+            let p = profile_dir(&dir, id);
+            assert!(p.join("profile.json").is_file());
+            assert_eq!(fs::read_to_string(p.join("saved.reg")).unwrap(), "REGEDIT4 saved");
+            assert!(p.join("overlay.ini").is_file());
+        }
+        assert!(dir.join("launcher.before-profiles.json").is_file());
+        // launcher.json is now the list
+        let master: serde_json::Value = serde_json::from_str(&fs::read_to_string(path(&dir)).unwrap()).unwrap();
+        assert!(master.get("accounts").is_none() && master.get("game").is_none());
+        assert_eq!(master["profiles"][0]["name"], "Tagban");
+
+        // each profile's settings are its own from now on
+        let mut cfg = load(&dir);
+        cfg.accounts[1].game.window_width = 800;
+        save(&dir, &cfg).unwrap();
+        let cfg = load(&dir);
+        assert_eq!((cfg.accounts[0].game.window_width, cfg.accounts[1].game.window_width), (1280, 800));
+        assert_eq!(cfg.game_path, "/games/FINAL FANTASY XI");
+
+        // a profile left out of the list keeps its folder until it's removed on purpose
+        let mut fewer = cfg.clone();
+        fewer.accounts.truncate(1);
+        save(&dir, &fewer).unwrap();
+        assert!(profile_dir(&dir, "acct-b").is_dir());
+        remove_profile(&dir, "acct-b");
+        assert!(!profile_dir(&dir, "acct-b").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn names_for_files() {
+        let mut a = Account { id: "acct-x/../y".into(), name: "Tag: Ban!".into(), ..Account::default() };
+        assert_eq!(log_name(&a), "Tag_ Ban_");
+        a.name = "  ".into();
+        a.login = "".into();
+        assert_eq!(log_name(&a), "acct-xy");
+        assert!(profile_dir(Path::new("/c"), "../../etc").starts_with("/c/profiles"));
+    }
 }

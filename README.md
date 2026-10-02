@@ -286,11 +286,13 @@ It ships the game host (`xi-host`: the runtime, graphics, sound, input and the s
   has one, else by zig, which it downloads from ziglang.org and checks against the published SHA-256.
   No Python, Homebrew or Xcode. The module is kept per build in the app's data folder;
   `ffxi-launcher --make-game <folder>` does the same from a terminal.
-- **Accounts.** Each one is either a **LandSandBoat server** (the account name; the host signs in
+- **Profiles (accounts).** Each one is either a **LandSandBoat server** (the account name; the host signs in
   itself, xiloader's protocol) or a **PlayOnline server** (the PlayOnline ID; the launcher signs in
   over the PlayOnline protocol, `launcher/pol/`, hands the host the session value with `--session`,
   and keeps the PlayOnline session up while the game runs). Passwords are kept in the system keychain
   (macOS Keychain, Windows Credential Manager, the Secret Service on Linux), never in the settings file.
+  Each profile has its own game settings, and several can play at once (two accounts on one server):
+  select another profile and press Play while the first plays.
 - **Running a server?** [ffxi-update-server](https://github.com/tagban/ffxi-update-server) (public):
   set up an update server (Windows or Linux), publish each new client version, tell players which
   version to use, roll back, custom DATs, and an updater for players without the launcher. Its
@@ -306,7 +308,7 @@ It ships the game host (`xi-host`: the runtime, graphics, sound, input and the s
 - **Signing in.** The host speaks the xiloader protocol the server wants: the one it names, else 2.2
   (current LandSandBoat: TLS 1.3, mbedTLS on every platform), and 2.1 when the server's refusal asks
   for it. The friend list and messages of 2.2 servers (`xi_profile`) are not supported yet.
-- **Game settings.** Window mode and resolution, menu and background resolution, the graphics
+- **Game settings** (each profile's own). Window mode and resolution, menu and background resolution, the graphics
   options, sound, frame rate. They are written as `settings.reg` and given to the host with
   `--reg-final`. Those under *While playing* (frame rate, scene and interface shape, nameplates, the
   frame-rate counter, window mode, the scene effects) go to `live.txt` too (`--live`), which the
@@ -316,12 +318,18 @@ It ships the game host (`xi-host`: the runtime, graphics, sound, input and the s
   launcher's settings up over the game. Lobby error 331 (the server wants another version) is
   explained, and leads to the game updates above.
 
-Its settings file is `launcher.json` in the app's config folder
-(`~/Library/Application Support/com.tagban.ffxi-native` on macOS, `%APPDATA%\com.tagban.ffxi-native`
-on Windows, `~/.config/com.tagban.ffxi-native` on Linux), next to `settings.reg`, `saved.reg` and
-`live.txt`. The game's output is shown in the window and written to `host64.log` in the app's log
-folder (`host64.previous.log` keeps the session before: `~/Library/Logs/com.tagban.ffxi-native` on
-macOS, `%LOCALAPPDATA%\com.tagban.ffxi-native\logs` on Windows). For a LandSandBoat account the
+Its settings are in the app's config folder (`~/Library/Application Support/com.tagban.ffxi-native` on
+macOS, `%APPDATA%\com.tagban.ffxi-native` on Windows, `~/.config/com.tagban.ffxi-native` on Linux):
+`launcher.json` holds what every profile shares (the install, the game program, DATs) and the list of
+profiles; each profile has a folder, `profiles/<id>/`, with its `profile.json` (the account and its game
+settings) and the game's own files for it (`settings.reg`, `saved.reg`, `live.txt`, `overlay.ini`,
+`signin.cfg`: `--data-dir`), so two playing at once never write each other's. Texture packs go in the
+config folder's `textures/`, for every profile. A `launcher.json` from before profiles is moved into
+them on first start (every profile takes its settings; the old file stays as
+`launcher.before-profiles.json`). Each game's output is shown in the window (the selected profile's)
+and written to `<profile name>.log` in the app's log folder (`<profile name>.previous.log` keeps the
+session before: `~/Library/Logs/com.tagban.ffxi-native` on macOS,
+`%LOCALAPPDATA%\com.tagban.ffxi-native\logs` on Windows). For a LandSandBoat account the
 password reaches the host in `FFXI_PASSWORD`, not on its command line.
 
 `build/pol-signin <PlayOnline ID> [password] [--host h]` signs in without the game and prints the

@@ -109,6 +109,12 @@ int gamestate_self_vitals(uint32_t* hp, uint32_t* mp, uint32_t* tp);
 
 /* A player's marks by name (the player too, from their own status): 0 when unknown */
 int gamestate_marks(const char* name, uint16_t* marks, uint8_t* gm, uint32_t* ls);
+/* Whether the player is knocked out; home_secs: the seconds until the game sends them home itself,
+ * counting down (-1 before the server has said) */
+int gamestate_dead(double* home_secs);
+/* The player's race, from the server's zone-in: 1 Hume male, 2 Hume female, 3 Elvaan male, 4 Elvaan
+ * female, 5 Tarutaru male, 6 Tarutaru female, 7 Mithra, 8 Galka; 0 not yet known */
+int gamestate_race(void);
 int gamestate_entities(GameEntity* out, int max);
 /* the player's own position and facing (radians, 0 east, growing clockwise as the heading byte
  * does): from the game's own entity each frame where the build's entity table is known, else their

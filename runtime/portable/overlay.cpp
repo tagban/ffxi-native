@@ -1355,6 +1355,64 @@ static struct
 } g_at_used[16];
 static int g_at_nused;
 
+/* What was sent, newest last: Up in the box brings back the one before, Down the one after (and at
+ * the end, what was being typed). Each keeps its phrases, so their braces still go as their keys. */
+static struct
+{
+    char text[256];
+    int nused;
+    struct
+    {
+        char text[64];
+        uint32_t key;
+    } used[16];
+} g_sent[32];
+static int g_nsent, g_sent_at = -1; /* -1: not looking back */
+static char g_draft[256];
+
+static void remember_sent(const char* text)
+{
+    if (g_nsent && !strcmp(g_sent[g_nsent - 1].text, text))
+        return; /* the same line again: once */
+    if (g_nsent == (int)(sizeof g_sent / sizeof *g_sent))
+        memmove(g_sent, g_sent + 1, sizeof g_sent - sizeof *g_sent), --g_nsent;
+    snprintf(g_sent[g_nsent].text, sizeof g_sent[0].text, "%s", text);
+    g_sent[g_nsent].nused = g_at_nused;
+    memcpy(g_sent[g_nsent].used, g_at_used, sizeof g_at_used);
+    ++g_nsent;
+}
+
+static void recall_sent(ImGuiInputTextCallbackData* d, bool older)
+{
+    if (!g_nsent)
+        return;
+    int at = g_sent_at;
+    if (older)
+    {
+        if (at < 0)
+            snprintf(g_draft, sizeof g_draft, "%s", d->Buf), at = g_nsent - 1;
+        else if (at > 0)
+            --at;
+        else
+            return;
+    }
+    else
+    {
+        if (at < 0)
+            return;
+        at = at + 1 < g_nsent ? at + 1 : -1;
+    }
+    g_sent_at = at;
+    const char* text = at < 0 ? g_draft : g_sent[at].text;
+    if (at >= 0)
+    {
+        g_at_nused = g_sent[at].nused;
+        memcpy(g_at_used, g_sent[at].used, sizeof g_at_used);
+    }
+    d->DeleteChars(0, d->BufTextLen);
+    d->InsertChars(0, text);
+}
+
 static int chat_box_callback(ImGuiInputTextCallbackData* d)
 {
     if (d->EventFlag == ImGuiInputTextFlags_CallbackAlways)
@@ -1386,6 +1444,8 @@ static int chat_box_callback(ImGuiInputTextCallbackData* d)
     {
         g_at.sel = (g_at.sel + (d->EventKey == ImGuiKey_UpArrow ? g_at.n - 1 : 1)) % g_at.n, g_at.moved = true;
     }
+    else if (d->EventFlag == ImGuiInputTextFlags_CallbackHistory)
+        recall_sent(d, d->EventKey == ImGuiKey_UpArrow);
     return 0;
 }
 
@@ -1463,6 +1523,7 @@ static void chat_box(void)
     ImGui::SetNextItemWidth(-1);
     if (g_send_open)
     {
+        g_sent_at = -1;
         /* opened by the game's own keys: Space empty, "/" with it typed */
         if (g_send_open == 2)
             snprintf(g_send, sizeof g_send, "/");
@@ -1542,9 +1603,10 @@ static void chat_box(void)
             follow_chat_mode(typed);
             with_phrases(line, sizeof line, typed);
             g_run_line(line);
+            remember_sent(t);
         }
         g_send[0] = 0; /* and the box closes, as the game's input line does */
-        g_at_nused = 0;
+        g_at_nused = 0, g_sent_at = -1;
     }
 }
 
