@@ -1440,6 +1440,23 @@ static void game_file(const char* game, const char* host_game, const char* rel, 
             *p = plat_path_sep;
 }
 
+/* The DLL a build is mapped from: the install's retail one, or for a build the loader cannot unpack
+ * (the 2003 ASProtect builds, pol1_src_len 0) <name>.unpacked.dll, made on this machine by
+ * tools/newbuild.py unpack: from --images, else beside the game module. */
+static void image_file(const char* game, const char* host_game, const char* images_dir, const char* module_dir,
+    const char* name, int unpacked, char* out, size_t n)
+{
+    char rel[64];
+    snprintf(rel, sizeof rel, "%s.dll", name);
+    if (!unpacked)
+    {
+        game_file(game, host_game, rel, out, n);
+        return;
+    }
+    const char* dir = images_dir ? images_dir : module_dir;
+    snprintf(out, n, "%s%c%s.unpacked.dll", dir && *dir ? dir : ".", plat_path_sep, name);
+}
+
 int main(int argc, char** argv)
 {
 #ifndef _WIN32
@@ -1488,6 +1505,7 @@ int main(int argc, char** argv)
 #ifdef XI_SPLIT
     const char* module_path = NULL; /* --module: the game itself */
 #endif
+    const char* images_dir = NULL; /* --images: where an unpacked-image build's DLLs are */
     int nameplates_given = 0, nameplate_scale_given = 0, ui_aspect_given = 0;
     float ui_aspect = 0.0f;
     for (int i = 1; i + 1 < argc; i += 2)
@@ -1497,7 +1515,9 @@ int main(int argc, char** argv)
             module_path = argv[i + 1];
         else
 #endif
-        if (!strcmp(argv[i], "--live"))
+        if (!strcmp(argv[i], "--images"))
+            images_dir = argv[i + 1];
+        else if (!strcmp(argv[i], "--live"))
             snprintf(g_live_file, sizeof g_live_file, "%s", argv[i + 1]);
         else if (!strcmp(argv[i], "--viewer"))
             viewer_dir = argv[i + 1];
@@ -1906,10 +1926,24 @@ int main(int argc, char** argv)
     }
 
     /* the images first, before the heap spreads through the low window */
-    game_file(game, host_game, "FFXiMain.dll", path, sizeof path);
+    char module_dir[700] = ""; /* the game module's folder: an unpacked-image build's DLLs sit beside it */
+#ifdef XI_SPLIT
+    {
+        snprintf(module_dir, sizeof module_dir, "%s", module_path);
+        char* slash = strrchr(module_dir, '/');
+        char* back = strrchr(module_dir, '\\');
+        if (back > slash)
+            slash = back;
+        if (slash)
+            *slash = 0;
+        else
+            module_dir[0] = 0;
+    }
+#endif
+    image_file(game, host_game, images_dir, module_dir, "FFXiMain", !rt_image_pol1_src_len, path, sizeof path);
     if (!pe_load(path))
         return 1;
-    game_file(game, host_game, "FFXi.dll", path, sizeof path);
+    image_file(game, host_game, images_dir, module_dir, "FFXi", !rt_module_ffxi.pol1_src_len, path, sizeof path);
     if (!pe_load_module(path, &rt_module_ffxi, FFXI_BASE))
         return 1;
     k32_add_module("FFXi.dll", FFXI_BASE);

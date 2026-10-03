@@ -118,8 +118,11 @@ static int map_build(const char* path, const Build* b, uint32_t load_base)
     }
     free(f);
 
-    uint32_t got = pol1_decompress(GUEST_PTR(load_base + b->pol1_rva), b->pol1_src_len, GUEST_PTR(load_base + b->text_rva),
-        b->text_size);
+    /* pol1_src_len 0: a build mapped from its unpacked image (the 2003 ASProtect builds), .text
+     * already whole */
+    uint32_t got = !b->pol1_src_len ? b->text_size
+                                    : pol1_decompress(GUEST_PTR(load_base + b->pol1_rva), b->pol1_src_len,
+                                          GUEST_PTR(load_base + b->text_rva), b->text_size);
     if (got != b->text_size)
     {
         rt_log("[recomp] %s: POL1 decompressed %u bytes, expected %u\n", b->name, got, b->text_size);

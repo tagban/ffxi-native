@@ -199,15 +199,18 @@ HMODULE rt_load_image(const char* retail_path)
     DWORD old;
     VirtualProtect(base, rt_image_size, PAGE_EXECUTE_READWRITE, &old);
 
-    uint32_t got = 0;
-    lzss(base + rt_image_pol1_rva, rt_image_pol1_src_len, base + rt_image_text_rva, rt_image_text_size, &got);
+    /* pol1_src_len 0: an unpacked image (the 2003 ASProtect builds). .text is whole, and its
+     * relocations are in the PE directory, which Windows has already applied. */
+    uint32_t got = rt_image_text_size;
+    if (rt_image_pol1_src_len)
+        lzss(base + rt_image_pol1_rva, rt_image_pol1_src_len, base + rt_image_text_rva, rt_image_text_size, &got);
     if (got != rt_image_text_size)
     {
         rt_log("[recomp] POL1 decompressed %u bytes, expected %u\n", got, rt_image_text_size);
         return NULL;
     }
     rt_set_image(g_base);
-    unsigned relocs = rt_reloc_delta ? apply_text_relocations(base, rt_reloc_delta) : 0;
+    unsigned relocs = rt_reloc_delta && rt_image_pol1_src_len ? apply_text_relocations(base, rt_reloc_delta) : 0;
     rt_log("[recomp] image at %08x (delta %08x), %u .text relocations applied\n", g_base, rt_reloc_delta, relocs);
     if (!resolve_imports(base))
         return NULL;

@@ -85,7 +85,8 @@ static void s177_character(Guest* g)
     if (i >= 64)
         RETC(0xFFFFE3FDu);
     memset(GUEST_PTR(r), 0, 0x68);
-    uint32_t base = rd32(FFXI_CHARS_PTR) /* FFXiMain sits at its preferred base */;
+    /* FFXiMain sits at its preferred base; 0: a build whose table is not found yet (2003-09-05) */
+    uint32_t base = FFXI_CHARS_PTR ? rd32(FFXI_CHARS_PTR) : 0;
     if (!base || i >= FFXI_MAX_CHARS)
         RETC(0);
     uint32_t e = base + 0x13820 + i * 0x8C;

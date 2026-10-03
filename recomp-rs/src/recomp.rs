@@ -189,7 +189,7 @@ pub fn run(opts: &Options, on: &mut dyn FnMut(Event)) -> Result<Report, Error> {
         return Err(Error::Translate(format!("--hooks: {} is not an instruction in any translated function", list.join(", "))));
     }
     let kinds = patch_kinds(&prog, &entries);
-    let img = image_constants(&prog, &opts.retail)?;
+    let img = image_constants(&prog, &opts.retail, &opts.image)?;
 
     let mut report = Report { module: what.to_string(), functions: entries.len(), with_unimpl: unimpl_funcs.len(),
                               unimpl: counts.clone(), patches: None };
@@ -320,8 +320,28 @@ fn patch_kinds(prog: &Program, entries: &[u64]) -> Vec<u8> {
 }
 
 /// What the loader needs to rebuild .text from the retail DLL and check it is the right build.
-fn image_constants(prog: &Program, retail: &std::path::Path) -> Result<Vec<(&'static str, u64)>, Error> {
+///
+/// A build packed with something other than POL1 (the 2003 ASProtect builds) cannot be unpacked by
+/// the loader: it maps the unpacked image instead, already whole. Its constants are the unpacked
+/// image's, with pol1_src_len 0 and reloc_rva its relocation directory (which covers .text too).
+fn image_constants(prog: &Program, retail: &std::path::Path, image: &std::path::Path)
+    -> Result<Vec<(&'static str, u64)>, Error> {
     let pe = Pe::parse(crate::read(retail)?)?;
+    if pe.section(b"POL1").is_err() {
+        let un = Pe::parse(crate::read(image)?)?;
+        let text = un.section(b".text")?;
+        return Ok(vec![
+            ("base", prog.base),
+            ("reloc_rva", un.dirs.get(5).map(|d| d.0).unwrap_or(0) as u64),
+            ("timestamp", un.timestamp as u64),
+            ("size", un.size_of_image as u64),
+            ("text_rva", text.virtual_address as u64),
+            ("text_size", text.virtual_size as u64),
+            ("pol1_rva", 0),
+            ("pol1_src_len", 0),
+            ("oep", prog.base + un.entry as u64),
+        ]);
+    }
     let text = pe.section(b".text")?;
     let pol1 = pe.section(b"POL1")?;
     let (src_len, dst_len, oep) = crate::pol1::parse_stub(&pe)?;

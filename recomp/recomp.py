@@ -36,6 +36,7 @@ LONGJMP_TAIL = bytes.fromhex('8b621083c404ff6214')  # mov esp, [edx+0x10]; add e
 class Program:
     def __init__(self, meta, image_path):
         self.meta = meta
+        self.image_path = image_path
         self.prefix = 'f_'  # translated function names: f_XXXXXXXX (FFXiMain), <module>_XXXXXXXX otherwise
         pe = pefile.PE(image_path, fast_load=True)
         self.base = pe.OPTIONAL_HEADER.ImageBase
@@ -278,10 +279,16 @@ def retail_dll():
 
 
 def image_constants(prog, image_path):
-    """What the loader needs to rebuild .text from the retail DLL and check it is the right build."""
+    """What the loader needs to rebuild .text from the retail DLL and check it is the right build.
+
+    A build packed with something other than POL1 (the 2003 ASProtect builds) cannot be unpacked by
+    the loader: it maps the unpacked image tools/newbuild.py made on the player's machine instead,
+    already whole (unpacked_image_constants)."""
     sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools')))
     import pol1_unpack  # the static POL1 unpacker (tools/pol1_unpack.py)
     pe = pefile.PE(image_path, fast_load=True)
+    if not any(s.Name.rstrip(b'\0') == b'POL1' for s in pe.sections):
+        return unpacked_image_constants(prog)
     text = next(s for s in pe.sections if s.Name.rstrip(b'\0') == b'.text')
     pol1 = next(s for s in pe.sections if s.Name.rstrip(b'\0') == b'POL1')
     src_len, dst_len, oep = pol1_unpack.parse_stub(pe)
@@ -296,6 +303,25 @@ def image_constants(prog, image_path):
         'pol1_rva': pol1.VirtualAddress,
         'pol1_src_len': src_len,
         'oep': prog.base + oep,
+    }
+
+
+def unpacked_image_constants(prog):
+    """The constants for a build the loader maps already unpacked: the unpacked image's own, with
+    pol1_src_len 0 (nothing to decompress) and reloc_rva its relocation directory, which covers
+    .text as well (the loader then applies that one table once)."""
+    pe = pefile.PE(prog.image_path, fast_load=True)
+    text = next(s for s in pe.sections if s.Name.rstrip(b'\0') == b'.text')
+    return {
+        'base': prog.base,
+        'reloc_rva': pe.OPTIONAL_HEADER.DATA_DIRECTORY[5].VirtualAddress,
+        'timestamp': pe.FILE_HEADER.TimeDateStamp,
+        'size': pe.OPTIONAL_HEADER.SizeOfImage,
+        'text_rva': text.VirtualAddress,
+        'text_size': text.Misc_VirtualSize,
+        'pol1_rva': 0,
+        'pol1_src_len': 0,
+        'oep': prog.base + pe.OPTIONAL_HEADER.AddressOfEntryPoint,
     }
 
 

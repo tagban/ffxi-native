@@ -60,4 +60,5 @@ def current(required=True):
         'addresses': b['addresses'],
         'hooks': b.get('hooks', {}),
         'crt': b['crt'],
+        'packer': b.get('packer', 'pol1'),  # asprotect: the 2003 builds, mapped from their unpacked image
     }

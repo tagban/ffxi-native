@@ -3,7 +3,8 @@
   python tools/prepare.py [--game "<FINAL FANTASY XI folder>"]
 
 Finds FFXiMain.dll in --game (default: the PlayOnline registry key), identifies its build by
-SHA-256 in meta/builds.json, and unpacks POL1 statically with tools/pol1_unpack.py - FFXiMain.dll,
+SHA-256 in meta/builds.json, and unpacks it statically (tools/pol1_unpack.py, or for the 2003
+ASProtect builds tools/aspack_unpack.py) - FFXiMain.dll,
 and FFXi.dll from the same folder, which must be the same build. The choice is recorded in
 generated/build.json for build.py and install.py. Output lands in generated/, which is gitignored:
 it is Square Enix code and never committed.
@@ -54,10 +55,11 @@ def main():
     # depends on the state of the install afterwards.
     shutil.copyfile(dll, os.path.join(args.out, 'FFXiMain.retail.dll'))
     shutil.copyfile(ffxi, os.path.join(args.out, 'FFXi.retail.dll'))
-    unpack = os.path.join(HERE, 'pol1_unpack.py')
+    from newbuild import unpacker_for  # POL1, or ASProtect for the 2003 builds
     out = os.path.join(args.out, 'FFXiMain.unpacked.dll')
-    subprocess.check_call([sys.executable, unpack, dll, out])
-    subprocess.check_call([sys.executable, unpack, ffxi, os.path.join(args.out, 'FFXi.unpacked.dll')])
+    subprocess.check_call([sys.executable, os.path.join(HERE, unpacker_for(dll)), dll, out])
+    subprocess.check_call([sys.executable, os.path.join(HERE, unpacker_for(ffxi)), ffxi,
+                           os.path.join(args.out, 'FFXi.unpacked.dll')])
     # One copy per build too: the next game update maps its addresses from this one
     # (tools/newbuild.py carry).
     keep = os.path.join(args.out, 'images', label)

@@ -36,7 +36,10 @@ META = BUILD and BUILD['ffximain_meta']  # per-build metadata (from the discover
 IMAGE = os.path.join(ROOT, 'generated', 'FFXiMain.unpacked.dll')
 RETAIL = os.path.join(ROOT, 'generated', 'FFXiMain.retail.dll')  # verified copy, written by prepare.py
 BUILD_H = os.path.join(ROOT, 'generated', 'build.h')
-SLICE = BUILD and ','.join(BUILD['crt'].values())  # the CRT functions tests/difftest.c compares
+# What the loader maps: the retail DLL (POL1, unpacked as it loads), or for a build it cannot unpack
+# (the 2003 ASProtect builds) the unpacked image prepare.py made.
+LOAD_IMAGE = IMAGE if BUILD and BUILD['packer'] == 'asprotect' else RETAIL
+SLICE =BUILD and ','.join(BUILD['crt'].values())  # the CRT functions tests/difftest.c compares
 CFLAGS = ['/nologo', '/O2', '/MT', '/W3', '/std:c11', '/bigobj', '/I', 'runtime', '/I', 'runtime\\win32', '/I',
           'generated']
 # 64-bit hosts: guest memory is a window (guest.h) and the runtime is runtime/portable
@@ -51,6 +54,8 @@ def write_build_h():
              '#define FFXI_VERSION "%s" /* the version string patch.ver carries */' % BUILD['version']]
     for k, v in BUILD['addresses'].items():
         lines.append('#define FFXI_%s 0x%08xu' % (k.upper(), int(v, 16)))
+    if 'chars_ptr' not in BUILD['addresses']:  # not found yet for this build: no character records
+        lines.append('#define FFXI_CHARS_PTR 0u')
     for k, v in BUILD['hooks'].items():
         lines.append('#define FFXI_HOOK_%s 0x%08xu /* rt_hook_%s runs here */' % (k.upper(), int(v, 16), k))
     for k, v in BUILD['crt'].items():
@@ -158,7 +163,7 @@ def boot64(env):
     # the PlayOnline keys, as a Mac player would bring them (build/ is gitignored)
     reg = os.path.join(ROOT, 'build', 'playonline.reg')
     subprocess.call(['reg', 'export', r'HKLM\SOFTWARE\WOW6432Node\PlayOnlineUS', reg, '/y'], stdout=subprocess.DEVNULL)
-    run(['build\\boot64.exe', RETAIL, BUILD['game']] + ([reg] if os.path.exists(reg) else []), env)
+    run(['build\\boot64.exe', LOAD_IMAGE, BUILD['game']] + ([reg] if os.path.exists(reg) else []), env)
 
 
 FFXI_META = BUILD and BUILD['ffxi_meta']
