@@ -1440,6 +1440,27 @@ static void game_file(const char* game, const char* host_game, const char* rel, 
             *p = plat_path_sep;
 }
 
+/* 1 when the install's FFXiMain.dll was built before 2005 (the 2003 client): what the sign-in
+ * screen shows follows its time. From the file, since a split build's module is not loaded yet. */
+static int classic_install(const char* game)
+{
+    char path[1100];
+    snprintf(path, sizeof path, "%s%cFFXiMain.dll", game, plat_path_sep);
+    FILE* f = fopen(path, "rb");
+    if (!f)
+        return 0;
+    unsigned char h[0x400];
+    size_t n = fread(h, 1, sizeof h, f);
+    fclose(f);
+    if (n < 0x40)
+        return 0;
+    uint32_t pe = h[0x3c] | h[0x3d] << 8 | (uint32_t)h[0x3e] << 16 | (uint32_t)h[0x3f] << 24;
+    if (pe + 12 > n || memcmp(h + pe, "PE\0\0", 4))
+        return 0;
+    uint32_t stamp = h[pe + 8] | h[pe + 9] << 8 | (uint32_t)h[pe + 10] << 16 | (uint32_t)h[pe + 11] << 24;
+    return stamp < 0x41D5E800u; /* 2005-01-01 */
+}
+
 /* The DLL a build is mapped from: the install's retail one, or for a build the loader cannot unpack
  * (the 2003 ASProtect builds, pol1_src_len 0) <name>.unpacked.dll, made on this machine by
  * tools/newbuild.py unpack: from --images, else beside the game module. */
@@ -1664,6 +1685,7 @@ int main(int argc, char** argv)
         SigninSetup su = { game, data_dir, lsb.user ? SIGNIN_LSB : 0, server_name, lsb.user,
                            lsb.password, lsb.otp, lsb.auth_port != 54231 ? lsb.auth_port : 0,
                            lsb.data_port != 54230 ? lsb.data_port : 0, lsb.view_port != 54001 ? lsb.view_port : 0 };
+        su.classic = classic_install(game);
         /* an app bundle's first-run defaults (appdefaults.h) */
         su.default_mode = -1, su.default_space = -1;
         if (app_default("FFXIFullscreenSpace", app_val, sizeof app_val))

@@ -592,6 +592,64 @@ int read_secret(const char* prompt, char* out, size_t n)
 #endif
 }
 
+int lsb_create_account(const LsbLogin* l, char* err, size_t errn)
+{
+#if defined(_WIN32)
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
+    char user[160], pass[160], req[1000], reply[8192], message[512];
+    json_string(user, sizeof user, l->user);
+    json_string(pass, sizeof pass, l->password ? l->password : "");
+    /* the protocol variant as lsb_login settles it: the one named, else the newest, then the one
+     * a refusal names */
+    int variant = l->loader[0] ? loader_variant(l->loader[0], l->loader[1]) : 0;
+    long long result = -1;
+    for (int attempt = 0;; attempt++)
+    {
+        const int* v = variant >= 0 ? LOADER_VERSIONS[variant] : l->loader;
+        snprintf(req, sizeof req,
+            "{\"command\":32,\"new_password\":\"\",\"otp\":\"\",\"password\":%s,\"trust_this_computer\":false,"
+            "\"trust_token\":\"\",\"username\":%s,\"version\":[%d,%d,%d]}",
+            pass, user, v[0], v[1], v[2]);
+        int ok = tls_exchange(l->server, l->auth_port, req, reply, sizeof reply, err, errn);
+        memset(req, 0, sizeof req);
+        if (!ok)
+            break;
+        if (json_str(reply, "error_message", message, sizeof message) && message[0])
+        {
+            int want = wanted_variant(message);
+            if (attempt == 0 && want >= 0 && want != variant)
+            {
+                variant = want;
+                continue;
+            }
+            snprintf(err, errn, "the server says: %s", message);
+            break;
+        }
+        if (!json_int(reply, "result", &result))
+            snprintf(err, errn, "the login server's reply has no result");
+        break;
+    }
+    memset(pass, 0, sizeof pass);
+    switch (result)
+    {
+    case 3: /* LOGIN_SUCCESS_CREATE */
+        return 1;
+    case 4:
+        snprintf(err, errn, "That name is taken.");
+        return 0;
+    case 8:
+        snprintf(err, errn, "This server does not allow new accounts.");
+        return 0;
+    case -1:
+        return 0; /* err already says */
+    default:
+        snprintf(err, errn, "The server could not create the account (%lld).", result);
+        return 0;
+    }
+}
+
 int lsb_login(const LsbLogin* l, char* err, size_t errn)
 {
 #if defined(_WIN32)

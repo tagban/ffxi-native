@@ -1,8 +1,11 @@
 /* The sign-in screen. See signin.h.
  *
- * Two windows in the game's art: Sign in (the ID - a LandSandBoat username or a PlayOnline ID,
- * one field either way - the password, LandSandBoat's one-time code, Sign in and Settings) and
- * Settings (the method, the server, remembering the password, the window theme). Keys: Tab and the
+ * Three windows in the game's art: Sign in (the ID - a LandSandBoat username or a PlayOnline ID,
+ * one field either way - the password, LandSandBoat's one-time code, Sign in, New account and
+ * Settings), New account (LandSandBoat only: a username and the password twice, sent as
+ * xi_connect's LOGIN_CREATE) and Settings (the method, the server, remembering the password, the
+ * window theme). For the 2003 client (SigninSetup.classic) there is no one-time code field: there
+ * were none then. Keys: Tab and the
  * arrows move, Enter acts, Left/Right switch a choice, Escape goes back or quits; the mouse clicks.
  *
  * What it remembers is in signin.cfg (key=value lines) beside settings.reg, the password in the
@@ -256,12 +259,14 @@ enum
     JOB_RUNNING,
     JOB_DONE,
     JOB_FAILED,
+    JOB_CREATED, /* an account made (LandSandBoat's LOGIN_CREATE): back to Sign in */
 };
 
 typedef struct Job
 {
     SDL_AtomicInt state;
     int method;
+    int create; /* make the account instead of signing in */
     char server[128], user[64], password[128], otp[32];
     uint16_t auth_port, data_port, view_port;
     uint32_t ip;
@@ -296,7 +301,7 @@ static void job_thread(void* arg)
             j->password,
             j->otp,
             NULL };
-        ok = lsb_login(&l, j->error, sizeof j->error);
+        ok = j->create ? lsb_create_account(&l, j->error, sizeof j->error) : lsb_login(&l, j->error, sizeof j->error);
     }
     else
     {
@@ -324,6 +329,15 @@ static void job_thread(void* arg)
         }
     }
     memset(j->password, 0, sizeof j->password);
+    if (j->create)
+    {
+        if (ok)
+            fprintf(stderr, "[signin] account %s created on %s\n", j->user, j->server);
+        else
+            fprintf(stderr, "[signin] creating account %s on %s failed: %s\n", j->user, j->server, j->error);
+        SDL_SetAtomicInt(&j->state, ok ? JOB_CREATED : JOB_FAILED);
+        return;
+    }
     if (ok)
         fprintf(stderr, "[signin] signed in as %s on %s (%s)\n", j->user, j->server,
             j->method == SIGNIN_POL ? "PlayOnline" : "LandSandBoat");
@@ -416,6 +430,7 @@ enum
 {
     SCREEN_SIGNIN,
     SCREEN_SETTINGS,
+    SCREEN_CREATE, /* a new LandSandBoat account */
 };
 
 /* What a control does: its id, for the code that acts on it */
@@ -432,6 +447,9 @@ enum
     ID_THEME,
     ID_SPACE,
     ID_BACK,
+    ID_NEW_ACCOUNT, /* Sign in's button to the New account screen */
+    ID_CONFIRM,
+    ID_CREATE,
 };
 
 typedef struct Widget
@@ -446,8 +464,9 @@ typedef struct Widget
 typedef struct Ui
 {
     Config cfg;
-    char password[128], otp[32];
+    char password[128], otp[32], confirm[128];
     int screen, focus;
+    int classic; /* the 2003 client: no one-time code (SigninSetup.classic) */
     Widget w[8];
     int nw;
     char status[512];
@@ -556,10 +575,20 @@ static void build(Ui* u)
         add(u, W_TEXT, ID_USER, u->cfg.method == SIGNIN_POL ? "PlayOnline ID" : "Username", u->cfg.user,
             sizeof u->cfg.user);
         add(u, W_SECRET, ID_PASSWORD, "Password", u->password, sizeof u->password);
-        if (u->cfg.method == SIGNIN_LSB)
+        if (u->cfg.method == SIGNIN_LSB && !u->classic)
             add(u, W_TEXT, ID_OTP, "One-time code", u->otp, sizeof u->otp);
         add(u, W_BUTTON, ID_SIGNIN, "Sign in", NULL, 0);
+        if (u->cfg.method == SIGNIN_LSB)
+            add(u, W_BUTTON, ID_NEW_ACCOUNT, "New account", NULL, 0);
         add(u, W_BUTTON, ID_SETTINGS, "Settings", NULL, 0);
+    }
+    else if (u->screen == SCREEN_CREATE)
+    {
+        add(u, W_TEXT, ID_USER, "Username", u->cfg.user, sizeof u->cfg.user);
+        add(u, W_SECRET, ID_PASSWORD, "Password", u->password, sizeof u->password);
+        add(u, W_SECRET, ID_CONFIRM, "Password again", u->confirm, sizeof u->confirm);
+        add(u, W_BUTTON, ID_CREATE, "Create", NULL, 0);
+        add(u, W_BUTTON, ID_BACK, "Back", NULL, 0);
     }
     else
     {
@@ -628,7 +657,7 @@ static void start_signin(Ui* u)
         }
     }
     Job* j = &g_job;
-    j->method = u->cfg.method;
+    j->method = u->cfg.method, j->create = 0;
     SDL_strlcpy(j->server, u->cfg.server, sizeof j->server);
     SDL_strlcpy(j->user, u->cfg.user, sizeof j->user);
     SDL_strlcpy(j->password, u->password, sizeof j->password);
@@ -641,6 +670,47 @@ static void start_signin(Ui* u)
     if (!plat_thread_start(job_thread, j))
     {
         snprintf(j->error, sizeof j->error, "Cannot start the sign-in.");
+        SDL_SetAtomicInt(&j->state, JOB_FAILED);
+    }
+    set_status(u, "", 0);
+}
+
+/* A new account on the LandSandBoat server, on the worker thread like a sign-in */
+static void start_create(Ui* u)
+{
+    if (busy())
+        return;
+    if (!u->cfg.server[0])
+    {
+        set_status(u, "Set the server in Settings first.", 1);
+        return;
+    }
+    if (strlen(u->cfg.user) < 3 || strlen(u->password) < 6)
+    {
+        set_status(u, "A username of 3 or more letters, and a password of 6 or more.", 1);
+        u->focus = strlen(u->cfg.user) < 3 ? 0 : 1;
+        return;
+    }
+    if (strcmp(u->password, u->confirm))
+    {
+        set_status(u, "The two passwords are not the same.", 1);
+        u->confirm[0] = 0;
+        u->focus = 2;
+        return;
+    }
+    Job* j = &g_job;
+    j->method = SIGNIN_LSB, j->create = 1;
+    SDL_strlcpy(j->server, u->cfg.server, sizeof j->server);
+    SDL_strlcpy(j->user, u->cfg.user, sizeof j->user);
+    SDL_strlcpy(j->password, u->password, sizeof j->password);
+    j->otp[0] = 0;
+    j->auth_port = u->cfg.auth_port, j->data_port = u->cfg.data_port, j->view_port = u->cfg.view_port;
+    j->error[0] = 0;
+    SDL_SetAtomicInt(&j->state, JOB_RUNNING);
+    fprintf(stderr, "[signin] creating account %s on %s\n", j->user, j->server);
+    if (!plat_thread_start(job_thread, j))
+    {
+        snprintf(j->error, sizeof j->error, "Cannot start the request.");
         SDL_SetAtomicInt(&j->state, JOB_FAILED);
     }
     set_status(u, "", 0);
@@ -679,7 +749,11 @@ static void activate(Ui* u, int i)
     else if (w->id == ID_SETTINGS && !busy())
         u->screen = SCREEN_SETTINGS, u->focus = 0, set_status(u, "", 0);
     else if (w->id == ID_BACK)
-        u->screen = SCREEN_SIGNIN, u->focus = 0;
+        u->screen = SCREEN_SIGNIN, u->focus = 0, u->confirm[0] = 0;
+    else if (w->id == ID_NEW_ACCOUNT && !busy())
+        u->screen = SCREEN_CREATE, u->focus = 0, u->confirm[0] = 0, set_status(u, "", 0);
+    else if (w->id == ID_CREATE)
+        start_create(u);
     else if (u->screen == SCREEN_SIGNIN)
         start_signin(u);
 }
@@ -777,8 +851,9 @@ static void draw(Ui* u, int w, int h)
 
     /* the window: a heading, a row a field or choice, the status, the buttons */
     frame(u, wx, wy, ww, wh, s, 1);
-    text(u, u->screen == SCREEN_SIGNIN ? "Sign in" : "Settings", wx + 24 * s, wy + 18 * s, s, WHITE);
-    if (u->screen == SCREEN_SIGNIN)
+    text(u, u->screen == SCREEN_SIGNIN ? "Sign in" : u->screen == SCREEN_CREATE ? "New account" : "Settings",
+        wx + 24 * s, wy + 18 * s, s, WHITE);
+    if (u->screen == SCREEN_SIGNIN || u->screen == SCREEN_CREATE)
     {
         char where[200];
         snprintf(where, sizeof where, "%s  %s", u->cfg.method == SIGNIN_POL ? "PlayOnline" : "LandSandBoat",
@@ -837,7 +912,7 @@ static void draw(Ui* u, int w, int h)
     if (busy())
     {
         char msg[64];
-        snprintf(msg, sizeof msg, "Signing in%.*s", (int)(now / 400 % 4), "...");
+        snprintf(msg, sizeof msg, "%s%.*s", g_job.create ? "Creating the account" : "Signing in", (int)(now / 400 % 4), "...");
         text(u, msg, wx + 34 * s, y + 6 * s, s, GREY);
     }
     else if (u->status[0])
@@ -852,7 +927,12 @@ static void draw(Ui* u, int w, int h)
 
     /* the buttons, right-aligned along the bottom: the screen's own pills (light, gold for the one
      * Enter presses) with dark labels */
-    float bh = 30 * s, bw = 170 * s, by = wy + wh - 52 * s, bx = wx + ww - 24 * s;
+    int nb = 0;
+    for (int i = 0; i < u->nw; ++i)
+        nb += u->w[i].kind == W_BUTTON;
+    /* as wide as fits: three buttons share what two had */
+    float bw = nb > 2 ? (ww - 48 * s - 44 * s * (nb - 1)) / nb : 170 * s;
+    float bh = 30 * s, by = wy + wh - 52 * s, bx = wx + ww - 24 * s;
     for (int i = u->nw - 1; i >= 0; --i)
     {
         Widget* c = &u->w[i];
@@ -902,8 +982,8 @@ static void key(Ui* u, const SDL_KeyboardEvent* e, int* done)
         return;
     if (k == SDLK_ESCAPE)
     {
-        if (u->screen == SCREEN_SETTINGS)
-            u->screen = SCREEN_SIGNIN, u->focus = 0;
+        if (u->screen == SCREEN_SETTINGS || (u->screen == SCREEN_CREATE && !busy()))
+            u->screen = SCREEN_SIGNIN, u->focus = 0, u->confirm[0] = 0;
         else if (!busy())
             *done = 1;
     }
@@ -917,6 +997,8 @@ static void key(Ui* u, const SDL_KeyboardEvent* e, int* done)
         /* in a field of the sign-in screen: sign in; in Settings' server: on to the next */
         if (f && (f->kind == W_TEXT || f->kind == W_SECRET) && u->screen == SCREEN_SIGNIN)
             start_signin(u);
+        else if (f && (f->kind == W_TEXT || f->kind == W_SECRET) && u->screen == SCREEN_CREATE)
+            start_create(u);
         else if (f && f->kind == W_TEXT)
             u->focus = (u->focus + 1) % u->nw;
         else
@@ -947,6 +1029,7 @@ int signin_run(const SigninSetup* setup, SigninResult* out)
     if (!u)
         return -1;
     u->host_game = setup->host_game;
+    u->classic = setup->classic;
     /* where it keeps its files */
     char dir[1024], cfg_path[1100];
     if (setup->data_dir)
@@ -1171,8 +1254,19 @@ int signin_run(const SigninSetup* setup, SigninResult* out)
         if (state == JOB_FAILED)
         {
             SDL_SetAtomicInt(&g_job.state, JOB_IDLE);
-            set_status(u, g_job.error[0] ? g_job.error : "The sign-in failed.", 1);
+            set_status(u, g_job.error[0] ? g_job.error : g_job.create ? "The account was not created." : "The sign-in failed.", 1);
             u->otp[0] = 0; /* one-time codes are single use */
+        }
+        else if (state == JOB_CREATED)
+        {
+            /* made: back to Sign in with the name and password in place, Enter signs in */
+            SDL_SetAtomicInt(&g_job.state, JOB_IDLE);
+            u->screen = SCREEN_SIGNIN, u->confirm[0] = 0;
+            build(u);
+            for (int i = 0; i < u->nw; ++i)
+                if (u->w[i].id == ID_SIGNIN)
+                    u->focus = i;
+            set_status(u, "Account created. Sign in to play.", 0);
         }
         else if (state == JOB_DONE)
         {

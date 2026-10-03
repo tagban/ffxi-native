@@ -26,6 +26,11 @@ typedef struct LsbLogin
  * hash in every lobby command (ws2), the polcore session. Returns 1, or 0 with a message. */
 int lsb_login(const LsbLogin* l, char* err, size_t errn);
 
+/* Creates the account l->user with l->password on the auth port (xi_connect's LOGIN_CREATE, on
+ * servers with login.ACCOUNT_CREATION): nothing else is opened. Returns 1, or 0 with a message
+ * (the name is taken, the server does not allow it, ...). */
+int lsb_create_account(const LsbLogin* l, char* err, size_t errn);
+
 /* A server name or dotted quad as an IPv4 address (host byte order); 0 if it does not resolve. */
 int net_resolve_ipv4(const char* name, uint32_t* out);
 /* Reads a line from the terminal without echoing it (the password prompt); 0 when there is no

@@ -23,6 +23,8 @@ typedef struct SigninSetup
     const char* password;
     const char* otp;
     uint16_t auth_port, data_port, view_port;
+    /* a build from before one-time codes (the 2003 client): no code field */
+    int classic;
     /* first-run defaults (an app bundle's, appdefaults.h), under what the player saved; 0 / NULL
      * for the built-in ones (LandSandBoat on 127.0.0.1, a 1920x1080 window) */
     int default_method;
