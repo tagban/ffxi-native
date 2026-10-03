@@ -1,7 +1,9 @@
 # Notice
 
+ffxi-native is MIT-licensed (`LICENSE`).
+
 ffxi-native is derived from **xi-on-mac** by rubymatrix, <https://github.com/rubymatrix/xi-on-mac>,
-used with its author's permission. The recompiler (`recomp/`, `discovery/`), the runtime
+used with its author's permission and under its MIT licence, whose copyright line `LICENSE` keeps. The recompiler (`recomp/`, `discovery/`), the runtime
 (`runtime/`), the game host (`host/`), the per-build metadata (`meta/`, `specs/`), the PlayOnline
 client (`launcher/pol/`), the tests and the original launcher come from that project.
 
