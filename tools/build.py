@@ -218,7 +218,8 @@ def host64(env):
     objs = game_objects(env)
     sdl_inc, sdl_lib = sdl3()
     objs += compile_stale(env, PORTABLE + HOST_SOURCES, 'build\\host64', sdl_inc + HOST_INCLUDES, CFLAGS64)
-    run(['link', '/nologo', '/OUT:build\\host64.exe', '/MACHINE:X64', sdl_lib] + HOST_LIBS + objs, env)
+    # the map names the function at a crash's offset (Windows reports host64.exe+offset)
+    run(['link', '/nologo', '/OUT:build\\host64.exe', '/MAP:build\\host64.map', '/MACHINE:X64', sdl_lib] + HOST_LIBS + objs, env)
     shutil.copy(os.path.join(SDL3, 'lib', 'x64', 'SDL3.dll'), os.path.join(ROOT, 'build'))
     print('built build\\host64.exe; run: build\\host64.exe --game "%s" ...' % BUILD['game'])
 
