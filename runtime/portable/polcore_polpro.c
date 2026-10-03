@@ -361,6 +361,30 @@ static void s1483_mail_text(Guest* g)
 
 static void s_settings_fail(Guest* g) { RETC(0xFFFFFF00u); } /* 1535/1536: no server-side settings */
 
+/* --- slots only the 2003 client (2003-09-05) calls. The same polcore functions exist in the 2011
+ * polcore; FFXiMain stopped calling them directly. ------------------------------------------------ */
+
+/* 198 (2011 0x1001d220): releases handle record a0 (< 64); 0 when done. Ours keep nothing. */
+static void s198_handle_release(Guest* g) { RETC(ARG(0) >= 64 ? 0xFFFFE3EAu : 0); }
+
+/* 364, 1104, 1105 (2011 0x1004ef40/60/80): the name dictionaries' tests - entry.dic, entry_b.dic,
+ * entry_f.dic run through the DicFilter matcher in detect-only form (modes 3, 1, 2), each 1 when
+ * the name matches. Slot 1110 calls all three; the 2003 client calls them itself. As with 1110,
+ * the retail dictionaries match nothing here: the server checks names. */
+static void s_dic_test(Guest* g) { RETC(0); }
+
+/* 441 (2011 0x100183e0): *a0 = a session counter (slot 411 counts it up), 0. Nothing to count. */
+static void s441_counter(Guest* g)
+{
+    if (ARG(0))
+        wr32(ARG(0), 0);
+    RETC(0);
+}
+
+/* 966 (2011 0x100181c0): the LATIN flag slot 965 sets (polcore-slots.polpro.txt, slot 1132):
+ * 1 for an English or European client, which this is. */
+static void s966_latin(Guest* g) { RETC(1); }
+
 #define SLOT(n, f) { 4 * (n), f }
 static const PolcoreSlot POLPRO[] = {
     SLOT(165, s_start), SLOT(166, s_poll_done), SLOT(167, s167_friend_a), SLOT(169, s169_friend_b),
@@ -390,6 +414,9 @@ static const PolcoreSlot POLPRO[] = {
     SLOT(930, s930_list_poll), SLOT(931, s_start), SLOT(1004, s1004_error_text), SLOT(1005, s1004_error_text),
     SLOT(1006, s1006_error_table), SLOT(1132, s1132_text_input), SLOT(1152, s_zero), SLOT(1483, s1483_mail_text),
     SLOT(1535, s_settings_fail), SLOT(1536, s_settings_fail),
+    /* the 2003 client's */
+    SLOT(198, s198_handle_release), SLOT(364, s_dic_test), SLOT(441, s441_counter), SLOT(966, s966_latin),
+    SLOT(1104, s_dic_test), SLOT(1105, s_dic_test),
     { 0, NULL },
 };
 
