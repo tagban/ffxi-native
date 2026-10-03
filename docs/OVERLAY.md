@@ -89,9 +89,9 @@ and its own menus use), exactly as if they had typed it.
   the one with the keyboard at the manager's +0x54). The log is moved off the screen (the game
   leaves it there); the party list is laid out again every frame, so its draws are dropped
   instead: hooks on the manager's draw of each window ("menu_draw", "menu_drawn").
-- **Typing**: with the game's log hidden, Enter (nothing targeted), "/" and "!" open the overlay's
-  chat box while none of the game's menus has the keyboard (knocked out, its death menu does not
-  count). Space is /jump (a setting; off, Space opens the box too). Up and Down in the box go
+- **Typing**: with the game's log hidden, Space, Enter (nothing targeted), "/" and "!" open the
+  overlay's chat box while none of the game's menus has the keyboard (knocked out, its death menu
+  does not count). Shift+Space is /jump (a setting; a player's suggestion). Up and Down in the box go
   through what was sent. Knocked out, Say, Shout and Yell are held back; Party, Linkshell and Tell go.
 - **Knocked out** (the player's server_status 3 in 0x037, the time left from its dead_counter1): the
   game's picture goes grey at the present (gfx_set_grey; Metal), the game's death menu is not drawn

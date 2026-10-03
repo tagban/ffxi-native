@@ -163,7 +163,7 @@ static struct
     int chat_quiet_lines = 4;
     float chat_quiet_secs = 12.0f;
     bool death_screen = true; /* knocked out: the screen grey, the time, the buttons */
-    bool space_jumps = true;  /* Space: /jump (not the chat box; Enter and / open that) */
+    bool space_jumps = true;  /* Shift+Space: /jump (Space alone opens the chat box) */
 } g_set;
 static char g_ini[1024];
 static struct
@@ -587,8 +587,10 @@ static bool typing_is_ours(const SDL_KeyboardEvent& k)
         return false;
     bool bang = k.key == SDLK_EXCLAIM || (k.key == SDLK_1 && (k.mod & SDL_KMOD_SHIFT));
     bool enter = k.key == SDLK_RETURN || k.key == SDLK_KP_ENTER;
-    if ((k.key != SDLK_SPACE || g_set.space_jumps) && k.key != SDLK_SLASH && !bang && !enter)
+    if (k.key != SDLK_SPACE && k.key != SDLK_SLASH && !bang && !enter)
         return false;
+    if (k.key == SDLK_SPACE && (k.mod & SDL_KMOD_SHIFT) && g_set.space_jumps)
+        return false; /* Shift+Space: the jump */
     const char* focus = g_game_focus ? g_game_focus() : "";
     /* knocked out, the game's death menu has the keyboard; the screen's buttons stand in for it */
     bool ko_menu = g_ko.on && !strncmp(focus, "dead", 4);
@@ -637,10 +639,10 @@ extern "C" int overlay_event(const SDL_Event* e)
         g_swallow_text = false; /* the Space or / that opened the box */
         return 1;
     }
-    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_SPACE && g_set.space_jumps && g_shown && !ImGui::GetIO().WantTextInput &&
-        !(e->key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) && dsound_in_world())
+    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_SPACE && (e->key.mod & SDL_KMOD_SHIFT) && g_set.space_jumps && g_shown &&
+        !ImGui::GetIO().WantTextInput && !(e->key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) && dsound_in_world())
     {
-        /* Space: a jump (the game's /jump), while none of the game's windows has the keyboard.
+        /* Shift+Space: a jump (the game's /jump), while none of the game's windows has the keyboard.
          * Its text and release go nowhere. */
         const char* focus = g_game_focus ? g_game_focus() : "";
         bool free = !focus[0] || !strncmp(focus, "logwin", 6) || !strncmp(focus, "fulllog", 7);
@@ -862,7 +864,7 @@ static void overlay_window(void)
             ImGui::SetNextItemWidth(-60);
             dirty |= ImGui::SliderFloat("After##quiet", &g_set.chat_quiet_secs, 3, 60, "%.0f seconds");
         }
-        dirty |= ImGui::Checkbox("Space jumps (/jump); Enter or / to type", &g_set.space_jumps);
+        dirty |= ImGui::Checkbox("Shift+Space jumps (/jump)", &g_set.space_jumps);
         ImGui::Separator();
         ImGui::TextDisabled("Knocked out");
         dirty |= ImGui::Checkbox("The screen goes grey, with the time and Return to Home Point", &g_set.death_screen);
@@ -1587,9 +1589,7 @@ static void chat_box(void)
         g_send_refocus = false;
         g_send_fresh = true;
     }
-    const char* hint = g_send_to == 6                 ? "name, then the message"
-                       : g_set.space_jumps ? "Enter, / or ! to type; Tab: auto-translate; Enter sends"
-                                           : "Space, Enter, / or ! to type; Tab: auto-translate; Enter sends";
+    const char* hint = g_send_to == 6 ? "name, then the message" : "Space, Enter, / or ! to type; Tab: auto-translate; Enter sends";
     ImGui::PushItemFlag(ImGuiItemFlags_NoTabStop, true);
     bool entered = ImGui::InputTextWithHint("##send", hint, g_send, sizeof g_send,
         ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways | ImGuiInputTextFlags_CallbackCompletion |
@@ -2843,7 +2843,7 @@ static void ko_window(bool game_asks_else)
             g_ko.waiting = true;
         ImGui::EndDisabled();
         const char* hint = g_ko.note && ImGui::GetTime() - g_ko.note_at < 6.0 ? g_ko.note
-                                                                             : "Enter, / or ! to chat. A controller works the game's own menu.";
+                                                                             : "Space, Enter, / or ! to chat. A controller works the game's own menu.";
         float w = ImGui::GetContentRegionAvail().x, hw = ImGui::CalcTextSize(hint).x;
         if (hw < w)
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (w - hw) * 0.5f);
