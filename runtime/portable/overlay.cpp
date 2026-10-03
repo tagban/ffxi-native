@@ -639,11 +639,11 @@ extern "C" int overlay_event(const SDL_Event* e)
         g_swallow_text = false; /* the Space or / that opened the box */
         return 1;
     }
-    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_SPACE && (e->key.mod & SDL_KMOD_SHIFT) && g_set.space_jumps && g_shown &&
-        !ImGui::GetIO().WantTextInput && !(e->key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) && dsound_in_world())
+    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_SPACE && (e->key.mod & SDL_KMOD_SHIFT) && g_set.space_jumps &&
+        !(g_shown && ImGui::GetIO().WantTextInput) && !(e->key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) && dsound_in_world())
     {
-        /* Shift+Space: a jump (the game's /jump), while none of the game's windows has the keyboard.
-         * Its text and release go nowhere. */
+        /* Shift+Space: a jump (the game's /jump), while none of the game's windows has the keyboard
+         * (its own typing line included), the overlay shown or not. Its text and release go nowhere. */
         const char* focus = g_game_focus ? g_game_focus() : "";
         bool free = !focus[0] || !strncmp(focus, "logwin", 6) || !strncmp(focus, "fulllog", 7);
         if (free)
