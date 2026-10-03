@@ -181,13 +181,24 @@ def image(label, module, kind='unpacked'):
     return os.path.join(IMAGES, label, '%s.%s.dll' % (module.split('.')[0], kind))
 
 
+def unpacker_for(path):
+    """POL1 (2005-ish onward) or, for the 2003-era builds, ASProtect/ASPack (tools/aspack_unpack.py)."""
+    pe = pefile.PE(path, fast_load=True)
+    if any(s.Name.rstrip(b'\0') == b'POL1' for s in pe.sections):
+        return 'pol1_unpack.py'
+    import aspack_unpack
+    if pe.get_data(pe.OPTIONAL_HEADER.AddressOfEntryPoint, len(aspack_unpack.ASPACK_SIG)) == aspack_unpack.ASPACK_SIG:
+        return 'aspack_unpack.py'
+    raise SystemExit('%s: neither a POL1 nor an ASPack/ASProtect stub' % path)
+
+
 def unpack(game, label):
     d = os.path.join(IMAGES, label)
     os.makedirs(d, exist_ok=True)
     for m in MODULES:
         retail = image(label, m, 'retail')
         shutil.copyfile(os.path.join(game, m), retail)
-        subprocess.check_call([sys.executable, os.path.join(HERE, 'pol1_unpack.py'), retail, image(label, m)])
+        subprocess.check_call([sys.executable, os.path.join(HERE, unpacker_for(retail)), retail, image(label, m)])
     print('ok: %s' % d)
 
 
