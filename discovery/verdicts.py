@@ -16,6 +16,8 @@ BUILDS = {
     # FFXi.dll
     0x6a7297e3: '2026-08-22',
     0x6a995417: '2026-09-03',
+    0x3f5849fb: '2003-09-05',  # FFXiMain.dll
+    0x3f584a55: '2003-09-05',  # FFXi.dll
 }
 
 # NOT_CODE: false function starts (data records decoded as code, or aligned starts inside a real
@@ -55,6 +57,22 @@ VERDICTS = {
     # both builds.
     ('ffxi', '2026-08-22'): {'NOT_CODE': [0x100067d0], 'REDECODE': [0x100067c8], 'SWITCHES': {}},
     ('ffxi', '2026-09-03'): {'NOT_CODE': [0x100067d0], 'REDECODE': [0x100067c8], 'SWITCHES': {}},
+    # 2003-09-05: ASProtect-era, no earlier build to carry verdicts from; filled in from its own discovery pass.
+    ('ffximain', '2003-09-05'): {
+        'NOT_CODE': [0x10206480, 0x102064f0,  # 16-byte records {ptr, int, flags} in .text, as in 2026
+                     0x1026bc80],             # aligned start inside `mov edx,[eax+0xd4]` at 0x1026bc7e
+        'REDECODE': [0x1026bc67],             # the function that start was hiding
+        'SWITCHES': {
+            0x100243cf: 21,  # signed two-sided guard: ecx in -10..10 (as 0x10006412 in 2026)
+            0x101a718d: 9,   # jmp [edx*4+0x101a73a4], edx = byte [eax+0x101a73c8]; index bytes reach 8
+            0x1024ffa8: 4,   # jmp [ecx*4+0x1025035c], ecx = arg [esp+0x38]; entry 4 is 0x90909090 padding
+        },
+    },
+    ('ffxi', '2003-09-05'): {
+        'NOT_CODE': [],
+        'REDECODE': [],
+        'SWITCHES': {},
+    },
 }
 
 

@@ -96,6 +96,23 @@
         "strrchr": "0x103127c0",
         "strpbrk": "0x10322bb0"
       }
+    },
+    "2003-09-05": {
+      "FFXiMain.dll": {
+        "sha256": "8193cd38dcac2021744eaaa2f1940f10f4c9e92d37bf81c9586206c19055f7cb",
+        "meta": "FFXiMain.2003-09-05.meta.json"
+      },
+      "FFXi.dll": {
+        "sha256": "9f2e36b1fb75b17083c906483a45ec6e6e3b7fe05a55eddb6d8133e3de86f99b",
+        "meta": "FFXi.2003-09-05.meta.json"
+      },
+      "version": "30030905_0",
+      "packer": "asprotect",
+      "addresses": {
+        "present_site": "0x1002613c"
+      },
+      "hooks": {},
+      "crt": {}
     }
   }
 }
