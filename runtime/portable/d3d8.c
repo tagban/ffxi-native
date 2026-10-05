@@ -1049,6 +1049,9 @@ static void IDirect3DDevice8_Reset(Guest* g)
 
 /* Present(pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion): the frame is done */
 static void (*g_present_hook)(void);
+/* the host's hook at the frame's first BeginScene: after the game's own update, before it draws */
+static void (*g_scene_hook)(void);
+static int g_scene_begun;
 
 void d3d8_set_present_hook(void (*fn)(void)) { g_present_hook = fn; }
 
@@ -1078,6 +1081,7 @@ static void IDirect3DDevice8_Present(Guest* g)
     ui_present();
     if (g_present_hook)
         g_present_hook();
+    g_scene_begun = 0;
     Obj* bb = obj(g_dev.backbuffer);
     gfx_present(bb ? bb->gpu : NULL);
     RET(D3D_OK, 5);
@@ -1397,7 +1401,13 @@ static void IDirect3DDevice8_GetDepthStencilSurface(Guest* g)
     RET(D3D_OK, 2);
 }
 
-static void IDirect3DDevice8_BeginScene(Guest* g) { RET(D3D_OK, 1); }
+void d3d8_set_scene_hook(void (*fn)(void)) { g_scene_hook = fn; }
+static void IDirect3DDevice8_BeginScene(Guest* g)
+{
+    if (!g_scene_begun++ && g_scene_hook)
+        g_scene_hook();
+    RET(D3D_OK, 1);
+}
 static void IDirect3DDevice8_EndScene(Guest* g) { RET(D3D_OK, 1); }
 static void apply_targets(void);
 

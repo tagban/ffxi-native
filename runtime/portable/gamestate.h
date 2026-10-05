@@ -120,6 +120,8 @@ int gamestate_self(float* x, float* y, float* z, float* facing);
 /* The player's entity in the game's memory (its position at +0x04, +0x08 the height, more negative
  * higher, +0x0C), 0 when not yet found */
 uint32_t gamestate_self_entity(void);
+/* The player's id (0x00A's), 0 before it */
+uint32_t gamestate_self_id(void);
 /* Every packet the game sends (but its position reports) to the log for this long: learning them */
 void gamestate_log_out(double seconds);
 /* The game's table of entity pointers (meta/builds.json "entity_map"; 0 unknown): positions and

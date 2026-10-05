@@ -653,6 +653,11 @@ int gamestate_target(GameEntity* out, int* is_self)
     return 1;
 }
 
+uint32_t gamestate_self_id(void)
+{
+    return g_self;
+}
+
 uint32_t gamestate_self_entity(void)
 {
     return g_me.known ? entity_at(g_self_index, g_self) : 0;

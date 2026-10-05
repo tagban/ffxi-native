@@ -303,6 +303,49 @@ extern GuestFn rt_hook_packet_in;
 #define PACKET_HOOK ((GuestFn*)NULL)
 #endif
 
+/* The server moving the player (0x05B, LandSandBoat's GP_SERV_COMMAND_WPOS: x, height, z at 0x04,
+ * 0x08, 0x0C, the id at 0x10, its mode at 0x16, 0 NORMAL "update and reset the camera"), as a jump
+ * does: logged, the mode rewritten when //xi wposmode says (a small move only, never a zoning), and
+ * the glide (below) told. Before the game reads the packet. */
+static int g_wposmode = -1;
+static struct
+{
+    int pending;
+    float to[3];
+} g_warp;
+
+static void self_warps(uint8_t* buf, uint32_t len)
+{
+    uint32_t self = gamestate_self_id();
+    if (!self)
+        return;
+    for (uint32_t at = 28; at + 4 <= len;)
+    {
+        uint32_t id = (buf[at] | buf[at + 1] << 8) & 0x1FF, size = 2u * (buf[at + 1] & 0xFEu);
+        if (size < 4 || at + size > len)
+            break;
+        uint8_t* p = buf + at;
+        uint32_t who;
+        memcpy(&who, p + 0x10, 4);
+        if (id == 0x05B && size >= 0x18 && who == self)
+        {
+            float x, y, z;
+            memcpy(&x, p + 0x04, 4), memcpy(&y, p + 0x08, 4), memcpy(&z, p + 0x0C, 4);
+            float cx, cy, cz, f;
+            int near = gamestate_self(&cx, &cy, &cz, &f) && fabsf(x - cx) + fabsf(z - cz) + fabsf(y - cy) < 15.0f;
+            static int told;
+            if (told++ < 60)
+                rt_log("[recomp] warp: to %.2f %.2f %.2f mode %u (from %.2f %.2f %.2f)%s\n", x, y, z, p[0x16], cx, cy, cz,
+                    near && g_wposmode >= 0 ? " mode rewritten" : "");
+            if (near && g_wposmode >= 0)
+                p[0x16] = (uint8_t)g_wposmode;
+            if (near)
+                g_warp.pending = 1, g_warp.to[0] = x, g_warp.to[1] = y, g_warp.to[2] = z;
+        }
+        at += size;
+    }
+}
+
 static void packet_in(Guest* g)
 {
     uint32_t len = g->eax, buf = rd32(g->esp + 4);
@@ -317,7 +360,10 @@ static void packet_in(Guest* g)
         rt_log("[recomp] packets: the hook ran: length %d, buffer %08x: %s\n", (int)len, buf, hex);
     }
     if ((int32_t)len > 28 && len < 0x10000 && buf)
+    {
         gamestate_feed(GUEST_PTR(buf), len);
+        self_warps(GUEST_PTR(buf), len);
+    }
 }
 
 #if defined(FFXI_HOOK_PACKET_OUT)
@@ -874,6 +920,51 @@ static void placed_again(uint32_t win)
 
 static void lift_tick(void); /* //xi lift (below) */
 
+/* //xi glide <mask>: a small move by the server (a jump) drawn over 0.2 seconds, not at once: at the
+ * frame's first BeginScene (after the game's own update) the player's position is written between
+ * where they were drawn last and where the server put them. Which of the entity's three copies of
+ * the position (+0x04, +0x24, +0x44: mask 1, 2, 4) the drawing takes is what this learns. */
+static int g_glide_mask;
+static void scene_tick(void)
+{
+    static float last[3], from[3], to[3];
+    static int have_last, active, frames;
+    static uint64_t t0;
+    uint32_t p = gamestate_self_entity();
+    if (!p || !gwin_is_committed(p + 0x50))
+        return;
+    float* pos[3] = { (float*)GUEST_PTR(p + 0x04), (float*)GUEST_PTR(p + 0x24), (float*)GUEST_PTR(p + 0x44) };
+    if (g_warp.pending)
+    {
+        g_warp.pending = 0;
+        if (g_glide_mask && have_last)
+        {
+            memcpy(from, last, sizeof from), memcpy(to, g_warp.to, sizeof to);
+            active = 1, frames = 0, t0 = rt_monotonic_ns();
+        }
+    }
+    if (active)
+    {
+        float t = (float)(rt_monotonic_ns() - t0) / 0.2e9f;
+        if (t >= 1.0f)
+            active = 0;
+        else
+        {
+            float e = t * t * (3.0f - 2.0f * t); /* eased */
+            float w[3] = { from[0] + (to[0] - from[0]) * e, from[1] + (to[1] - from[1]) * e, from[2] + (to[2] - from[2]) * e };
+            if (frames++ < 20)
+                rt_log("[recomp] glide: frame %d t %.2f, the game's %.2f %.2f %.2f | %.2f | %.2f, written %.2f %.2f %.2f\n", frames, t,
+                    pos[0][0], pos[0][1], pos[0][2], pos[1][1], pos[2][1], w[0], w[1], w[2]);
+            for (int k = 0; k < 3; ++k)
+                if (g_glide_mask >> k & 1)
+                    memcpy(pos[k], w, sizeof w);
+            memcpy(last, w, sizeof last), have_last = 1;
+            return;
+        }
+    }
+    memcpy(last, pos[0], sizeof last), have_last = 1;
+}
+
 /* each frame (the overlay's): which of the game's windows the overlay stands in for now */
 static void hide_game_windows(int log, int party, int target)
 {
@@ -1091,7 +1182,12 @@ static int xi_line(const char* t)
         rt_log("[recomp] out: logging what the game sends for %.0f seconds\n", v);
         return 1;
     }
-    rt_log("[recomp] //xi: lift <yalms> | pos | snap | diff | out <seconds>\n");
+    int m;
+    if (sscanf(t, "glide %d", &m) == 1)
+        return g_glide_mask = m & 7, rt_log("[recomp] glide: mask %d\n", g_glide_mask), 1;
+    if (sscanf(t, "wposmode %d", &m) == 1)
+        return g_wposmode = m, rt_log("[recomp] wposmode: %d (-1: as the server sends it)\n", m), 1;
+    rt_log("[recomp] //xi: lift <yalms> | pos | snap | diff | out <seconds> | glide <mask 1-7> | wposmode <n>\n");
     return 1;
 }
 
@@ -1919,6 +2015,7 @@ int main(int argc, char** argv)
     polcore_init();
     d3d8_setup();
     d3d8_set_present_hook(present_hook);
+    d3d8_set_scene_hook(scene_tick);
     user32_set_close_handler(close_asked);
     setup_nameplates();
     setup_packets();
