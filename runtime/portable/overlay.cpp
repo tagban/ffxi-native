@@ -163,7 +163,7 @@ static struct
     int chat_quiet_lines = 4;
     float chat_quiet_secs = 12.0f;
     bool death_screen = true; /* knocked out: the screen grey, the time, the buttons */
-    bool space_jumps = true;  /* Shift+Space: /jump (Space alone opens the chat box) */
+    bool space_jumps = true;  /* J: /jump (the setting's old name kept, for overlay.ini) */
 } g_set;
 static char g_ini[1024];
 static struct
@@ -589,8 +589,6 @@ static bool typing_is_ours(const SDL_KeyboardEvent& k)
     bool enter = k.key == SDLK_RETURN || k.key == SDLK_KP_ENTER;
     if (k.key != SDLK_SPACE && k.key != SDLK_SLASH && !bang && !enter)
         return false;
-    if (k.key == SDLK_SPACE && (k.mod & SDL_KMOD_SHIFT) && g_set.space_jumps)
-        return false; /* Shift+Space: the jump */
     const char* focus = g_game_focus ? g_game_focus() : "";
     /* knocked out, the game's death menu has the keyboard; the screen's buttons stand in for it */
     bool ko_menu = g_ko.on && !strncmp(focus, "dead", 4);
@@ -639,11 +637,12 @@ extern "C" int overlay_event(const SDL_Event* e)
         g_swallow_text = false; /* the Space or / that opened the box */
         return 1;
     }
-    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_SPACE && (e->key.mod & SDL_KMOD_SHIFT) && g_set.space_jumps &&
-        !(g_shown && ImGui::GetIO().WantTextInput) && !(e->key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) && dsound_in_world())
+    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_J && g_set.space_jumps && !(g_shown && ImGui::GetIO().WantTextInput) &&
+        !(e->key.mod & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) && dsound_in_world())
     {
-        /* Shift+Space: a jump (the game's /jump), while none of the game's windows has the keyboard
-         * (its own typing line included), the overlay shown or not. Its text and release go nowhere. */
+        /* J: a jump (the game's /jump), while none of the game's windows has the keyboard (its own
+         * typing line included), the overlay shown or not. The game never sees the key: its text and
+         * release go nowhere. (Shift+Space first, a player's suggestion; Shift is the game's too.) */
         const char* focus = g_game_focus ? g_game_focus() : "";
         bool free = !focus[0] || !strncmp(focus, "logwin", 6) || !strncmp(focus, "fulllog", 7);
         if (free)
@@ -864,7 +863,7 @@ static void overlay_window(void)
             ImGui::SetNextItemWidth(-60);
             dirty |= ImGui::SliderFloat("After##quiet", &g_set.chat_quiet_secs, 3, 60, "%.0f seconds");
         }
-        dirty |= ImGui::Checkbox("Shift+Space jumps (/jump)", &g_set.space_jumps);
+        dirty |= ImGui::Checkbox("J jumps (/jump)", &g_set.space_jumps);
         ImGui::Separator();
         ImGui::TextDisabled("Knocked out");
         dirty |= ImGui::Checkbox("The screen goes grey, with the time and Return to Home Point", &g_set.death_screen);
