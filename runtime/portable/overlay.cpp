@@ -654,6 +654,9 @@ extern "C" int overlay_event(const SDL_Event* e)
         g_swallow_text = false; /* the Space or / that opened the box */
         return 1;
     }
+    if (e->type == SDL_EVENT_TEXT_INPUT && (g_fly_up || g_fly_down) &&
+        (!strcmp(e->text.text, " ") || !strcmp(e->text.text, "x") || !strcmp(e->text.text, "X")))
+        return 1; /* a held Space or X repeats its text: the game would open its typing line */
     if ((e->type == SDL_EVENT_KEY_DOWN || e->type == SDL_EVENT_KEY_UP) && (e->key.key == SDLK_SPACE || e->key.key == SDLK_X) &&
         !(e->key.mod & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)))
     {

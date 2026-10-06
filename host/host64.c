@@ -935,7 +935,7 @@ static int g_glide_mask;
  * written with the entity's copies; whether each kept what was written shows which one the game reads */
 static uint32_t g_fly_more[32];
 static float g_fly_wrote[32];
-static int g_fly_nmore;
+static int g_fly_nmore, g_fly_probe = -1;
 
 static void fly_tick(void)
 {
@@ -990,6 +990,23 @@ static void fly_tick(void)
             ++said, rt_log("[recomp] fly: %08x did not keep %.3f (now %.3f)\n", g_fly_more[i], g_fly_wrote[i], *q);
         g_fly_wrote[i] = 0.0f / 0.0f;
     }
+    /* probing (after //xi findall): each place alone for 20 frames of rising or sinking; whether the
+     * height then stays where it was written tells which place the game takes it from */
+    static float expect = 0.0f / 0.0f;
+    static int frames, kept, back;
+    if (vy == 0.0f || g_fly_probe < 0)
+        expect = 0.0f / 0.0f;
+    else if (expect == expect)
+    {
+        (pos[1] == expect ? kept : back)++;
+        if (++frames >= 20)
+        {
+            rt_log("[recomp] fly probe: only %08x written: the height kept %d frames, put back %d\n", g_fly_more[g_fly_probe], kept, back);
+            frames = kept = back = 0;
+            if (++g_fly_probe >= g_fly_nmore)
+                g_fly_probe = -1, rt_log("[recomp] fly probe: done; all of them are written now\n");
+        }
+    }
     if (vy != 0.0f)
     {
         pos[1] += vy * dt;
@@ -998,8 +1015,10 @@ static void fly_tick(void)
         float* p3 = (float*)GUEST_PTR(p + 0x44);
         p2[1] = p3[1] = pos[1];
         for (int i = 0; i < g_fly_nmore; ++i)
-            if (gwin_is_committed(g_fly_more[i]))
+            if ((g_fly_probe < 0 || i == g_fly_probe) && gwin_is_committed(g_fly_more[i]))
                 *(float*)GUEST_PTR(g_fly_more[i]) = g_fly_wrote[i] = pos[1];
+        if (g_fly_probe >= 0)
+            expect = pos[1];
     }
     px = pos[0], pz = pos[2], have = 1;
 }
@@ -1305,7 +1324,9 @@ static int xi_line(const char* t)
                     rt_log("[recomp] findall: height alone at %08x\n", a);
             }
         }
-        rt_log("[recomp] findall: %d positions (written while flying), %d heights alone; entity %08x\n", g_fly_nmore, lone, p);
+        g_fly_probe = g_fly_nmore ? 0 : -1;
+        rt_log("[recomp] findall: %d positions (each tried alone while flying, then all written), %d heights alone; entity %08x\n",
+            g_fly_nmore, lone, p);
         return 1;
     }
     if (sscanf(t, "glide %d", &m) == 1)
