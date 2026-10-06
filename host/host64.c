@@ -956,6 +956,7 @@ static void fly_tick(void)
         float dx = pos[0] - px, dz = pos[2] - pz, speed = sqrtf(dx * dx + dz * dz) / dt;
         float f[3];
         d3d8_camera_forward(f);
+        f[0] = -f[0], f[1] = -f[1], f[2] = -f[2]; /* the game's view is right-handed: it looks down -z */
         float flat = sqrtf(f[0] * f[0] + f[2] * f[2]);
         if (speed > 1.0f && flat > 0.05f)
         {
@@ -963,8 +964,10 @@ static void fly_tick(void)
             slope = slope < -2.0f ? -2.0f : slope > 2.0f ? 2.0f : slope;
             vy += speed * slope;
         }
-        if (told < 40 && (vy != 0.0f || (told < 5)))
+        static uint64_t next;
+        if (told < 400 && now >= next && (vy != 0.0f || told < 5))
         {
+            next = now + 250000000ull; /* four a second */
             ++told;
             rt_log("[recomp] fly: height %.2f, speed %.1f, camera %.2f %.2f %.2f, rising %.2f a second%s%s\n", pos[1], speed, f[0],
                 f[1], f[2], -vy, up ? " (Space)" : "", down ? " (X)" : "");
@@ -1240,11 +1243,24 @@ static int xi_line(const char* t)
         return 1;
     }
     int m;
+    if (sscanf(t, "find %f", &v) == 1)
+    {
+        /* where in the player's entity (its first 0x800 bytes) a value is kept: a height, say */
+        uint32_t p = gamestate_self_entity();
+        if (!p || !gwin_is_committed(p + 0x7FF))
+            return rt_log("[recomp] find: no entity\n"), 1;
+        int n = 0;
+        for (uint32_t o = 0; o + 4 <= 0x800; o += 4)
+            if (fabsf(f32_at(p + o) - v) < 0.05f && n++ < 40)
+                rt_log("[recomp] find: %.3f at +%03x\n", f32_at(p + o), o);
+        rt_log("[recomp] find: %d places near %.3f in entity %08x\n", n, v, p);
+        return 1;
+    }
     if (sscanf(t, "glide %d", &m) == 1)
         return g_glide_mask = m & 7, rt_log("[recomp] glide: mask %d\n", g_glide_mask), 1;
     if (sscanf(t, "wposmode %d", &m) == 1)
         return g_wposmode = m, rt_log("[recomp] wposmode: %d (-1: as the server sends it)\n", m), 1;
-    rt_log("[recomp] //xi: lift <yalms> | pos | snap | diff | out <seconds> | glide <mask 1-7> | wposmode <n>\n");
+    rt_log("[recomp] //xi: lift <yalms> | pos | snap | diff | out <seconds> | glide <mask 1-7> | wposmode <n> | find <value>\n");
     return 1;
 }
 

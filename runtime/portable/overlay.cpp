@@ -662,6 +662,19 @@ extern "C" int overlay_event(const SDL_Event* e)
         bool down = e->type == SDL_EVENT_KEY_DOWN;
         if (!down)
             (e->key.key == SDLK_SPACE ? g_fly_up : g_fly_down) = false;
+        {
+            /* while learning it: why a press was (or was not) taken for flying */
+            static int told;
+            if (down && !e->key.repeat && told < 30 && (gamestate_flying() || told < 3))
+            {
+                ++told;
+                const char* f = g_game_focus ? g_game_focus() : "";
+                extern void rt_log(const char* fmt, ...);
+                rt_log("[recomp] fly key %s: flying %d, in the world %d, typing %d, the game's keyboard \"%.8s\" -> %s\n",
+                    e->key.key == SDLK_SPACE ? "Space" : "X", gamestate_flying(), dsound_in_world(),
+                    g_shown && ImGui::GetIO().WantTextInput, f, fly_keys_free() ? "flying" : "passed on");
+            }
+        }
         if (fly_keys_free())
         {
             if (down)
