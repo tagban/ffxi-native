@@ -931,6 +931,12 @@ static int g_glide_mask;
  * player's height while flying, so it is written here, each frame before the game draws, and the
  * client's own position reports take it to the server (everyone sees them climb). Keys from the
  * overlay (overlay_fly_keys: not while typing, nor while one of the game's windows has the keyboard). */
+/* while learning it: other places in the game's memory that hold the player's position (//xi findall),
+ * written with the entity's copies; whether each kept what was written shows which one the game reads */
+static uint32_t g_fly_more[32];
+static float g_fly_wrote[32];
+static int g_fly_nmore;
+
 static void fly_tick(void)
 {
     static uint64_t last;
@@ -961,6 +967,9 @@ static void fly_tick(void)
         if (speed > 1.0f && flat > 0.05f)
         {
             float slope = f[1] / flat; /* tan of the camera's pitch; looking up is less (negative) */
+            /* the camera's resting look is a little down (0.17 to 0.3): level flight there */
+            const float LEVEL = 0.35f;
+            slope = slope > LEVEL ? slope - LEVEL : slope < -LEVEL ? slope + LEVEL : 0.0f;
             slope = slope < -2.0f ? -2.0f : slope > 2.0f ? 2.0f : slope;
             vy += speed * slope;
         }
@@ -973,6 +982,14 @@ static void fly_tick(void)
                 f[1], f[2], -vy, up ? " (Space)" : "", down ? " (X)" : "");
         }
     }
+    for (int i = 0; i < g_fly_nmore; ++i)
+    {
+        static int said;
+        float* q = (float*)GUEST_PTR(g_fly_more[i]);
+        if (g_fly_wrote[i] == g_fly_wrote[i] && *q != g_fly_wrote[i] && said < 40)
+            ++said, rt_log("[recomp] fly: %08x did not keep %.3f (now %.3f)\n", g_fly_more[i], g_fly_wrote[i], *q);
+        g_fly_wrote[i] = 0.0f / 0.0f;
+    }
     if (vy != 0.0f)
     {
         pos[1] += vy * dt;
@@ -980,6 +997,9 @@ static void fly_tick(void)
         float* p2 = (float*)GUEST_PTR(p + 0x24);
         float* p3 = (float*)GUEST_PTR(p + 0x44);
         p2[1] = p3[1] = pos[1];
+        for (int i = 0; i < g_fly_nmore; ++i)
+            if (gwin_is_committed(g_fly_more[i]))
+                *(float*)GUEST_PTR(g_fly_more[i]) = g_fly_wrote[i] = pos[1];
     }
     px = pos[0], pz = pos[2], have = 1;
 }
@@ -1256,11 +1276,43 @@ static int xi_line(const char* t)
         rt_log("[recomp] find: %d places near %.3f in entity %08x\n", n, v, p);
         return 1;
     }
+    if (!strcmp(t, "findall"))
+    {
+        /* the player's height everywhere in the game's memory, not only its entity: the same float, with
+         * the same x and z beside it (a position) or alone; positions are written while flying */
+        uint32_t p = gamestate_self_entity();
+        if (!p || !gwin_is_committed(p + 0x7FF))
+            return rt_log("[recomp] findall: no entity\n"), 1;
+        uint32_t ybits = rd32(p + 0x08);
+        float x = f32_at(p + 0x04), z = f32_at(p + 0x0C);
+        int lone = 0;
+        g_fly_nmore = 0;
+        for (uint32_t pg = 0x10000u; pg && pg < 0xFFFF0000u; pg += 0x1000u)
+        {
+            if (!gwin_is_committed(pg))
+                continue;
+            for (uint32_t a = pg; a < pg + 0x1000u; a += 4)
+            {
+                if (rd32(a) != ybits || (a >= p && a < p + 0x800))
+                    continue;
+                bool xyz = a - pg >= 4 && a - pg + 8 <= 0x1000u && fabsf(f32_at(a - 4) - x) < 1.0f && fabsf(f32_at(a + 4) - z) < 1.0f;
+                if (xyz && g_fly_nmore < 32)
+                {
+                    g_fly_wrote[g_fly_nmore] = 0.0f / 0.0f, g_fly_more[g_fly_nmore++] = a;
+                    rt_log("[recomp] findall: position at %08x (%.2f %.2f %.2f)\n", a, f32_at(a - 4), f32_at(a), f32_at(a + 4));
+                }
+                else if (!xyz && lone++ < 40)
+                    rt_log("[recomp] findall: height alone at %08x\n", a);
+            }
+        }
+        rt_log("[recomp] findall: %d positions (written while flying), %d heights alone; entity %08x\n", g_fly_nmore, lone, p);
+        return 1;
+    }
     if (sscanf(t, "glide %d", &m) == 1)
         return g_glide_mask = m & 7, rt_log("[recomp] glide: mask %d\n", g_glide_mask), 1;
     if (sscanf(t, "wposmode %d", &m) == 1)
         return g_wposmode = m, rt_log("[recomp] wposmode: %d (-1: as the server sends it)\n", m), 1;
-    rt_log("[recomp] //xi: lift <yalms> | pos | snap | diff | out <seconds> | glide <mask 1-7> | wposmode <n> | find <value>\n");
+    rt_log("[recomp] //xi: lift <yalms> | pos | snap | diff | out <seconds> | glide <mask 1-7> | wposmode <n> | find <value> | findall\n");
     return 1;
 }
 
