@@ -122,6 +122,8 @@ int gamestate_self(float* x, float* y, float* z, float* facing);
 uint32_t gamestate_self_entity(void);
 /* The player's id (0x00A's), 0 before it */
 uint32_t gamestate_self_id(void);
+/* Whether the server has the player flying (its wallhack flag): the client keeps their height */
+int gamestate_flying(void);
 /* Every packet the game sends (but its position reports) to the log for this long: learning them */
 void gamestate_log_out(double seconds);
 /* The game's table of entity pointers (meta/builds.json "entity_map"; 0 unknown): positions and

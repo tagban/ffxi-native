@@ -1402,6 +1402,14 @@ static void IDirect3DDevice8_GetDepthStencilSurface(Guest* g)
 }
 
 void d3d8_set_scene_hook(void (*fn)(void)) { g_scene_hook = fn; }
+
+/* where the game's camera looks, in the world: the view transform's third column (D3D's row-major
+ * world-to-view, +z ahead) */
+void d3d8_camera_forward(float f[3])
+{
+    const float* V = g_dev.cur.xf[2];
+    f[0] = V[2], f[1] = V[6], f[2] = V[10];
+}
 static void IDirect3DDevice8_BeginScene(Guest* g)
 {
     if (!g_scene_begun++ && g_scene_hook)

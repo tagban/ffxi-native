@@ -17,6 +17,7 @@ void overlay_set_game_window_closer(int (*close)(const char* name8)) { (void)clo
 void overlay_set_settings_opener(void (*open)(void)) { (void)open; }
 void overlay_set_log_placer(void (*place)(float x0, float y0, float x1, float y1)) { (void)place; }
 void overlay_set_focus_cursor(int (*cursor)(void)) { (void)cursor; }
+void overlay_fly_keys(int* up, int* down) { *up = *down = 0; }
 void overlay_set_death_menu_hider(void (*hide)(int on)) { (void)hide; }
 void overlay_set_focus_rect(int (*rect)(float* x, float* y, float* w, float* h), void (*place)(float x, float y)) { (void)rect, (void)place; }
 int overlay_nameplates_wanted(void) { return 0; }

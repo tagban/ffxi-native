@@ -59,6 +59,9 @@ void overlay_set_log_placer(void (*place)(float x0, float y0, float x1, float y1
 /* and moves it (its top left, fractions of the screen; x < 0 lets it go) */
 void overlay_set_focus_rect(int (*rect)(float* x, float* y, float* w, float* h), void (*place)(float x, float y)); /* fractions of the screen */
 
+/* Flying (the server's wallhack flag): whether Space (up) and X (down) are held for the climb and
+ * sink, when the keyboard is free for them (not typing, none of the game's windows has it). */
+void overlay_fly_keys(int* up, int* down);
 /* host64: the cursor in the game's window with the keyboard (its choice, 1 the first; -1 none), for
  * the knocked-out screen's Return to Home Point, which answers the game's Yes/No */
 void overlay_set_focus_cursor(int (*cursor)(void));

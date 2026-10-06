@@ -389,10 +389,19 @@ int gamestate_dead(double* home_secs)
     return g_death.dead;
 }
 
+/* flying: the server's wallhack flag on the player (0x037's flags1 at 0x2C, bit 12: LandSandBoat's
+ * Hackmove, which !wallhack and MogHouse's !fly set): the client keeps the player's height then */
+static int g_flying;
+int gamestate_flying(void)
+{
+    return g_flying;
+}
+
 static void self_status(const uint8_t* p, uint32_t size)
 {
     if (size < 0x3C)
         return;
+    g_flying = (int)(u32(p + 0x2C) >> 12 & 1);
     self_death(p[0x30], size >= 0x40 ? p + 0x3C : NULL);
     uint32_t f0 = u32(p + 0x28), f1 = u32(p + 0x2C), f3 = u32(p + 0x38);
     g_self_marks.gm = (uint8_t)(f0 >> 29 & 7);

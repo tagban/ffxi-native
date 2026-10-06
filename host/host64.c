@@ -925,8 +925,65 @@ static void lift_tick(void); /* //xi lift (below) */
  * where they were drawn last and where the server put them. Which of the entity's three copies of
  * the position (+0x04, +0x24, +0x44: mask 1, 2, 4) the drawing takes is what this learns. */
 static int g_glide_mask;
+
+/* Flying (the server's wallhack flag on: MogHouse's !fly), as swimming: Space held rises, X held sinks,
+ * and moving while the camera looks up or down climbs or dives along it. The client keeps the
+ * player's height while flying, so it is written here, each frame before the game draws, and the
+ * client's own position reports take it to the server (everyone sees them climb). Keys from the
+ * overlay (overlay_fly_keys: not while typing, nor while one of the game's windows has the keyboard). */
+static void fly_tick(void)
+{
+    static uint64_t last;
+    static float px, pz;
+    static int told, have;
+    uint64_t now = rt_monotonic_ns();
+    float dt = last ? (float)(now - last) / 1e9f : 0.0f;
+    last = now;
+    uint32_t p = gamestate_self_entity();
+    if (!gamestate_flying() || !p || !gwin_is_committed(p + 0x50) || dt <= 0.0f || dt > 0.25f)
+    {
+        have = 0;
+        return;
+    }
+    float* pos = (float*)GUEST_PTR(p + 0x04);
+    int up = 0, down = 0;
+    overlay_fly_keys(&up, &down);
+    const float RISE = 6.0f; /* yalms a second, held */
+    float vy = (up ? -RISE : 0.0f) + (down ? RISE : 0.0f);
+    /* moving along the ground: climb or dive the way the camera looks */
+    if (have)
+    {
+        float dx = pos[0] - px, dz = pos[2] - pz, speed = sqrtf(dx * dx + dz * dz) / dt;
+        float f[3];
+        d3d8_camera_forward(f);
+        float flat = sqrtf(f[0] * f[0] + f[2] * f[2]);
+        if (speed > 1.0f && flat > 0.05f)
+        {
+            float slope = f[1] / flat; /* tan of the camera's pitch; looking up is less (negative) */
+            slope = slope < -2.0f ? -2.0f : slope > 2.0f ? 2.0f : slope;
+            vy += speed * slope;
+        }
+        if (told < 40 && (vy != 0.0f || (told < 5)))
+        {
+            ++told;
+            rt_log("[recomp] fly: height %.2f, speed %.1f, camera %.2f %.2f %.2f, rising %.2f a second%s%s\n", pos[1], speed, f[0],
+                f[1], f[2], -vy, up ? " (Space)" : "", down ? " (X)" : "");
+        }
+    }
+    if (vy != 0.0f)
+    {
+        pos[1] += vy * dt;
+        /* the entity's other copies of the position follow (+0x24, +0x44) */
+        float* p2 = (float*)GUEST_PTR(p + 0x24);
+        float* p3 = (float*)GUEST_PTR(p + 0x44);
+        p2[1] = p3[1] = pos[1];
+    }
+    px = pos[0], pz = pos[2], have = 1;
+}
+
 static void scene_tick(void)
 {
+    fly_tick();
     static float last[3], from[3], to[3];
     static int have_last, active, frames;
     static uint64_t t0;

@@ -11,6 +11,8 @@ void d3d8_setup(void);
 void d3d8_set_present_hook(void (*fn)(void));
 /* Called at each frame's first BeginScene: after the game's own update, before anything is drawn. */
 void d3d8_set_scene_hook(void (*fn)(void));
+/* Where the game's camera looks, in the world (a unit vector; height counts down: looking up is -y). */
+void d3d8_camera_forward(float f[3]);
 /* The size the frame is shown at: the device window's client area, else the back buffer's; 0x0
  * before the device exists. */
 void d3d8_screen_size(uint32_t* w, uint32_t* h);

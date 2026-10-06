@@ -603,6 +603,23 @@ extern "C" void overlay_set_line_runner(int (*run)(const char* line))
     g_run_line = run;
 }
 
+/* flying (gamestate_flying): Space and X held, for the host's climb and sink; never while typing, nor
+ * while one of the game's windows has the keyboard */
+static bool g_fly_up, g_fly_down;
+static bool fly_keys_free(void)
+{
+    if (!gamestate_flying() || !dsound_in_world() || (g_shown && ImGui::GetIO().WantTextInput))
+        return false;
+    const char* focus = g_game_focus ? g_game_focus() : "";
+    return !focus[0] || !strncmp(focus, "logwin", 6) || !strncmp(focus, "fulllog", 7);
+}
+
+extern "C" void overlay_fly_keys(int* up, int* down)
+{
+    bool free = fly_keys_free();
+    *up = free && g_fly_up, *down = free && g_fly_down;
+}
+
 extern "C" int overlay_shown(void)
 {
     return g_ready && g_shown;
@@ -636,6 +653,23 @@ extern "C" int overlay_event(const SDL_Event* e)
     {
         g_swallow_text = false; /* the Space or / that opened the box */
         return 1;
+    }
+    if ((e->type == SDL_EVENT_KEY_DOWN || e->type == SDL_EVENT_KEY_UP) && (e->key.key == SDLK_SPACE || e->key.key == SDLK_X) &&
+        !(e->key.mod & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)))
+    {
+        /* flying: Space rises, X sinks, held; the game never sees them (Space would open its typing
+         * line). A release always lets go, wherever it goes. */
+        bool down = e->type == SDL_EVENT_KEY_DOWN;
+        if (!down)
+            (e->key.key == SDLK_SPACE ? g_fly_up : g_fly_down) = false;
+        if (fly_keys_free())
+        {
+            if (down)
+                (e->key.key == SDLK_SPACE ? g_fly_up : g_fly_down) = true;
+            if (down && !e->key.repeat)
+                g_swallow_text = true;
+            return 1;
+        }
     }
     if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_J && g_set.space_jumps && !(g_shown && ImGui::GetIO().WantTextInput) &&
         !(e->key.mod & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) && dsound_in_world())
