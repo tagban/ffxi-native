@@ -931,11 +931,41 @@ static int g_glide_mask;
  * player's height while flying, so it is written here, each frame before the game draws, and the
  * client's own position reports take it to the server (everyone sees them climb). Keys from the
  * overlay (overlay_fly_keys: not while typing, nor while one of the game's windows has the keyboard). */
-/* while learning it: other places in the game's memory that hold the player's position (//xi findall),
- * written with the entity's copies; whether each kept what was written shows which one the game reads */
-static uint32_t g_fly_more[32];
-static float g_fly_wrote[32];
-static int g_fly_nmore, g_fly_probe = -1;
+/* Where the game holds a flier's height. With the wallhack flag on, the game puts the player back each
+ * frame at the height kept in its own object for the player's model, a few kilobytes from the entity
+ * (the entity's copies follow it; found by //xi findall's probe, 2026-10-06). It is found again by its
+ * position (x, height, z, side by side, the same as the entity's) in the memory around the entity,
+ * checked before each write, looked for again when it no longer holds the position (a new costume is
+ * a new model object), and forgotten on landing. */
+#define FLY_NEAR 0x20000u
+static uint32_t g_fly_held[8];
+static int g_fly_nheld;
+
+static int fly_holds(uint32_t a, const float* pos)
+{
+    if (!gwin_is_committed(a - 4) || !gwin_is_committed(a + 4))
+        return 0;
+    const float* q = (const float*)GUEST_PTR(a - 4);
+    return fabsf(q[0] - pos[0]) < 0.05f && fabsf(q[2] - pos[2]) < 0.05f && fabsf(q[1] - pos[1]) < 0.05f;
+}
+
+static void fly_find_held(uint32_t p, const float* pos)
+{
+    g_fly_nheld = 0;
+    uint32_t lo = p > FLY_NEAR + 0x10000u ? (p - FLY_NEAR) & ~0xFFFu : 0x10000u, hi = (p + FLY_NEAR) & ~0xFFFu;
+    for (uint32_t pg = lo; pg < hi && g_fly_nheld < 8; pg += 0x1000u)
+    {
+        if (!gwin_is_committed(pg))
+            continue;
+        for (uint32_t a = pg + 4; a + 8 <= pg + 0x1000u && g_fly_nheld < 8; a += 4)
+            if ((a < p || a >= p + 0x800) && fly_holds(a, pos))
+                g_fly_held[g_fly_nheld++] = a;
+    }
+    static int told;
+    if (told++ < 20)
+        rt_log("[recomp] fly: the height held in %d place%s near the entity %08x%s%08x\n", g_fly_nheld, g_fly_nheld == 1 ? "" : "s", p,
+            g_fly_nheld ? ", first " : "", g_fly_nheld ? g_fly_held[0] : 0u);
+}
 
 static void fly_tick(void)
 {
@@ -946,6 +976,8 @@ static void fly_tick(void)
     float dt = last ? (float)(now - last) / 1e9f : 0.0f;
     last = now;
     uint32_t p = gamestate_self_entity();
+    if (!gamestate_flying() || !p || !gwin_is_committed(p + 0x50))
+        g_fly_nheld = 0;
     if (!gamestate_flying() || !p || !gwin_is_committed(p + 0x50) || dt <= 0.0f || dt > 0.25f)
     {
         have = 0;
@@ -982,46 +1014,22 @@ static void fly_tick(void)
                 f[1], f[2], -vy, up ? " (Space)" : "", down ? " (X)" : "");
         }
     }
-    for (int i = 0; i < g_fly_nmore; ++i)
-    {
-        static int said;
-        float* q = (float*)GUEST_PTR(g_fly_more[i]);
-        if (g_fly_wrote[i] == g_fly_wrote[i] && *q != g_fly_wrote[i] && said < 40)
-            ++said, rt_log("[recomp] fly: %08x did not keep %.3f (now %.3f)\n", g_fly_more[i], g_fly_wrote[i], *q);
-        g_fly_wrote[i] = 0.0f / 0.0f;
-    }
-    /* probing (after //xi findall): each place alone for 20 frames of rising or sinking; whether the
-     * height then stays where it was written tells which place the game takes it from */
-    static float expect = 0.0f / 0.0f;
-    static int frames, kept, back;
-    if (vy == 0.0f || g_fly_probe < 0)
-        expect = 0.0f / 0.0f;
-    else if (expect == expect)
-    {
-        if (pos[1] == expect)
-            ++kept;
-        else
-            ++back;
-        if (++frames >= 20)
-        {
-            rt_log("[recomp] fly probe: only %08x written: the height kept %d frames, put back %d\n", g_fly_more[g_fly_probe], kept, back);
-            frames = kept = back = 0;
-            if (++g_fly_probe >= g_fly_nmore)
-                g_fly_probe = -1, rt_log("[recomp] fly probe: done; all of them are written now\n");
-        }
-    }
     if (vy != 0.0f)
     {
+        /* the game's own: each still holding the position (as it is before this move), or all looked
+         * for again */
+        int ok = g_fly_nheld > 0;
+        for (int i = 0; i < g_fly_nheld; ++i)
+            ok = ok && fly_holds(g_fly_held[i], pos);
+        if (!ok)
+            fly_find_held(p, pos);
         pos[1] += vy * dt;
         /* the entity's other copies of the position follow (+0x24, +0x44) */
         float* p2 = (float*)GUEST_PTR(p + 0x24);
         float* p3 = (float*)GUEST_PTR(p + 0x44);
         p2[1] = p3[1] = pos[1];
-        for (int i = 0; i < g_fly_nmore; ++i)
-            if ((g_fly_probe < 0 || i == g_fly_probe) && gwin_is_committed(g_fly_more[i]))
-                *(float*)GUEST_PTR(g_fly_more[i]) = g_fly_wrote[i] = pos[1];
-        if (g_fly_probe >= 0)
-            expect = pos[1];
+        for (int i = 0; i < g_fly_nheld; ++i)
+            *(float*)GUEST_PTR(g_fly_held[i]) = pos[1];
     }
     px = pos[0], pz = pos[2], have = 1;
 }
@@ -1301,14 +1309,14 @@ static int xi_line(const char* t)
     if (!strcmp(t, "findall"))
     {
         /* the player's height everywhere in the game's memory, not only its entity: the same float, with
-         * the same x and z beside it (a position) or alone; positions are written while flying */
+         * the same x and z beside it (a position) or alone */
         uint32_t p = gamestate_self_entity();
         if (!p || !gwin_is_committed(p + 0x7FF))
             return rt_log("[recomp] findall: no entity\n"), 1;
         uint32_t ybits = rd32(p + 0x08);
         float x = f32_at(p + 0x04), z = f32_at(p + 0x0C);
         int lone = 0;
-        g_fly_nmore = 0;
+        int found = 0;
         for (uint32_t pg = 0x10000u; pg && pg < 0xFFFF0000u; pg += 0x1000u)
         {
             if (!gwin_is_committed(pg))
@@ -1318,18 +1326,15 @@ static int xi_line(const char* t)
                 if (rd32(a) != ybits || (a >= p && a < p + 0x800))
                     continue;
                 bool xyz = a - pg >= 4 && a - pg + 8 <= 0x1000u && fabsf(f32_at(a - 4) - x) < 1.0f && fabsf(f32_at(a + 4) - z) < 1.0f;
-                if (xyz && g_fly_nmore < 32)
+                if (xyz && found++ < 40)
                 {
-                    g_fly_wrote[g_fly_nmore] = 0.0f / 0.0f, g_fly_more[g_fly_nmore++] = a;
                     rt_log("[recomp] findall: position at %08x (%.2f %.2f %.2f)\n", a, f32_at(a - 4), f32_at(a), f32_at(a + 4));
                 }
                 else if (!xyz && lone++ < 40)
                     rt_log("[recomp] findall: height alone at %08x\n", a);
             }
         }
-        g_fly_probe = g_fly_nmore ? 0 : -1;
-        rt_log("[recomp] findall: %d positions (each tried alone while flying, then all written), %d heights alone; entity %08x\n",
-            g_fly_nmore, lone, p);
+        rt_log("[recomp] findall: %d positions, %d heights alone; entity %08x\n", found, lone, p);
         return 1;
     }
     if (sscanf(t, "glide %d", &m) == 1)
