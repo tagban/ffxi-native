@@ -998,7 +998,10 @@ static void fly_tick(void)
         expect = 0.0f / 0.0f;
     else if (expect == expect)
     {
-        (pos[1] == expect ? kept : back)++;
+        if (pos[1] == expect)
+            ++kept;
+        else
+            ++back;
         if (++frames >= 20)
         {
             rt_log("[recomp] fly probe: only %08x written: the height kept %d frames, put back %d\n", g_fly_more[g_fly_probe], kept, back);
