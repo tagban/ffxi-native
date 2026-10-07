@@ -26,6 +26,10 @@ fixed-width cell from where the glyph starts, which takes in the edge of the gly
 sheet and cuts the glyph's own lean; with a table the renderer draws each such quad over the ink box
 of the glyph that starts in its cell instead.
 
+--alpha-data is for a texture whose alpha is not how clear it is (a zone's ground, walls and their
+bump maps: the game keeps something else there): every texel's colour counts, as for --additive,
+but the colour is not multiplied by alpha.
+
 --additive is for a texture the game draws with ONE/ONE blending (its text, FFXI_DRAWLOG shows the
 blend): only colour reaches the screen, so the colour is multiplied by alpha - a soft edge fades to
 black, not to a hard edge - and every texel's colour counts in the mipmaps and the compression.
@@ -196,6 +200,9 @@ def main():
     ap.add_argument('--png', required=True, help='the replacement: the same layout at a whole scale')
     ap.add_argument('--out', required=True, help='the texture pack folder')
     ap.add_argument('--additive', action='store_true', help='the game draws it with ONE/ONE blending (text)')
+    ap.add_argument('--alpha-data', action='store_true',
+                    help='its alpha is not coverage (a zone\'s ground and walls keep other things there): every '
+                    'texel\'s colour counts, in the mipmaps and the compression, and alpha is kept as it is')
     ap.add_argument('--pad', type=int, default=0,
                     help='texels to widen each glyph quad drawn with it (italic fonts the game cuts at upright boxes)')
     ap.add_argument('--pad-min', type=int, default=0, help='... only glyph quads at least this many texels tall')
@@ -213,7 +220,8 @@ def main():
         img[..., :3] = (img[..., :3].astype(np.uint32) * img[..., 3:4] + 127) // 255
     os.makedirs(a.out, exist_ok=True)
     path = os.path.join(a.out, f'{digest:016x}_{w}x{h}' + (f'_pad{a.pad}' + (f'min{a.pad_min}' if a.pad_min else '') if a.pad else '') + '.dds')
-    write_dds(path, mip_chain(img, a.additive), a.additive)
+    plain = a.additive or a.alpha_data
+    write_dds(path, mip_chain(img, plain), plain)
     if a.glyphs:
         import shutil
         shutil.copyfile(a.glyphs, path[:-4] + '.glyphs')
