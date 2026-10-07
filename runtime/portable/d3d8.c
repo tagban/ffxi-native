@@ -3197,21 +3197,19 @@ static const FxRule g_fx_rules[] = {
 static int g_fx_on = 1, g_fx_mark;
 static float g_fx_k = 1.0f;
 
-static int fx_called_from(uint32_t caller)
+/* The game's return addresses nearest the draw call (as the frame capture finds them): up to 4. */
+static int fx_callers(uint32_t* out)
 {
-    for (uint32_t a = g_cap_esp, k = 0; a < g_cap_esp + 0x400 && k < 4; a += 4)
+    int k = 0;
+    for (uint32_t a = g_cap_esp; a < g_cap_esp + 0x400 && k < 4; a += 4)
     {
         uint32_t v = rd32(a);
         if (v < rt_image_lo + 6 || v >= rt_image_hi)
             continue;
         if (rd8(v - 5) == 0xE8 || rd8(v - 6) == 0xFF || rd8(v - 3) == 0xFF || rd8(v - 2) == 0xFF)
-        {
-            if (v == caller)
-                return 1;
-            ++k;
-        }
+            out[k++] = v;
     }
-    return 0;
+    return k;
 }
 
 static void fx_classify(GfxDraw* d)
@@ -3219,11 +3217,19 @@ static void fx_classify(GfxDraw* d)
     d->fs.fx = GFX_FX_NONE;
     if ((!g_fx_on && !g_fx_mark) || d->fs.prog || d->vs.rhw || !d->fs.nstages || d->fs.st[0].tex != 1)
         return;
+    uint32_t callers[4];
+    int ncallers = -1; /* walked once, for the first rule the draw's state matches */
     for (size_t i = 0; i < sizeof g_fx_rules / sizeof *g_fx_rules; ++i)
     {
         const FxRule* r = &g_fx_rules[i];
-        if ((r->fog >= 0 && !d->fs.fog != !r->fog) || (r->dst && d->pipe.dst != r->dst) || (r->aop && d->fs.st[0].aop != r->aop) ||
-            !fx_called_from(r->caller))
+        if ((r->fog >= 0 && !d->fs.fog != !r->fog) || (r->dst && d->pipe.dst != r->dst) || (r->aop && d->fs.st[0].aop != r->aop))
+            continue;
+        if (ncallers < 0)
+            ncallers = fx_callers(callers);
+        int from = 0;
+        for (int c = 0; c < ncallers && !from; ++c)
+            from = callers[c] == r->caller;
+        if (!from)
             continue;
         if (g_fx_mark == r->fx)
             d->fs.fx = GFX_FX_MARK;
