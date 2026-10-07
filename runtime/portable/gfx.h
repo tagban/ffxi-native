@@ -119,7 +119,8 @@ typedef struct GfxFsKey
     uint8_t fog;        /* D3DFOGMODE: pixel (table) fog; 4 = the vertex function's fog factor */
     uint8_t specular_add;
     uint8_t flat;
-    uint8_t pad[3];
+    uint8_t fx; /* an effect of our own on this draw (gfx_fx.h GFX_FX_*), 0 for none */
+    uint8_t pad[2];
 } GfxFsKey;
 
 /* The render pipeline beyond the functions: blending and the color write mask. */
@@ -157,7 +158,7 @@ typedef struct GfxU
     float ambient[4]; /* D3DRS_AMBIENT */
     float tfactor[4];
     float fogcolor[4];
-    float params2[4]; /* fog density */
+    float params2[4]; /* fog density; effects (gfx_fx.h): seconds, strength */
     float vp[4];      /* viewport x, y, width, height: the XYZRHW mapping */
     int32_t vofs, pad0[3];
     int32_t stride[GFX_NSTREAMS];

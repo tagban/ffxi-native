@@ -16,6 +16,7 @@
 #include <SDL3/SDL.h>
 
 #include "gfx.h"
+#include "gfx_fx_ids.h"
 
 #define W 32
 #define H 32
@@ -381,6 +382,7 @@ static void test_sweep(void)
             d.fs.specular_add = (uint8_t)(op & 1);
             d.fs.fog = (uint8_t)(op % 5);
             d.fs.alpha_func = (uint8_t)(op % 9);
+            d.fs.fx = (uint8_t)(op % GFX_FX_COUNT); /* our effects (gfx_fx.h) on every kind of stage */
             d.vs.ntex = 2;
             draw_ui(&d, v);
         }

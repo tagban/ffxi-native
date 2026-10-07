@@ -1306,6 +1306,8 @@ static int xi_line(const char* t)
         rt_log("[recomp] find: %d places near %.3f in entity %08x\n", n, v, p);
         return 1;
     }
+    if (!strncmp(t, "fx", 2) && d3d8_fx_command(t))
+        return 1;
     if (!strcmp(t, "findall"))
     {
         /* the player's height everywhere in the game's memory, not only its entity: the same float, with
@@ -1341,7 +1343,7 @@ static int xi_line(const char* t)
         return g_glide_mask = m & 7, rt_log("[recomp] glide: mask %d\n", g_glide_mask), 1;
     if (sscanf(t, "wposmode %d", &m) == 1)
         return g_wposmode = m, rt_log("[recomp] wposmode: %d (-1: as the server sends it)\n", m), 1;
-    rt_log("[recomp] //xi: lift <yalms> | pos | snap | diff | out <seconds> | glide <mask 1-7> | wposmode <n> | find <value> | findall\n");
+    rt_log("[recomp] //xi: lift <yalms> | pos | snap | diff | out <seconds> | glide <mask 1-7> | wposmode <n> | find <value> | findall | fx [on|off|strength <0-2>|mark <n>]\n");
     return 1;
 }
 

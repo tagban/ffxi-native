@@ -18,6 +18,7 @@
 
 #include "gfx.h"
 #include "gfx_msl.h"
+#include "gfx_fx.h"
 
 _Static_assert(sizeof(GfxU) == 3536, "GfxU must match the MSL struct U");
 
@@ -446,8 +447,10 @@ static void emit_fs_tail(Sb* b, const GfxFsKey* k, const char* col)
 
 static void emit_ff_fs(Sb* b, const GfxFsKey* k, const GfxVsKey* vk)
 {
+    gfx_fx_functions(b, k->fx, GFX_FX_MSL);
     emit_fs_signature(b, k, vk);
     sb_printf(b, "  float4 cur = in.d, tmp = float4(0), tex = float4(1);\n");
+    gfx_fx_begin(b, k->fx, "in");
     for (int i = 0; i < k->nstages; ++i)
     {
         const GfxStage* s = &k->st[i];
@@ -459,7 +462,7 @@ static void emit_ff_fs(Sb* b, const GfxFsKey* k, const GfxVsKey* vk)
                 sb_printf(b, "  tex = tx%d.sample(sp%d, in.t%d.xy / in.t%d.%s);\n", i, i, i, i, w);
             }
             else
-                sb_printf(b, "  tex = tx%d.sample(sp%d, in.t%d.xy);\n", i, i, i);
+                sb_printf(b, "  tex = tx%d.sample(sp%d, in.t%d.xy%s);\n", i, i, i, gfx_fx_coord(k->fx, i));
         }
         else if (s->tex == 2)
             sb_printf(b, "  tex = tx%d.sample(sp%d, in.t%d.xyz);\n", i, i, i);
@@ -487,6 +490,7 @@ static void emit_ff_fs(Sb* b, const GfxFsKey* k, const GfxVsKey* vk)
         else /* alpha disabled: the alpha carries on unchanged */
             sb_printf(b, "  { float3 c = saturate(%s.rgb); %s = float4(c, %s.a); }\n", ce, dst, i ? "cur" : "in.d");
     }
+    gfx_fx_end(b, k->fx, "in");
     if (k->specular_add)
         sb_printf(b, "  cur.rgb = saturate(cur.rgb + in.s.rgb);\n");
     emit_fs_tail(b, k, "cur");

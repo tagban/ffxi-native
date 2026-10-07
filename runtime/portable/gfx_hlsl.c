@@ -19,6 +19,7 @@
 
 #include "gfx.h"
 #include "gfx_hlsl.h"
+#include "gfx_fx.h"
 
 _Static_assert(sizeof(GfxU) == 3536, "GfxU must match the HLSL struct U");
 
@@ -363,8 +364,10 @@ static void emit_fs_tail(Sb* b, const GfxFsKey* k, const char* col)
 
 static void emit_ff_fs(Sb* b, const GfxFsKey* k)
 {
+    gfx_fx_functions(b, k->fx, GFX_FX_HLSL);
     emit_fs_signature(b);
     sb_printf(b, "  float4 cur = vin.d, tmp = float4(0, 0, 0, 0), tex = float4(1, 1, 1, 1);\n");
+    gfx_fx_begin(b, k->fx, "vin");
     for (int i = 0; i < k->nstages; ++i)
     {
         const GfxStage* s = &k->st[i];
@@ -377,7 +380,7 @@ static void emit_ff_fs(Sb* b, const GfxFsKey* k)
                 snprintf(coord, sizeof coord, "vin.t%d.xy / vin.t%d.%s", i, i, w);
             }
             else
-                snprintf(coord, sizeof coord, "vin.t%d.xy", i);
+                snprintf(coord, sizeof coord, "vin.t%d.xy%s", i, gfx_fx_coord(k->fx, i));
             gfx_hlsl_sample(b, "tex", i, 0, coord);
         }
         else if (s->tex == 2)
@@ -409,6 +412,7 @@ static void emit_ff_fs(Sb* b, const GfxFsKey* k)
         else /* alpha disabled: the alpha carries on unchanged */
             sb_printf(b, "  { float3 c = saturate(%s.rgb); %s = float4(c, %s.a); }\n", ce, dst, i ? "cur" : "vin.d");
     }
+    gfx_fx_end(b, k->fx, "vin");
     if (k->specular_add)
         sb_printf(b, "  cur.rgb = saturate(cur.rgb + vin.s.rgb);\n");
     emit_fs_tail(b, k, "cur");

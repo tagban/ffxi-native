@@ -33,6 +33,7 @@
 
 #include "d3d8.h"
 #include "gfx.h"
+#include "gfx_fx_ids.h"
 #include "gthread.h"
 #include "gwin.h"
 #include "plat.h"
@@ -3172,6 +3173,91 @@ static void scene_present(void)
     g_scene.cam_draw = g_scene.sun_draw = g_scene.cam_rank = 0;
 }
 
+/* --- effects of our own (gfx_fx.h) ---------------------------------------------------------------------
+ * Some of the game's draws get an effect of ours in their fragment function: its cloud layers, still
+ * water, falling water. A draw is recognized by the game's code that made it (a return address on the
+ * guest stack, as the frame capture lists them) and its texture stages, fog and blending, as captured
+ * in North Gustaberg (2026-10-07; the addresses are the 2026-09-03 build's). //xi fx: on, off,
+ * strength <0-2>, mark <effect> (its draws painted magenta, to see what a rule takes; 0: none). */
+typedef struct FxRule
+{
+    uint32_t caller;
+    int8_t fog;      /* -1 either, 0 off, 1 on */
+    uint8_t dst;     /* D3DBLEND destination, 0 any */
+    uint8_t aop;     /* the first stage's alpha operation, 0 any */
+    uint8_t fx;
+    const char* name;
+} FxRule;
+
+static const FxRule g_fx_rules[] = {
+    { 0x10183c31u, 0, 6, 5, GFX_FX_CLOUDS, "clouds" }, /* the sky's two cloud domes */
+    { 0x10183c31u, 1, 6, 6, GFX_FX_POOL, "still water" },
+    { 0x10183c31u, 1, 0, 5, GFX_FX_FALLS, "falling water" },
+};
+static int g_fx_on = 1, g_fx_mark;
+static float g_fx_k = 1.0f;
+
+static int fx_called_from(uint32_t caller)
+{
+    for (uint32_t a = g_cap_esp, k = 0; a < g_cap_esp + 0x400 && k < 4; a += 4)
+    {
+        uint32_t v = rd32(a);
+        if (v < rt_image_lo + 6 || v >= rt_image_hi)
+            continue;
+        if (rd8(v - 5) == 0xE8 || rd8(v - 6) == 0xFF || rd8(v - 3) == 0xFF || rd8(v - 2) == 0xFF)
+        {
+            if (v == caller)
+                return 1;
+            ++k;
+        }
+    }
+    return 0;
+}
+
+static void fx_classify(GfxDraw* d)
+{
+    d->fs.fx = GFX_FX_NONE;
+    if ((!g_fx_on && !g_fx_mark) || d->fs.prog || d->vs.rhw || !d->fs.nstages || d->fs.st[0].tex != 1)
+        return;
+    for (size_t i = 0; i < sizeof g_fx_rules / sizeof *g_fx_rules; ++i)
+    {
+        const FxRule* r = &g_fx_rules[i];
+        if ((r->fog >= 0 && !d->fs.fog != !r->fog) || (r->dst && d->pipe.dst != r->dst) || (r->aop && d->fs.st[0].aop != r->aop) ||
+            !fx_called_from(r->caller))
+            continue;
+        if (g_fx_mark == r->fx)
+            d->fs.fx = GFX_FX_MARK;
+        else if (g_fx_on)
+        {
+            d->fs.fx = r->fx;
+            d->u.params2[1] = (float)fmod((double)rt_monotonic_ns() / 1e9, 4096.0);
+            d->u.params2[2] = g_fx_k;
+        }
+        return;
+    }
+}
+
+int d3d8_fx_command(const char* t)
+{
+    float v;
+    int m;
+    if (!strcmp(t, "fx"))
+    {
+        rt_log("[recomp] fx: %s, strength %.2f, marking %d\n", g_fx_on ? "on" : "off", g_fx_k, g_fx_mark);
+        for (size_t i = 0; i < sizeof g_fx_rules / sizeof *g_fx_rules; ++i)
+            rt_log("[recomp] fx %d: %s (the game's code at %08x, fog %d, blend to %u, alpha op %u)\n", g_fx_rules[i].fx,
+                g_fx_rules[i].name, g_fx_rules[i].caller, g_fx_rules[i].fog, g_fx_rules[i].dst, g_fx_rules[i].aop);
+        return 1;
+    }
+    if (!strcmp(t, "fx on") || !strcmp(t, "fx off"))
+        return g_fx_on = t[4] == 'n', rt_log("[recomp] fx: %s\n", g_fx_on ? "on" : "off"), 1;
+    if (sscanf(t, "fx strength %f", &v) == 1)
+        return g_fx_k = v < 0.0f ? 0.0f : v > 2.0f ? 2.0f : v, rt_log("[recomp] fx: strength %.2f\n", g_fx_k), 1;
+    if (sscanf(t, "fx mark %d", &m) == 1)
+        return g_fx_mark = m, rt_log("[recomp] fx: marking effect %d's draws magenta\n", m), 1;
+    return 0;
+}
+
 static void draw_packet(uint32_t prim, uint32_t count, uint32_t start, uint32_t indices, uint32_t index_size,
     uint32_t up_data, uint32_t up_stride, uint32_t n);
 
@@ -3279,6 +3365,7 @@ static void draw_packet(uint32_t prim, uint32_t count, uint32_t start, uint32_t 
     if (!set_streams(d, first, nverts, up_data, up_stride))
         return;
     scene_note(d);
+    fx_classify(d);
     if (g_cap)
         cap_draw(d, prim, count, first, nverts, up_data, up_stride);
     if (d->vs.rhw && (g_dev.rt == g_dev.backbuffer || menu_target(obj(g_dev.rt))))

@@ -34,3 +34,5 @@ void d3d8_backbuffer_size(uint32_t* w, uint32_t* h);
 /* Adds a texture pack: <dir>/<hash>_<w>x<h>.dds replacements for the game's textures (see d3d8.c,
  * tools/make_texpack.py). Before the device is created. */
 void d3d8_texture_pack(const char* dir);
+/* //xi fx ...: effects of our own on some of the game's draws (d3d8.c fx_classify). 1 if it was one. */
+int d3d8_fx_command(const char* text);
