@@ -364,6 +364,8 @@ typedef struct PackEntry
 static PackEntry* g_pack;
 static uint32_t g_npack;
 static int g_texlog = -1;
+static const char* g_texsave; /* FFXI_TEXSAVE: each texture no pack replaces, saved once (the launcher's
+                               * "save new textures"): <hash>_<w>x<h>.bin and a line in index.txt */
 
 void d3d8_texture_pack(const char* dir)
 {
@@ -449,10 +451,15 @@ static GfxTex* texture_replacement(const Obj* t, const Obj* level0, uint32_t* pa
 {
     *pad = *pad_min = 0, *entry = NULL;
     if (g_texlog < 0)
+    {
         g_texlog = getenv("FFXI_TEXLOG") && getenv("FFXI_TEXLOG")[0] == '1';
-    if (t->kind != O_TEXTURE || (!g_npack && !g_texlog))
+        g_texsave = getenv("FFXI_TEXSAVE") && *getenv("FFXI_TEXSAVE") ? getenv("FFXI_TEXSAVE") : NULL;
+        if (g_texsave)
+            plat_mkdir(g_texsave), rt_log("[recomp] textures: saving new ones to %s\n", g_texsave);
+    }
+    if (t->kind != O_TEXTURE || (!g_npack && !g_texlog && !g_texsave))
         return NULL;
-    int sized = g_texlog;
+    int sized = g_texlog || g_texsave;
     for (uint32_t i = 0; i < g_npack && !sized; ++i)
         sized = g_pack[i].w == t->width && g_pack[i].h == t->height;
     if (!sized)
@@ -481,6 +488,23 @@ static GfxTex* texture_replacement(const Obj* t, const Obj* level0, uint32_t* pa
     if (g_texlog)
         rt_log("[recomp] textures: %ux%u format %08x hash %016llx texture %08x (no replacement)\n", t->width, t->height,
             t->format, (unsigned long long)hash, t->guest);
+    if (g_texsave) /* saved once: texdump_png.py --index */
+    {
+        char dp[1100];
+        PlatStat st;
+        snprintf(dp, sizeof dp, "%s%c%016llx_%ux%u.bin", g_texsave, plat_path_sep, (unsigned long long)hash, t->width, t->height);
+        if (!plat_stat(dp, &st))
+        {
+            FILE* df = fopen(dp, "wb");
+            if (df)
+                fwrite(p, 1, n, df), fclose(df);
+            snprintf(dp, sizeof dp, "%s%cindex.txt", g_texsave, plat_path_sep);
+            FILE* ix = fopen(dp, "a");
+            if (ix)
+                fprintf(ix, "textures: %ux%u format %08x hash %016llx\n", t->width, t->height, t->format, (unsigned long long)hash),
+                    fclose(ix);
+        }
+    }
     if (g_texlog && getenv("FFXI_TEXDUMP")) /* ... and the level itself, to make a replacement from */
     {
         char dp[512];

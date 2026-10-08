@@ -2,6 +2,8 @@
 
   FFXI_TEXLOG=1 FFXI_TEXDUMP=<dump> (the game, through the launcher)
   python3 tools/texdump_png.py --log <the profile's .log> --dump <dump> --out <pngs> [--min 64]
+  python3 tools/texdump_png.py --log <texsave>/index.txt --dump <texsave> --out <pngs>
+                                    (the launcher's "save new textures": FFXI_TEXSAVE)
 
 Each dump is <hash>.bin, the first level of a texture as the game uploaded it (D3D's layout); its
 size and format come from the log's "textures: WxH format F hash H" lines. Written as
@@ -109,6 +111,8 @@ def main():
     done = skipped = 0
     for hsh, (w, h, fmt) in sorted(seen.items()):
         path = os.path.join(a.dump, hsh + '.bin')
+        if not os.path.exists(path):  # the launcher's "save new textures" (FFXI_TEXSAVE) names them so
+            path = os.path.join(a.dump, f'{hsh}_{w}x{h}.bin')
         if (w < a.min and h < a.min) or not os.path.exists(path):
             skipped += 1
             continue

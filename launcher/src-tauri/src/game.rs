@@ -246,6 +246,9 @@ fn run(app: &AppHandle, running: &Running, cfg: &LauncherConfig, paths: &Paths, 
     if !account.game.fps_overlay {
         cmd.env("FFXI_FPS", "0");
     }
+    if account.game.save_textures {
+        cmd.env("FFXI_TEXSAVE", paths.data_dir.join("texsave"));
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

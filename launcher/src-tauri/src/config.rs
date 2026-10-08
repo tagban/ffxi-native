@@ -140,6 +140,9 @@ pub struct GameSettings {
     pub nameplate_scale: String,
     /// The frame-rate counter in the corner
     pub fps_overlay: bool,
+    /// FFXI_TEXSAVE=<data dir>/texsave: each texture the game loads that no texture pack replaces is
+    /// saved there once (tools/texdump_png.py reads its index), to make packs from what is played
+    pub save_textures: bool,
     /// The key that brings up the launcher's settings over the game: f9..f12, pause, scrolllock, none
     pub hotkey: String,
     /// The scene effects (macOS, gfx_metal.m): key -> value, as its settings file has them. Keys
@@ -181,6 +184,7 @@ impl Default for GameSettings {
             nameplates: "fix".into(),
             nameplate_scale: "1".into(),
             fps_overlay: true,
+            save_textures: false,
             hotkey: "f12".into(),
             fx: BTreeMap::from([("fx".to_string(), 0.0)]),
         }
