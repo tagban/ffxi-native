@@ -166,6 +166,10 @@ typedef struct GfxU
     GfxLight light[GFX_NLIGHTS];
     float vsc[GFX_NVSC][4];
     float psc[GFX_NPSC][4];
+    /* effects (gfx_fx.h): [0] x, y the slopes that turn a change in eye depth across a pixel into a
+     * surface's tilt (2 / (viewport width x projection[0]), 2 / (height x projection[5])); [1] xyz which
+     * way is up, in eye space */
+    float fxp[2][4];
 } GfxU;
 
 typedef struct GfxSampler

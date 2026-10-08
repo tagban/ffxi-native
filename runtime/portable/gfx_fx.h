@@ -6,9 +6,11 @@
  *   GFX_FX_CLOUDS  the sky's cloud layers: shapes broken up by moving noise, lit tops, darker undersides
  *   GFX_FX_POOL    still water: the texture rippled, the light glinting off it
  *   GFX_FX_FALLS   falling water: streaks running down it
- *   GFX_FX_WET     a zone's ground and walls in the rain: darker and deeper in colour as they soak, and
- *                  drops striking - a small dark dot that fades over a second or so. GfxU.params2.w
- *                  carries both: the wetness (0-1) plus 2 x the rain (0 none, 1 rain, 2 a downpour)
+ *   GFX_FX_WET     a zone's ground and walls in the rain: darker and deeper in colour as they soak,
+ *                  shiny (the sky mirrored, most at a glancing look and on the ground: the surface's
+ *                  tilt from its eye depth's change across the pixel, GfxU.fxp), and drops striking the
+ *                  ground - a small dark dot that fades over a second or so. GfxU.params2.w carries the
+ *                  wetness (0-1) plus 2 x the rain (0 none, 1 rain, 2 a downpour)
  *
  * The code is written once, in the shared subset of the three languages (float2..float4, fract, mix,
  * saturate, smoothstep), with a few #defines for GLSL and HLSL. */
@@ -28,10 +30,14 @@ static void gfx_fx_functions(Sb* b, int fx, int lang)
 {
     if (!fx)
         return;
+    /* fx_dy: down the screen is +1 (Metal's and Direct3D's pixel rows run down; OpenGL's run up) */
     if (lang == GFX_FX_GLSL)
-        sb_printf(b, "#define float2 vec2\n#define float3 vec3\n#define float4 vec4\n");
+        sb_printf(b, "#define float2 vec2\n#define float3 vec3\n#define float4 vec4\n#define dfdx dFdx\n#define dfdy dFdy\n"
+                     "#define fx_dy (-1.0)\n");
     else if (lang == GFX_FX_HLSL)
-        sb_printf(b, "#define fract frac\n#define mix lerp\n");
+        sb_printf(b, "#define fract frac\n#define mix lerp\n#define dfdx ddx\n#define dfdy ddy\n#define fx_dy 1.0\n");
+    else
+        sb_printf(b, "#define fx_dy 1.0\n");
     if (fx < GFX_FX_CLOUDS)
         return;
     sb_printf(b,
@@ -113,25 +119,37 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
         sb_printf(b,
             "  {\n"
             "    float lvl = floor(u.params2.w * 0.5), wet = u.params2.w - 2.0 * lvl, rain = lvl * 0.5;\n"
+            /* the surface's tilt, from how its eye depth changes across the pixel: n faces the camera */
+            "    float ez = %s.ez, ezx = dfdx(ez), ezy = dfdy(ez) * fx_dy;\n"
+            "    float fa = u.fxp[0].x, fb = u.fxp[0].y;\n"
+            "    float3 n = normalize(float3(fb * ezx, -fa * ezy, -fa * fb * ez) + float3(0.0, 0.0, -1e-6));\n"
+            "    float upward = saturate(dot(n, u.fxp[1].xyz));\n"
+            "    float ground = smoothstep(0.55, 0.85, upward);\n"
             "    float3 c = cur.rgb;\n"
             "    float l = dot(c, float3(0.299, 0.587, 0.114));\n"
             /* soaked: deeper colour, less light given back */
             "    c = mix(c, saturate(float3(l, l, l) + (c - float3(l, l, l)) * 1.25), wet * 0.6);\n"
             "    c = c * (1.0 - 0.32 * wet);\n"
-            /* drops: a cell of the texture each, striking now and then somewhere in it */
+            /* wet and shiny: the sky (the game's fog colour is its horizon) mirrored, far more at a glancing
+             * look across the surface (Fresnel); the ground most, walls and things standing a little */
+            "    float glance = 1.0 - saturate(-n.z);\n"
+            "    float fres = 0.04 + 0.96 * glance * glance * glance * glance * glance;\n"
+            "    float3 sky = mix(u.fogcolor.rgb, float3(1.0, 1.0, 1.0), 0.15);\n"
+            "    c = mix(c, sky, saturate(fres * 1.6) * wet * (0.3 + 0.7 * ground) * 0.85);\n"
+            /* drops: a cell of the texture each, striking now and then somewhere in it, on the ground */
             "    float2 q = %s.t0.xy * 18.0;\n"
             "    float2 cell = floor(q), f = fract(q);\n"
             "    float h = fx_hash(cell);\n"
             "    float period = 1.6 + 2.0 * h;\n"
-            "    float n = floor((fx_t + h * 13.0) / period);\n"
-            "    float age = (fx_t + h * 13.0) - n * period;\n"
-            "    float2 at = float2(fx_hash(cell + float2(n, 1.7)), fx_hash(cell + float2(2.3, n))) * 0.7 + 0.15;\n"
-            "    float hit = step(fx_hash(cell + float2(n * 0.37, n * 1.3)), rain);\n"
-            "    float drop = (1.0 - smoothstep(0.05, 0.1, length(f - at))) * exp(-age * 2.2) * hit;\n"
+            "    float k = floor((fx_t + h * 13.0) / period);\n"
+            "    float age = (fx_t + h * 13.0) - k * period;\n"
+            "    float2 at = float2(fx_hash(cell + float2(k, 1.7)), fx_hash(cell + float2(2.3, k))) * 0.7 + 0.15;\n"
+            "    float hit = step(fx_hash(cell + float2(k * 0.37, k * 1.3)), rain);\n"
+            "    float drop = (1.0 - smoothstep(0.05, 0.1, length(f - at))) * exp(-age * 2.2) * hit * (0.25 + 0.75 * ground);\n"
             "    c = c * (1.0 - 0.38 * drop);\n"
             "    cur.rgb = mix(cur.rgb, c, saturate(fx_k));\n"
             "  }\n",
-            in);
+            in, in);
         break;
     default: break;
     }

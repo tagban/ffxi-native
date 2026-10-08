@@ -3317,6 +3317,16 @@ static void fx_classify(GfxDraw* d)
             d->fs.fx = r->fx;
             d->u.params2[1] = (float)fmod((double)rt_monotonic_ns() / 1e9, 4096.0);
             d->u.params2[2] = g_fx_k;
+            /* a surface's tilt from its eye depth (gfx.h fxp): the projection's scale and the viewport's
+             * size, and up (the game's world has heights more negative higher: up is -y) in eye space */
+            const float* P = g_dev.cur.xf[3];
+            const float* V = g_dev.cur.xf[2];
+            float vw = d->vp[2] ? (float)d->vp[2] : 1.0f, vh = d->vp[3] ? (float)d->vp[3] : 1.0f;
+            d->u.fxp[0][0] = P[0] != 0.0f ? 2.0f / (vw * P[0]) : 0.0f;
+            d->u.fxp[0][1] = P[5] != 0.0f ? 2.0f / (vh * P[5]) : 0.0f;
+            float ux = -V[4], uy = -V[5], uz = -V[6], ul = sqrtf(ux * ux + uy * uy + uz * uz);
+            ul = ul > 0.0f ? 1.0f / ul : 0.0f;
+            d->u.fxp[1][0] = ux * ul, d->u.fxp[1][1] = uy * ul, d->u.fxp[1][2] = uz * ul;
         }
         return;
     }
