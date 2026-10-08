@@ -16,7 +16,10 @@ The PNGs are texdump_png.py's (a texture as the game uploads it). For each:
     zone's ground keeps real colour there, which is left alone): the colour of its solid texels spread
     into the clear ones first, as the network would otherwise draw the black there into their edges,
     and its alpha upscaled by the network too, for crisp edges;
-  - alpha otherwise: resized smoothly (FFXI keeps a texture's opacity and other things there, 0x80 =
+  - the network's change to each texel kept within --stray of a smooth enlargement (sharper, but a
+    rivet stays a shaded bead), and the brightest and darkest of the original's nearby texels (--margin):
+    the network would turn a rivet or a glint on dark armour into a white dot;
+  - alpha otherwise: resized smoothly, without overshoot (FFXI keeps a texture's opacity and other things there, 0x80 =
     opaque);
 
 then make_texpack.py --alpha-data makes the entry (DXT5, every mipmap) in --out.
@@ -80,6 +83,11 @@ def main():
     ap.add_argument('--work', required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--model', default='realesrgan-x4plus')
+    ap.add_argument('--stray', type=float, default=24.0, help='how far (of 255) the network may move a texel from '
+                    'a smooth enlargement of the original')
+    ap.add_argument('--reuse', action='store_true', help='keep the network\'s results already in --work')
+    ap.add_argument('--margin', type=float, default=12.0,
+                    help='how far past the brightest and darkest original texel nearby a new one may go')
     ap.add_argument('--grain', type=float, default=0.4, help='how much of the original\'s fine detail to add back')
     ap.add_argument('pngs', nargs='+')
     a = ap.parse_args()
@@ -95,23 +103,24 @@ def main():
         bump = is_bump(rgba[:, :, :3])
         cut = not bump and is_cutout(rgba)
         pad = max(4, min(w, h) // 8)
-        if not bump:
+        have = a.reuse and os.path.exists(os.path.join(dst, name + '.png')) and (not cut or os.path.exists(os.path.join(dst, name + '_alpha.png')))
+        if not bump and not have:
             rgb = bleed(rgba[:, :, :3], rgba[:, :, 3]) if cut else rgba[:, :, :3]
             Image.fromarray(np.pad(rgb, ((pad, pad), (pad, pad), (0, 0)), mode='wrap')).save(os.path.join(src, name + '.png'))
-        if cut:  # its alpha as a grey picture, stretched to 0-255, upscaled the same way
+        if cut and not have:  # its alpha as a grey picture, stretched to 0-255, upscaled the same way
             al = rgba[:, :, 3].astype(np.float32) * (255.0 / rgba[:, :, 3].max())
             grey = np.repeat(np.clip(al + 0.5, 0, 255).astype(np.uint8)[..., None], 3, 2)
             Image.fromarray(np.pad(grey, ((pad, pad), (pad, pad), (0, 0)), mode='wrap')).save(os.path.join(src, name + '_alpha.png'))
-        jobs.append((name, rgba, w, h, pad, bump, cut))
+        jobs.append((name, rgba, w, h, pad, bump, cut, have))
 
-    if any(not j[5] for j in jobs):
+    if any(not j[5] and not j[7] for j in jobs):
         exe = os.path.join(a.esrgan, 'realesrgan-ncnn-vulkan')
         r = subprocess.run([exe, '-i', src, '-o', dst, '-n', a.model, '-s', str(SCALE), '-f', 'png',
                             '-m', os.path.join(a.esrgan, 'models')], capture_output=True, text=True)
         if r.returncode:
             sys.exit(r.stderr[-2000:])
 
-    for name, rgba, w, h, pad, bump, cut in jobs:
+    for name, rgba, w, h, pad, bump, cut, have in jobs:
         W, H = w * SCALE, h * SCALE
         if bump:
             n = resize(rgba[:, :, :3], W, H).astype(np.float32) / 127.5 - 1.0
@@ -121,16 +130,26 @@ def main():
             up = np.array(Image.open(os.path.join(dst, name + '.png')).convert('RGB'))
             o = pad * SCALE
             rgb = up[o:o + H, o:o + W].astype(np.float32)
+            orig = Image.fromarray(bleed(rgba[:, :, :3], rgba[:, :, 3]) if cut else rgba[:, :, :3])
+            lz = orig.resize((W, H), Image.LANCZOS)
+            lzf = np.asarray(lz, np.float32)
+            # the network may sharpen, but not stray far from a smooth enlargement of the original: a
+            # two-texel rivet, a shaded bead, would otherwise come out a flat white disc
+            rgb = lzf + np.clip(rgb - lzf, -a.stray, a.stray)
             if a.grain:  # the original's fine detail, at the new size, added back
-                lz = Image.fromarray(rgba[:, :, :3]).resize((W, H), Image.LANCZOS)
-                rgb += a.grain * (np.asarray(lz, np.float32) - np.asarray(lz.filter(ImageFilter.GaussianBlur(3)), np.float32))
-            rgb = np.clip(rgb + 0.5, 0, 255).astype(np.uint8)
+                rgb += a.grain * (lzf - np.asarray(lz.filter(ImageFilter.GaussianBlur(3)), np.float32))
+            # nothing brighter or darker than the original texels around it, give or take a little: the
+            # network turns a two-texel rivet or a glint on dark armour into a white dot
+            lo = np.asarray(orig.filter(ImageFilter.MinFilter(3)).resize((W, H), Image.BILINEAR), np.float32) - a.margin
+            hi = np.asarray(orig.filter(ImageFilter.MaxFilter(3)).resize((W, H), Image.BILINEAR), np.float32) + a.margin
+            rgb = np.clip(np.minimum(np.maximum(rgb, lo), hi) + 0.5, 0, 255).astype(np.uint8)
         al = rgba[:, :, 3]
         if cut:
             g = np.array(Image.open(os.path.join(dst, name + '_alpha.png')).convert('L'))[o:o + H, o:o + W].astype(np.float32)
             alpha = np.clip(g * (al.max() / 255.0) + 0.5, 0, 255).astype(np.uint8)
         else:
-            alpha = np.full((H, W), al[0, 0], np.uint8) if al.min() == al.max() else resize(al, W, H)
+            # smoothly but without overshoot: armour keeps a shine mask of a few levels there
+            alpha = np.full((H, W), al[0, 0], np.uint8) if al.min() == al.max() else np.array(Image.fromarray(al).resize((W, H), Image.BILINEAR))
         out = os.path.join(fin, name + '.png')
         Image.fromarray(np.dstack([rgb, alpha]), 'RGBA').save(out)
         hsh, size = name.split('_')
