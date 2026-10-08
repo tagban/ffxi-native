@@ -233,6 +233,33 @@ fn newer(a: &str, b: &str) -> bool {
 /// Where the account's server publishes its game versions: the address it names, else the first
 /// place xi_vault::site_candidates finds one (then remembered). A remembered address that stops answering
 /// is looked for again: a server that moved its versions elsewhere.
+/// A game updates site's index, quickly: 4 seconds, and a site that did not answer is not asked
+/// again for ten minutes (each Play asks; a site behind a router that does not forward its port
+/// would otherwise hold every start up).
+fn fetch_index(url: &str) -> Result<xi_vault::Index, String> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static FAILED: Mutex<Option<HashMap<String, (Instant, String)>>> = Mutex::new(None);
+    if let Some((at, e)) = FAILED.lock().unwrap().get_or_insert_with(HashMap::new).get(url) {
+        if at.elapsed() < Duration::from_secs(600) {
+            return Err(e.clone());
+        }
+    }
+    let r = xi_vault::fetch_index_within(url, Duration::from_secs(4));
+    let mut failed = FAILED.lock().unwrap();
+    let failed = failed.get_or_insert_with(HashMap::new);
+    match &r {
+        Ok(_) => {
+            failed.remove(url);
+        }
+        Err(e) => {
+            failed.insert(url.to_string(), (Instant::now(), e.clone()));
+        }
+    }
+    r
+}
+
 fn update_url(app: &AppHandle, account_id: &str) -> Result<(String, xi_vault::Index), String> {
     let cdir = config_dir(app)?;
     let mut cfg = config::load(&cdir);
@@ -241,7 +268,7 @@ fn update_url(app: &AppHandle, account_id: &str) -> Result<(String, xi_vault::In
     let failed = if saved.is_empty() {
         None
     } else {
-        match xi_vault::fetch_index(&saved) {
+        match fetch_index(&saved) {
             Ok(index) => return Ok((saved, index)),
             Err(e) => Some(e),
         }
@@ -301,7 +328,7 @@ fn server_site(app: &AppHandle, account_id: &str) -> Result<Site, String> {
     let named = info.as_ref().map(|i| i.update_url.trim().to_string()).filter(|u| !u.is_empty());
     let (url, index) = match named {
         Some(u) => {
-            let index = xi_vault::fetch_index(&u).map_err(|e| format!("The server's game updates address ({u}) did not answer: {e}"))?;
+            let index = fetch_index(&u).map_err(|e| format!("The server's game updates address ({u}) did not answer: {e}"))?;
             if account.update_url != u {
                 account.update_url = u.clone();
                 config::save(&cdir, &cfg)?;

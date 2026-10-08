@@ -3259,10 +3259,26 @@ static int fx_callers(uint32_t* out)
     return k;
 }
 
+/* what the rules took since the last //xi fx: draws whose state a rule matches, those also from its
+ * code, and the code the others came from (to find a rule's caller in a zone it misses) */
+static uint32_t g_fx_state[8], g_fx_hit[8], g_fx_other[8][4], g_fx_other_n[8][4];
+
+static void fx_note_other(int rule, const uint32_t* callers, int n)
+{
+    uint32_t c = n > 1 ? callers[1] : n ? callers[0] : 0; /* the second: the first is the draw wrapper */
+    for (int i = 0; i < 4; ++i)
+        if (g_fx_other[rule][i] == c || !g_fx_other[rule][i])
+        {
+            g_fx_other[rule][i] = c, ++g_fx_other_n[rule][i];
+            return;
+        }
+}
+
 static void fx_classify(GfxDraw* d)
 {
     d->fs.fx = GFX_FX_NONE;
-    if ((!g_fx_on && !g_fx_mark) || d->fs.prog || d->vs.rhw || !d->fs.nstages || d->fs.st[0].tex != 1)
+    /* the game's own pixel shaders too (a zone's bump-mapped ground): the effect goes on their colour */
+    if ((!g_fx_on && !g_fx_mark) || d->vs.rhw || (!d->fs.prog && !d->fs.nstages) || d->fs.st[0].tex != 1)
         return;
     uint32_t callers[4];
     int ncallers = -1; /* walked once, for the first rule the draw's state matches */
@@ -3276,8 +3292,16 @@ static void fx_classify(GfxDraw* d)
         int from = 0;
         for (int c = 0; c < ncallers && !from; ++c)
             from = callers[c] == r->caller;
+        if (i < 8)
+            ++g_fx_state[i];
         if (!from)
+        {
+            if (i < 8)
+                fx_note_other((int)i, callers, ncallers);
             continue;
+        }
+        if (i < 8)
+            ++g_fx_hit[i];
         if (g_fx_mark == r->fx)
             d->fs.fx = GFX_FX_MARK;
         else if (g_fx_on)
@@ -3307,8 +3331,16 @@ int d3d8_fx_command(const char* t)
         rt_log("[recomp] fx: %s, strength %.2f, marking %d, rain %.1f, wet %.2f\n", g_fx_on ? "on" : "off", g_fx_k, g_fx_mark,
             g_fx_rain_forced >= 0.0f ? g_fx_rain_forced : g_fx_rain, g_fx_wet);
         for (size_t i = 0; i < sizeof g_fx_rules / sizeof *g_fx_rules; ++i)
-            rt_log("[recomp] fx %d: %s (the game's code at %08x, fog %d, blend to %u, alpha op %u)\n", g_fx_rules[i].fx,
-                g_fx_rules[i].name, g_fx_rules[i].caller, g_fx_rules[i].fog, g_fx_rules[i].dst, g_fx_rules[i].aop);
+        {
+            rt_log("[recomp] fx %d: %s (the game's code at %08x, fog %d, blend to %u, alpha op %u): %u draws of its kind, %u "
+                   "from its code since the last //xi fx\n",
+                g_fx_rules[i].fx, g_fx_rules[i].name, g_fx_rules[i].caller, g_fx_rules[i].fog, g_fx_rules[i].dst, g_fx_rules[i].aop,
+                i < 8 ? g_fx_state[i] : 0, i < 8 ? g_fx_hit[i] : 0);
+            for (int k = 0; i < 8 && k < 4 && g_fx_other[i][k]; ++k)
+                rt_log("[recomp]   others of its kind from the game's code at %08x: %u\n", g_fx_other[i][k], g_fx_other_n[i][k]);
+        }
+        memset(g_fx_state, 0, sizeof g_fx_state), memset(g_fx_hit, 0, sizeof g_fx_hit);
+        memset(g_fx_other, 0, sizeof g_fx_other), memset(g_fx_other_n, 0, sizeof g_fx_other_n);
         return 1;
     }
     if (!strcmp(t, "fx on") || !strcmp(t, "fx off"))

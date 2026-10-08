@@ -510,9 +510,17 @@ char* gfx_msl_generate(const GfxVsKey* vk, const GfxFsKey* fk, const uint32_t* v
         emit_ff_vs(&b, vk);
     if (fk->prog)
     {
+        gfx_fx_functions(&b, fk->fx, GFX_FX_MSL);
         emit_fs_signature(&b, fk, vk);
+        gfx_fx_begin(&b, fk->fx, "in");
         if (!gfx_msl_ps1(&b, fk, ps_tokens))
             goto fail;
+        if (fk->fx) /* our effect on the pixel shader's colour */
+        {
+            sb_printf(&b, "  {\n  float4 cur = r0;\n");
+            gfx_fx_end(&b, fk->fx, "in");
+            sb_printf(&b, "  r0 = cur;\n  }\n");
+        }
         emit_fs_tail(&b, fk, "r0");
     }
     else

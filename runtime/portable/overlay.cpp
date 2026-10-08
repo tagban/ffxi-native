@@ -157,7 +157,7 @@ static struct
     bool chat_pinned = true; /* the chat held to the bottom right corner */
     bool equip = false, items = false; /* the equipment and item windows */
     /* the windows' background and the chat's: a color and how solid (the player's) */
-    float win_bg[4] = { 0.06f, 0.06f, 0.08f, 0.88f }, chat_bg[4] = { 0.04f, 0.04f, 0.06f, 0.62f };
+    float win_bg[4] = { 0.102f, 0.118f, 0.180f, 0.88f }, chat_bg[4] = { 0.094f, 0.118f, 0.188f, 0.80f }; /* the interface skin's slate */
     /* the chat, as the game's log: down to a few lines when nothing has come for a while */
     bool chat_shrink = true;
     int chat_quiet_lines = 4;
@@ -925,7 +925,7 @@ static void overlay_window(void)
         dirty |= ImGui::ColorEdit4("Chat##bg", g_set.chat_bg, cf);
         if (ImGui::SmallButton("Defaults##bg"))
         {
-            const float w[4] = { 0.06f, 0.06f, 0.08f, 0.88f }, c[4] = { 0.04f, 0.04f, 0.06f, 0.62f };
+            const float w[4] = { 0.102f, 0.118f, 0.180f, 0.88f }, c[4] = { 0.094f, 0.118f, 0.188f, 0.80f };
             memcpy(g_set.win_bg, w, sizeof w), memcpy(g_set.chat_bg, c, sizeof c), dirty = true;
         }
         ImGui::Separator();

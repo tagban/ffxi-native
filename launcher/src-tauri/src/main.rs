@@ -269,8 +269,11 @@ async fn create_account(server: String, port: u16, login: String, password: Stri
 }
 
 #[tauri::command]
-fn check_server(app: AppHandle, account_id: String) -> Result<versions::ServerVersion, String> {
-    versions::check_server(&app, &account_id)
+async fn check_server(app: AppHandle, account_id: String) -> Result<versions::ServerVersion, String> {
+    // off the window's thread: an update site that does not answer kept the window frozen
+    tauri::async_runtime::spawn_blocking(move || versions::check_server(&app, &account_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

@@ -653,7 +653,19 @@ static void menu_draw(Guest* g)
         }
     }
     for (size_t i = 0; i < sizeof g_game_windows / sizeof *g_game_windows; ++i)
-        if (g_game_windows[i].dropped && g_game_windows[i].win == g->eax)
+        if (g_game_windows[i].dropped && g_game_windows[i].win == g->eax && g_game_windows[i].group == 0)
+        {
+            /* the game's chat log, under the overlay's chat: what it draws dropped as it draws it (it
+             * lays itself out again nearly every frame, and showed through whenever it changed shape),
+             * but left where it is, so the game's questions still come just above the overlay's chat */
+            static int seen0[16];
+            if (!seen0[i]++)
+                rt_log("[recomp] game window %.8s: the manager's pass seen, its draws dropped there\n", g_game_windows[i].name);
+            g_dropping = 0;
+            d3d8_drop_draws(1);
+            return;
+        }
+        else if (g_game_windows[i].dropped && g_game_windows[i].win == g->eax)
         {
             g_dropping = g->eax;
             /* the party list or target box, as the game has just laid it out */
@@ -1138,6 +1150,8 @@ static void hide_game_windows(int log, int party, int target)
             any_moved |= w->dropped;
             continue;
         }
+        if (w->group == 0 && MENU_DRAW_HOOK && MENU_DRAWN_HOOK)
+            w->dropped = hide; /* and its draws dropped in the manager's pass (menu_draw) */
         if (hide)
         {
             static int held[16], undone[16], told[16];
