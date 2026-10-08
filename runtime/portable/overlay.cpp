@@ -77,7 +77,7 @@ static bool font_combo(const char* label, char* name, size_t size)
     return changed;
 }
 
-static bool g_ready, g_shown;
+static bool g_ready, g_shown = true; /* the modern interface is on from the start (Cmd+U, Ctrl+Shift+U elsewhere, hides it) */
 static void chat_register(void);
 static void overlay_register(void);
 static int (*g_run_line)(const char* line); /* host64: the game's parser of a typed line */

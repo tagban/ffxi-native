@@ -3326,6 +3326,9 @@ static void fx_classify(GfxDraw* d)
             d->u.fxp[0][1] = P[5] != 0.0f ? 2.0f / (vh * P[5]) : 0.0f;
             float ux = -V[4], uy = -V[5], uz = -V[6], ul = sqrtf(ux * ux + uy * uy + uz * uz);
             ul = ul > 0.0f ? 1.0f / ul : 0.0f;
+            /* the camera is never upside down: up, seen from it, rises on the screen (whichever way the
+             * game's view counts its heights) */
+            ul = uy < 0.0f ? -ul : ul;
             d->u.fxp[1][0] = ux * ul, d->u.fxp[1][1] = uy * ul, d->u.fxp[1][2] = uz * ul;
         }
         return;
