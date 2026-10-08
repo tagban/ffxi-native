@@ -2065,11 +2065,16 @@ int main(int argc, char** argv)
     if (version_dir)
         rt_log("[recomp] version: %s, %u files over the install\n", version_dir, vfs_set_version(game, version_dir));
     {
-        /* texture packs: --textures, else <data dir>/textures if there is one */
-        char def[1100];
+        /* texture packs: --textures, else <data dir>/ui-skin and <data dir>/textures, those there are; the
+         * first pack with a texture replaces it, so the interface skin (tools/ui_restyle.py) goes over
+         * the upscaled interface in textures */
+        char skin[1100], def[1100];
         PlatStat st;
         if (!npacks && data_dir)
         {
+            snprintf(skin, sizeof skin, "%s%cui-skin", data_dir, plat_path_sep);
+            if (plat_stat(skin, &st))
+                packs[npacks++] = skin;
             snprintf(def, sizeof def, "%s%ctextures", data_dir, plat_path_sep);
             if (plat_stat(def, &st))
                 packs[npacks++] = def;
