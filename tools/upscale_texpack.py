@@ -82,7 +82,11 @@ def main():
     ap.add_argument('--esrgan', required=True)
     ap.add_argument('--work', required=True)
     ap.add_argument('--out', required=True)
-    ap.add_argument('--model', default='realesrgan-x4plus')
+    ap.add_argument('--model', default='realesrgan-x4plus',
+                    help='realesrgan-x4plus for the world; realesrgan-x4plus-anime for the interface (flat colour, '
+                    'clean outlines: icons keep their colours and shapes)')
+    ap.add_argument('--edge', action='store_true', help='the border taken from the edge, not the far side: '
+                    'interface sheets do not repeat')
     ap.add_argument('--stray', type=float, default=24.0, help='how far (of 255) the network may move a texel from '
                     'a smooth enlargement of the original')
     ap.add_argument('--reuse', action='store_true', help='keep the network\'s results already in --work')
@@ -106,11 +110,11 @@ def main():
         have = a.reuse and os.path.exists(os.path.join(dst, name + '.png')) and (not cut or os.path.exists(os.path.join(dst, name + '_alpha.png')))
         if not bump and not have:
             rgb = bleed(rgba[:, :, :3], rgba[:, :, 3]) if cut else rgba[:, :, :3]
-            Image.fromarray(np.pad(rgb, ((pad, pad), (pad, pad), (0, 0)), mode='wrap')).save(os.path.join(src, name + '.png'))
+            Image.fromarray(np.pad(rgb, ((pad, pad), (pad, pad), (0, 0)), mode=('edge' if a.edge else 'wrap'))).save(os.path.join(src, name + '.png'))
         if cut and not have:  # its alpha as a grey picture, stretched to 0-255, upscaled the same way
             al = rgba[:, :, 3].astype(np.float32) * (255.0 / rgba[:, :, 3].max())
             grey = np.repeat(np.clip(al + 0.5, 0, 255).astype(np.uint8)[..., None], 3, 2)
-            Image.fromarray(np.pad(grey, ((pad, pad), (pad, pad), (0, 0)), mode='wrap')).save(os.path.join(src, name + '_alpha.png'))
+            Image.fromarray(np.pad(grey, ((pad, pad), (pad, pad), (0, 0)), mode=('edge' if a.edge else 'wrap'))).save(os.path.join(src, name + '_alpha.png'))
         jobs.append((name, rgba, w, h, pad, bump, cut, have))
 
     if any(not j[5] and not j[7] for j in jobs):
