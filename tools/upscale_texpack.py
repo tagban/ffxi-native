@@ -12,7 +12,8 @@ The PNGs are texdump_png.py's (a texture as the game uploads it). For each:
     texel made a direction again, as a network trained on photographs would make up detail in it;
   - a little of the original's own grain added back (--grain): the network smooths fine noise, as of
     grass or wood, a little too much;
-  - a cut-out (leaves, grass, hair: alpha either clear or solid): the colour of its solid texels spread
+  - a cut-out (leaves, grass, hair: alpha either clear or solid, and black under the clear part - a
+    zone's ground keeps real colour there, which is left alone): the colour of its solid texels spread
     into the clear ones first, as the network would otherwise draw the black there into their edges,
     and its alpha upscaled by the network too, for crisp edges;
   - alpha otherwise: resized smoothly (FFXI keeps a texture's opacity and other things there, 0x80 =
@@ -42,9 +43,16 @@ def resize(a, w, h):
     return np.array(Image.fromarray(a).resize((w, h), Image.LANCZOS))
 
 
-def is_cutout(al):
+def is_cutout(rgba):
+    """Leaves, grass, hair: alpha clear or solid, and nothing kept under the clear part (black there).
+    A zone's ground keeps its full colour under alpha it uses otherwise (blending one ground into the
+    next): not a cut-out, its colour left alone."""
+    al = rgba[:, :, 3]
     hi = al.max()
-    return hi > 16 and (al <= 8).mean() > 0.05 and (al >= hi // 2).mean() > 0.2
+    if not (hi > 16 and (al <= 8).mean() > 0.05 and (al >= hi // 2).mean() > 0.2):
+        return False
+    clear = al <= 8
+    return rgba[clear][:, :3].mean() < 0.4 * max(1.0, rgba[~clear][:, :3].mean())
 
 
 def bleed(rgb, al, thr=8):
@@ -85,7 +93,7 @@ def main():
         rgba = np.array(Image.open(p).convert('RGBA'))
         h, w = rgba.shape[:2]
         bump = is_bump(rgba[:, :, :3])
-        cut = not bump and is_cutout(rgba[:, :, 3])
+        cut = not bump and is_cutout(rgba)
         pad = max(4, min(w, h) // 8)
         if not bump:
             rgb = bleed(rgba[:, :, :3], rgba[:, :, 3]) if cut else rgba[:, :, :3]
