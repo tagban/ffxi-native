@@ -1037,6 +1037,7 @@ static void fly_tick(void)
 static void scene_tick(void)
 {
     fly_tick();
+    d3d8_set_rain(gamestate_rain());
     static float last[3], from[3], to[3];
     static int have_last, active, frames;
     static uint64_t t0;
@@ -1343,7 +1344,7 @@ static int xi_line(const char* t)
         return g_glide_mask = m & 7, rt_log("[recomp] glide: mask %d\n", g_glide_mask), 1;
     if (sscanf(t, "wposmode %d", &m) == 1)
         return g_wposmode = m, rt_log("[recomp] wposmode: %d (-1: as the server sends it)\n", m), 1;
-    rt_log("[recomp] //xi: lift <yalms> | pos | snap | diff | out <seconds> | glide <mask 1-7> | wposmode <n> | find <value> | findall | fx [on|off|strength <0-2>|mark <n>]\n");
+    rt_log("[recomp] //xi: lift <yalms> | pos | snap | diff | out <seconds> | glide <mask 1-7> | wposmode <n> | find <value> | findall | fx [on|off|strength <0-2>|mark <n>|rain <0-2, -1 the server>]\n");
     return 1;
 }
 

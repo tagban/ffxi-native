@@ -124,6 +124,11 @@ uint32_t gamestate_self_entity(void);
 uint32_t gamestate_self_id(void);
 /* Whether the server has the player flying (its wallhack flag): the client keeps their height */
 int gamestate_flying(void);
+/* The zone's weather as the server last said (LandSandBoat's xi::Weather: 6 rain, 7 squall, 12 snow,
+ * 14 thunder, 15 thunderstorms ...) */
+int gamestate_weather(void);
+/* How hard it rains: 0 dry, 0.5 rain or thunder, 1 a squall or thunderstorms */
+float gamestate_rain(void);
 /* Every packet the game sends (but its position reports) to the log for this long: learning them */
 void gamestate_log_out(double seconds);
 /* The game's table of entity pointers (meta/builds.json "entity_map"; 0 unknown): positions and

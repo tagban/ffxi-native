@@ -45,6 +45,7 @@ static void chat(const uint8_t* p, uint32_t size)
 }
 
 static void zone_in(const uint8_t* p, uint32_t size);
+static int g_weather; /* the zone's weather (0x00A at 0x68, 0x057 at 0x08): LandSandBoat's xi::Weather */
 static void group_attr(const uint8_t* p, uint32_t size);
 static void group_list(const uint8_t* p, uint32_t size);
 static void group_table(const uint8_t* p, uint32_t size);
@@ -88,6 +89,7 @@ void gamestate_feed(const uint8_t* buf, uint32_t len)
         switch (id)
         {
         case 0x00A: zone_in(buf + at, size); break;
+        case 0x057: g_weather = size >= 0x0A ? (int)(buf[at + 0x08] | buf[at + 0x09] << 8) : g_weather; break;
         case 0x0DF: group_attr(buf + at, size); break;
         case 0x0DD: group_list(buf + at, size); break;
         case 0x0C8: group_table(buf + at, size); break;
@@ -395,6 +397,21 @@ static int g_flying;
 int gamestate_flying(void)
 {
     return g_flying;
+}
+
+int gamestate_weather(void)
+{
+    return g_weather;
+}
+
+float gamestate_rain(void)
+{
+    switch (g_weather)
+    {
+    case 6: case 14: return 0.5f;  /* rain, thunder */
+    case 7: case 15: return 1.0f;  /* squall, thunderstorms */
+    default: return 0.0f;
+    }
 }
 
 static void self_status(const uint8_t* p, uint32_t size)
@@ -739,6 +756,7 @@ static void zone_in(const uint8_t* p, uint32_t size)
         return;
     g_self = u32(p + 0x04);
     g_zone = u16(p + 0x30);
+    g_weather = u16(p + 0x68);
     self_death(p[0x1F], NULL);
     zone_entities(p);
     want_map(g_zone, g_me.x, g_me.y, g_me.z);

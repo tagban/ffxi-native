@@ -36,3 +36,5 @@ void d3d8_backbuffer_size(uint32_t* w, uint32_t* h);
 void d3d8_texture_pack(const char* dir);
 /* //xi fx ...: effects of our own on some of the game's draws (d3d8.c fx_classify). 1 if it was one. */
 int d3d8_fx_command(const char* text);
+/* How hard it rains (0 dry, 0.5 rain, 1 a downpour), for the wet ground: from the server's weather */
+void d3d8_set_rain(float rain);

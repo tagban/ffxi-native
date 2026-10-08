@@ -8,5 +8,6 @@ enum
     GFX_FX_CLOUDS, /* the sky's cloud layers */
     GFX_FX_POOL,   /* still water */
     GFX_FX_FALLS,  /* falling water */
+    GFX_FX_WET,    /* a zone's ground and walls in the rain: darker, deeper colour, drops striking */
     GFX_FX_COUNT
 };

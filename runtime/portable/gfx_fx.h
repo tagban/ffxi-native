@@ -6,6 +6,9 @@
  *   GFX_FX_CLOUDS  the sky's cloud layers: shapes broken up by moving noise, lit tops, darker undersides
  *   GFX_FX_POOL    still water: the texture rippled, the light glinting off it
  *   GFX_FX_FALLS   falling water: streaks running down it
+ *   GFX_FX_WET     a zone's ground and walls in the rain: darker and deeper in colour as they soak, and
+ *                  drops striking - a small dark dot that fades over a second or so. GfxU.params2.w
+ *                  carries both: the wetness (0-1) plus 2 x the rain (0 none, 1 rain, 2 a downpour)
  *
  * The code is written once, in the shared subset of the three languages (float2..float4, fract, mix,
  * saturate, smoothstep), with a few #defines for GLSL and HLSL. */
@@ -103,6 +106,30 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "    float s = fx_fbm(float2(q.x * 24.0, q.y * 3.0 - fx_t * 1.2), float2(24.0, 3.0));\n"
             "    cur.rgb = saturate(cur.rgb * mix(1.0, 0.8 + 0.45 * s, fx_k));\n"
             "    cur.a = cur.a * mix(1.0, 0.75 + 0.5 * s, fx_k);\n"
+            "  }\n",
+            in);
+        break;
+    case GFX_FX_WET:
+        sb_printf(b,
+            "  {\n"
+            "    float lvl = floor(u.params2.w * 0.5), wet = u.params2.w - 2.0 * lvl, rain = lvl * 0.5;\n"
+            "    float3 c = cur.rgb;\n"
+            "    float l = dot(c, float3(0.299, 0.587, 0.114));\n"
+            /* soaked: deeper colour, less light given back */
+            "    c = mix(c, saturate(float3(l, l, l) + (c - float3(l, l, l)) * 1.25), wet * 0.6);\n"
+            "    c = c * (1.0 - 0.32 * wet);\n"
+            /* drops: a cell of the texture each, striking now and then somewhere in it */
+            "    float2 q = %s.t0.xy * 18.0;\n"
+            "    float2 cell = floor(q), f = fract(q);\n"
+            "    float h = fx_hash(cell);\n"
+            "    float period = 1.6 + 2.0 * h;\n"
+            "    float n = floor((fx_t + h * 13.0) / period);\n"
+            "    float age = (fx_t + h * 13.0) - n * period;\n"
+            "    float2 at = float2(fx_hash(cell + float2(n, 1.7)), fx_hash(cell + float2(2.3, n))) * 0.7 + 0.15;\n"
+            "    float hit = step(fx_hash(cell + float2(n * 0.37, n * 1.3)), rain);\n"
+            "    float drop = (1.0 - smoothstep(0.05, 0.1, length(f - at))) * exp(-age * 2.2) * hit;\n"
+            "    c = c * (1.0 - 0.38 * drop);\n"
+            "    cur.rgb = mix(cur.rgb, c, saturate(fx_k));\n"
             "  }\n",
             in);
         break;
