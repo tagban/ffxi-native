@@ -48,6 +48,9 @@ extern GuestFn rt_hook_chat_add;
 extern GuestFn rt_hook_menu_draw;
 extern GuestFn rt_hook_menu_drawn;
 #endif
+#ifdef FFXI_HOOK_INPUT_LINE
+extern GuestFn rt_hook_input_line;
+#endif
 
 XI_EXPORT const XiGameModule xi_game_module = {
     XI_GAME_ABI,
@@ -136,5 +139,10 @@ XI_EXPORT const XiGameModule xi_game_module = {
     FFXI_MENU_CLOSE,
 #else
     0,
+#endif
+#ifdef FFXI_HOOK_INPUT_LINE
+    &rt_hook_input_line,
+#else
+    NULL,
 #endif
 };

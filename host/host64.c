@@ -1368,6 +1368,32 @@ static int run_line(const char* line)
     return 1;
 }
 
+#if defined(FFXI_HOOK_INPUT_LINE)
+extern GuestFn rt_hook_input_line;
+#define INPUT_LINE_HOOK (&rt_hook_input_line)
+#elif defined(XI_SPLIT)
+#define INPUT_LINE_HOOK (xi_game->size >= offsetof(XiGameModule, hook_input_line) + sizeof(GuestFn*) ? xi_game->hook_input_line : NULL)
+#else
+#define INPUT_LINE_HOOK ((GuestFn*)NULL)
+#endif
+
+/* The entry of the game's parser of a typed line (cdecl, the line at esp+4): a //xi command typed in
+ * the game's own line, or run by a macro, is ours as much as one from the overlay's chat box; the
+ * game is left an empty line, which it ignores. */
+static void input_line_hook(Guest* g)
+{
+    uint32_t line = rd32(g->esp + 4);
+    if (!line || line >= 0xF0000000u || !gwin_is_committed(line))
+        return;
+    const char* s = (const char*)GUEST_PTR(line);
+    if (strncmp(s, "//xi ", 5))
+        return;
+    char copy[300];
+    snprintf(copy, sizeof copy, "%s", s + 5);
+    *(char*)GUEST_PTR(line) = 0;
+    xi_line(copy);
+}
+
 static void setup_packets(void)
 {
     if (INPUT_LINE)
@@ -1388,6 +1414,10 @@ static void setup_packets(void)
     GuestFn* ca = CHAT_ADD_HOOK;
     if (ca)
         *ca = chat_add;
+    GuestFn* il = INPUT_LINE_HOOK;
+    if (il)
+        *il = input_line_hook;
+    rt_log("[recomp] //xi commands: %s\n", il ? "from any typed line" : "from the overlay's chat box only (this game module has no input_line hook)");
     GuestFn* out = PACKET_OUT_HOOK;
     if (out)
         *out = packet_out;

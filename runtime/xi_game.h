@@ -72,6 +72,9 @@ typedef struct XiGameModule
     uint32_t party_display;
     /* the window manager's close-a-window-by-name ("menu_close", thiscall, the 16-character name) */
     uint32_t menu_close;
+    /* the entry of the game's parser of a typed line (hooks "input_line": cdecl, the line at esp+4):
+     * every line typed, from any box or macro, before the game reads it; NULL when the build has none */
+    GuestFn* hook_input_line;
 } XiGameModule;
 
 /* The one symbol a module exports. */

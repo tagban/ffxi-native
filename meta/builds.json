@@ -25,6 +25,7 @@
         "menu_close": "0x1015e920"
       },
       "hooks": {
+        "input_line": "0x10080dd0",
         "packet_in": "0x100dd803",
         "packet_out": "0x100dd5a0",
         "chat_add": "0x10127c10",
@@ -72,6 +73,7 @@
         "menu_close": "0x1015e910"
       },
       "hooks": {
+        "input_line": "0x10080dc0",
         "nameplate_scale": "0x100863d6",
         "packet_in": "0x100dd7f3",
         "packet_out": "0x100dd590",
