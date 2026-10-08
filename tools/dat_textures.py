@@ -5,7 +5,8 @@ pack can be made for a zone without walking through it with FFXI_TEXDUMP.
   python3 tools/dat_textures.py --game <FINAL FANTASY XI folder> --out <pngs> --zone 106 [--zone 107 ...]
   python3 tools/dat_textures.py --game <folder> --out <pngs> --dat ROM/0/123.DAT
 
-A zone's model DAT is file 100 + its number (zones below 256), found through VTABLE/FTABLE. Its images
+A zone's model DAT is file 100 + its number, found through VTABLE/FTABLE (and each expansion's own
+tables in its ROMn folder). Its images
 are chunks of type 0x20: a flag byte, a 16-character name, a BITMAPINFOHEADER, and for the DXT ones
 (flag 0xA1) the four-character code (stored backwards), the data's size, a word, and the blocks - the
 same bytes the game uploads, so their hash is the renderer's. Other kinds (palettes the game turns
@@ -28,16 +29,23 @@ DXT_FOURCC = {b'1TXD': FOURCC(b'DXT1'), b'3TXD': FOURCC(b'DXT3'), b'5TXD': FOURC
 
 
 def dat_path(game, fid):
+    """The file id's DAT: through VTABLE/FTABLE for the base game's ROM, and each expansion's own
+    ROMn/VTABLEn.DAT and FTABLEn.DAT for its ROMn (the base table does not list them)."""
     vt = open(os.path.join(game, 'VTABLE.DAT'), 'rb').read()
-    rom = vt[fid] if fid < len(vt) else 0
-    if not rom:
-        return None
-    if rom == 1:
-        ft, base = open(os.path.join(game, 'FTABLE.DAT'), 'rb').read(), 'ROM'
-    else:
-        ft, base = open(os.path.join(game, f'ROM{rom}', f'FTABLE{rom}.DAT'), 'rb').read(), f'ROM{rom}'
-    v = struct.unpack_from('<H', ft, 2 * fid)[0]
-    return os.path.join(game, base, str(v >> 7), f'{v & 127}.DAT')
+    if fid < len(vt) and vt[fid] == 1:
+        ft = open(os.path.join(game, 'FTABLE.DAT'), 'rb').read()
+        v = struct.unpack_from('<H', ft, 2 * fid)[0]
+        return os.path.join(game, 'ROM', str(v >> 7), f'{v & 127}.DAT')
+    for n in range(2, 10):
+        vp = os.path.join(game, f'ROM{n}', f'VTABLE{n}.DAT')
+        if not os.path.exists(vp):
+            continue
+        vt = open(vp, 'rb').read()
+        if fid < len(vt) and vt[fid] == n:
+            ft = open(os.path.join(game, f'ROM{n}', f'FTABLE{n}.DAT'), 'rb').read()
+            v = struct.unpack_from('<H', ft, 2 * fid)[0]
+            return os.path.join(game, f'ROM{n}', str(v >> 7), f'{v & 127}.DAT')
+    return None
 
 
 def fnv1a(b):
@@ -82,7 +90,7 @@ def main():
     ap.add_argument('--dat', action='append', default=[])
     ap.add_argument('--min', type=int, default=64)
     a = ap.parse_args()
-    dats = [os.path.join(a.game, d) for d in a.dat] + [p for p in (dat_path(a.game, 100 + z) for z in a.zone if z < 256) if p]
+    dats = [os.path.join(a.game, d) for d in a.dat] + [p for p in (dat_path(a.game, 100 + z) for z in a.zone) if p]
     os.makedirs(a.out, exist_ok=True)
     seen, names = set(), []
     for d in dats:
