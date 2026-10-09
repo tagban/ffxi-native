@@ -3491,8 +3491,11 @@ static struct
 /* the game's code that draws a zone's creatures - birds, fish, butterflies - alike (Valkurm Dunes,
  * Kazham, 2026-10-09): one above the camera is a bird, one below a fish */
 
-void d3d8_set_creatures(float birds, float fish)
+static int g_flying_fish; /* fish copies spread as birds do: through the air (a player's wish) */
+
+void d3d8_set_creatures(float birds, float fish, int flying_fish)
 {
+    g_flying_fish = flying_fish;
     g_creature[0].count = birds < 1.0f ? 1.0f : birds;
     g_creature[1].count = fish < 1.0f ? 1.0f : fish;
 }
@@ -3538,14 +3541,17 @@ static void creature_copies(GfxDraw* d)
     /* the more there are, the wider they spread (thousands fill the sky, not one spot); a frame draws
      * at most so many copies in all, so the game keeps its pace */
     float spread = sqrtf(g_creature[which].count / 10.0f);
-    spread = spread < 1.0f ? 1.0f : spread > (which ? 1.25f : 8.0f) ? (which ? 1.25f : 8.0f) : spread; /* fish keep to their water */
+    int schools = which && !g_flying_fish; /* fish keep to their water - unless they fly */
+    spread = spread < 1.0f ? 1.0f : spread > (schools ? 1.25f : 8.0f) ? (schools ? 1.25f : 8.0f) : spread;
+    const float reach = which && g_flying_fish ? g_creature[0].reach : g_creature[which].reach;
+    const float rise = which && g_flying_fish ? g_creature[0].rise : g_creature[which].rise;
     for (int k = 1; k <= copies && k <= 2000 && g_creature_budget > 0; ++k, --g_creature_budget)
     {
         float a = hash01(k * 3u + 1u) * 6.2831853f + g_wx.t * 0.03f * (hash01(k * 7u + 5u) - 0.5f);
-        float r = g_creature[which].reach * spread * (0.15f + 0.85f * sqrtf(hash01(k * 11u + 2u)));
+        float r = reach * spread * (0.15f + 0.85f * sqrtf(hash01(k * 11u + 2u)));
         float m[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
         m[12] = cosf(a) * r, m[14] = sinf(a) * r;
-        m[13] = (hash01(k * 13u + 9u) - 0.5f) * g_creature[which].rise * (1.0f + 0.5f * (spread - 1.0f));
+        m[13] = (hash01(k * 13u + 9u) - 0.5f) * rise * (1.0f + 0.5f * (spread - 1.0f)) - (which && g_flying_fish ? rise * 0.6f : 0.0f);
         world_changed(d, m);
         gfx_draw(d);
     }

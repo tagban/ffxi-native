@@ -59,7 +59,7 @@ void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float (*m)[16]);
 void d3d8_set_entity_others(int n, const float (*pos)[3]);
 /* How many of the zone's birds and fish (1: as the game has them), and whether this build knows which
  * draws they are (0 birds, 1 fish) */
-void d3d8_set_creatures(float birds, float fish);
+void d3d8_set_creatures(float birds, float fish, int flying_fish);
 int d3d8_creatures_known(int which);
 /* The cinematic camera (d3d8.c): //xi cam record|stop|add|play|loop|clear|pace <x>|smooth <s>|ui|save <name>|load <name>
  * (1 if it was one); a tour round a point; whether it flies, and hides the interfaces; its settings

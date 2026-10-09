@@ -30,7 +30,7 @@ extern "C" void d3d8_set_water(int on, const float* v);
 extern "C" void d3d8_set_look(int sky, const float* aurora, int world, int filter, const float* tint);
 extern "C" void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float (*m)[16]);
 extern "C" void d3d8_set_entity_others(int n, const float (*pos)[3]);
-extern "C" void d3d8_set_creatures(float birds, float fish);
+extern "C" void d3d8_set_creatures(float birds, float fish, int flying_fish);
 extern "C" int d3d8_creatures_known(int which);
 extern "C" int d3d8_cam_command(const char* text);
 extern "C" int d3d8_cam_playing(void);
@@ -199,6 +199,7 @@ static struct
     float fun_filter_c[4] = { 1.0f, 0.78f, 0.31f, 0.6f };
     float fun_birds = 1.0f, fun_fish = 1.0f; /* how many of the zone's birds and fish (1 as the game has them) */
     bool fun_ships = true;                    /* ships rock at the dock */
+    bool fun_flying_fish = false;             /* the fish's copies through the air, as the birds' */
     float cam_pace = 0.5f, cam_smooth = 1.0f; /* the cinematic camera: how fast it flies the path, smoothing (seconds) */
     bool cam_hide = true, cam_bars = true;    /* the interfaces gone while it flies; black bars, as a film */
     float fun_ships_k = 1.0f;
@@ -879,6 +880,7 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "fun_birds=%f", &f) == 1 && f >= 1 && f <= 2000) g_set.fun_birds = f;
     else if (sscanf(line, "fun_fish=%f", &f) == 1 && f >= 1 && f <= 2000) g_set.fun_fish = f;
     else if (sscanf(line, "fun_ships=%d", &v) == 1) g_set.fun_ships = v != 0;
+    else if (sscanf(line, "fun_flying_fish=%d", &v) == 1) g_set.fun_flying_fish = v != 0;
     else if (sscanf(line, "cam_pace=%f", &f) == 1 && f >= 0.05f && f <= 4) g_set.cam_pace = f;
     else if (sscanf(line, "cam_smooth=%f", &f) == 1 && f >= 0 && f <= 5) g_set.cam_smooth = f;
     else if (sscanf(line, "cam_hide=%d", &v) == 1) g_set.cam_hide = v != 0;
@@ -921,6 +923,7 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("fun_server=%d\nfun_aurora=%d\nfun_world=%d\nfun_filter=%d\n", g_set.fun_server, g_set.fun_aurora, g_set.fun_world,
         g_set.fun_filter);
     out->appendf("cam_pace=%g\ncam_smooth=%g\ncam_hide=%d\ncam_bars=%d\n", g_set.cam_pace, g_set.cam_smooth, g_set.cam_hide, g_set.cam_bars);
+    out->appendf("fun_flying_fish=%d\n", g_set.fun_flying_fish);
     out->appendf("fun_birds=%g\nfun_fish=%g\nfun_ships=%d\nfun_ships_k=%g\n", g_set.fun_birds, g_set.fun_fish, g_set.fun_ships,
         g_set.fun_ships_k);
     const float *fa = g_set.fun_aurora_c, *ff = g_set.fun_filter_c;
@@ -1137,7 +1140,7 @@ static void entity_looks(void)
         }
         d3d8_set_entity_others(no, others);
     }
-    d3d8_set_creatures(g_set.fun_birds, g_set.fun_fish);
+    d3d8_set_creatures(g_set.fun_birds, g_set.fun_fish, g_set.fun_flying_fish);
 }
 
 static void graphics_window(void)
@@ -1325,6 +1328,7 @@ static void graphics_window(void)
             ImGui::SetNextItemWidth(-90);
             dirty |= ImGui::SliderFloat("Fish", &g_set.fun_fish, 1.0f, 2000.0f, g_set.fun_fish >= 300.0f ? "x%.0f (insanity)" : "x%.0f",
                 ImGuiSliderFlags_Logarithmic);
+            dirty |= ImGui::Checkbox("Flying fish (the fish's copies take to the air)", &g_set.fun_flying_fish);
             ImGui::TextDisabled("The zone's own creatures (birds, butterflies, fish): those above the camera count as birds, those below as fish.");
             ImGui::EndTabItem();
         }
