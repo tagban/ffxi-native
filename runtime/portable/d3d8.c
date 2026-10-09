@@ -3642,6 +3642,16 @@ static void fx_note_other(int rule, const uint32_t* callers, int n)
         }
 }
 
+/* the view a draw's effect reads the world's directions from: the scene's camera (the world's own view)
+ * for the sky and its clouds, which the game draws with views of their own (turned with the camera, or
+ * not at all: their directions were the screen's, and the stars went round with the camera) */
+static const float* fx_view(int fx)
+{
+    if ((fx == GFX_FX_SKY || fx == GFX_FX_CLOUDS) && g_scene.s.view[15] != 0.0f)
+        return g_scene.s.view;
+    return g_dev.cur.xf[2];
+}
+
 static void fx_classify(GfxDraw* d)
 {
     d->fs.fx = GFX_FX_NONE;
@@ -3692,7 +3702,7 @@ static void fx_classify(GfxDraw* d)
                     return;
                 d->u.fxp[4][0] = g_sky_stars, d->u.fxp[4][1] = g_sky_shooting ? 1.0f : 0.0f;
                 memcpy(d->u.fxp[3], g_look.aurora, sizeof g_look.aurora); /* the aurora, on the whole sky */
-                const float* V = g_dev.cur.xf[2];
+                const float* V = fx_view(r->fx);
                 float ex = V[0], ey = V[1], ez = V[2], el = sqrtf(ex * ex + ey * ey + ez * ez);
                 el = el > 0.0f ? 1.0f / el : 0.0f;
                 d->u.fxp[5][0] = ex * el, d->u.fxp[5][1] = ey * el, d->u.fxp[5][2] = ez * el;
@@ -3700,7 +3710,7 @@ static void fx_classify(GfxDraw* d)
             if (r->fx == GFX_FX_CLOUDS && g_look.aurora[0] > 0.0f && !g_sky_seen)
             {
                 memcpy(d->u.fxp[4], g_look.aurora, sizeof g_look.aurora);
-                const float* V = g_dev.cur.xf[2]; /* east (the world's +x) in eye space */
+                const float* V = fx_view(r->fx); /* east (the world's +x) in eye space */
                 float ex = V[0], ey = V[1], ez = V[2], el = sqrtf(ex * ex + ey * ey + ez * ez);
                 el = el > 0.0f ? 1.0f / el : 0.0f;
                 d->u.fxp[5][0] = ex * el, d->u.fxp[5][1] = ey * el, d->u.fxp[5][2] = ez * el;
@@ -3724,7 +3734,7 @@ static void fx_classify(GfxDraw* d)
             /* a surface's tilt from its eye depth (gfx.h fxp): the projection's scale and the viewport's
              * size, and up (the game's world has heights more negative higher: up is -y) in eye space */
             const float* P = g_dev.cur.xf[3];
-            const float* V = g_dev.cur.xf[2];
+            const float* V = fx_view(r->fx);
             float vw = d->vp[2] ? (float)d->vp[2] : 1.0f, vh = d->vp[3] ? (float)d->vp[3] : 1.0f;
             d->u.fxp[2][0] = (float)d->vp[0] + vw * 0.5f, d->u.fxp[2][1] = (float)d->vp[1] + vh * 0.5f;
             d->u.fxp[0][0] = P[0] != 0.0f ? 2.0f / (vw * P[0]) : 0.0f;
