@@ -3264,7 +3264,8 @@ typedef struct FxRule
     uint8_t dst;     /* D3DBLEND destination, 0 any */
     uint8_t aop;     /* the first stage's alpha operation, 0 any */
     uint8_t fx;
-    uint8_t notex;   /* untextured draws too (the effect reads no texture coordinates) */
+    uint8_t notex;   /* 0 textured draws only, 1 untextured too (the effect reads no texture coordinates),
+                      * 2 untextured only */
     const char* name;
 } FxRule;
 
@@ -3273,8 +3274,9 @@ static const FxRule g_fx_rules[] = {
     /* water, still and falling (its slope, in the shader): ponds, the sea, falls, the ripples' sheets -
      * the effects' code draws them all fogged (North Gustaberg, Valkurm Dunes, 2026-10-09) */
     { 0x10183c31u, 1, 0, 0, GFX_FX_POOL, 1, "water (still and falling)" },
-    /* the sea off a coast: the zone's own flat tiles, 40 yalms a side, untextured (Selbina, 2026-10-09) */
-    { 0x1017dd9bu, -1, 0, 0, GFX_FX_POOL, 1, "the sea's tiles" },
+    /* the sea off a coast: the zone's own flat tiles, 40 yalms a side, untextured (Selbina, 2026-10-09);
+     * the same code draws the zone's trees, grass and props, textured: those are not water */
+    { 0x1017dd9bu, -1, 0, 0, GFX_FX_POOL, 2, "the sea's tiles" },
     { 0x1003d8f2u, 0, 0, 0, GFX_FX_SKY, 0, "the sky's dome (stars at night)" },
     { 0x1017dc92u, -1, 0, 0, GFX_FX_WET, 0, "wet ground and walls (in the rain)" }, /* the zone's own meshes */
 };
@@ -3736,7 +3738,7 @@ static void fx_classify(GfxDraw* d)
     {
         const FxRule* r = &g_fx_rules[i];
         if ((r->fog >= 0 && !d->fs.fog != !r->fog) || (r->dst && d->pipe.dst != r->dst) || (r->aop && d->fs.st[0].aop != r->aop) ||
-            (!textured && !r->notex))
+            (!textured && !r->notex) || (textured && r->notex == 2))
             continue;
         if (ncallers < 0)
             ncallers = fx_callers(callers);
