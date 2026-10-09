@@ -27,6 +27,7 @@ extern "C" void d3d8_set_weather_effects(int rain, int fog, int heat, int lightn
 extern "C" void d3d8_set_sky(float stars, int shooting, float bright);
 extern "C" void d3d8_falling(float* rain, float* snow);
 extern "C" void d3d8_set_water(int on, const float* v);
+extern "C" void d3d8_set_water_body(const float* v);
 extern "C" void d3d8_set_look(int sky, const float* aurora, int world, int filter, const float* tint);
 extern "C" void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float (*m)[16]);
 extern "C" void d3d8_set_entity_others(int n, const float (*pos)[3]);
@@ -194,6 +195,7 @@ static struct
      * sky reflection, glint, glint size */
     bool water = true;
     float water_v[9] = { 1.0f, 1.0f, 1.0f, 35.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+    float water_body[4] = { 0.75f, 0.03f, 0.10f, 0.14f }; /* how opaque, the deep color */
     /* fun (d3d8_set_look): the server's events (!skyfx) over the player's own look, or not; an aurora
      * (r, g, b, strength), wireframe (0 off, 1 the zone, 2 everything), a filter (0 none, 1 grey, 2 sepia,
      * 3 a color, 4 inverted, 5 night vision; r, g, b, amount) */
@@ -899,6 +901,12 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
         if (sscanf(line + 13, "%f,%f,%f,%f", &c[0], &c[1], &c[2], &c[3]) == 4)
             memcpy(line[4] == 'a' ? g_set.fun_aurora_c : g_set.fun_filter_c, c, sizeof c);
     }
+    else if (!strncmp(line, "water_body=", 11))
+    {
+        float w[4];
+        if (sscanf(line + 11, "%f,%f,%f,%f", &w[0], &w[1], &w[2], &w[3]) == 4)
+            memcpy(g_set.water_body, w, sizeof w);
+    }
     else if (!strncmp(line, "water_v=", 8))
     {
         float w[9];
@@ -936,6 +944,7 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     const float *fa = g_set.fun_aurora_c, *ff = g_set.fun_filter_c;
     out->appendf("fun_aurora_c=%.3f,%.3f,%.3f,%.3f\nfun_filter_c=%.3f,%.3f,%.3f,%.3f\n", fa[0], fa[1], fa[2], fa[3], ff[0], ff[1], ff[2],
         ff[3]);
+    out->appendf("water_body=%.3f,%.3f,%.3f,%.3f\n", g_set.water_body[0], g_set.water_body[1], g_set.water_body[2], g_set.water_body[3]);
     const float* w = g_set.water_v;
     out->appendf("water_v=%g,%g,%g,%g,%g,%g,%g,%g,%g\n", w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8]);
     out->appendf("win_bg=%.3f,%.3f,%.3f,%.3f\nchat_bg=%.3f,%.3f,%.3f,%.3f\n", g_set.win_bg[0], g_set.win_bg[1], g_set.win_bg[2],
@@ -1220,6 +1229,9 @@ static void graphics_window(void)
             ImGui::BeginDisabled(!g_set.water);
             float* w = g_set.water_v;
             ImGui::PushItemWidth(-130);
+            dirty |= ImGui::SliderFloat("Opacity", &g_set.water_body[0], 0.0f, 1.0f, g_set.water_body[0] <= 0.0f ? "the game's" : "%.2f");
+            ImGui::SameLine();
+            dirty |= ImGui::ColorEdit3("Deep color", &g_set.water_body[1], ImGuiColorEditFlags_NoInputs);
             dirty |= ImGui::SliderFloat("Blue to green", &w[4], -1.0f, 1.0f, w[4] == 0.0f ? "the game's" : "%.2f");
             dirty |= ImGui::SliderFloat("Brightness", &w[5], 0.5f, 2.0f, "%.2f");
             dirty |= ImGui::SliderFloat("Wave height", &w[0], 0.0f, 3.0f, "%.2f");
@@ -1232,8 +1244,8 @@ static void graphics_window(void)
             ImGui::PopItemWidth();
             if (ImGui::SmallButton("Defaults##water"))
             {
-                const float d[9] = { 1.0f, 1.0f, 1.0f, 35.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f };
-                memcpy(w, d, sizeof d), dirty = true;
+                const float d[9] = { 1.0f, 1.0f, 1.0f, 35.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f }, b[4] = { 0.75f, 0.03f, 0.10f, 0.14f };
+                memcpy(w, d, sizeof d), memcpy(g_set.water_body, b, sizeof b), dirty = true;
             }
             ImGui::EndDisabled();
             ImGui::EndTabItem();
@@ -3665,6 +3677,7 @@ extern "C" void overlay_build_frame(void)
     d3d8_set_weather_effects(g_set.wx_rain, g_set.wx_fog, g_set.wx_heat, g_set.wx_lightning, g_set.wx_snow);
     d3d8_set_sky(g_set.sky_stars, g_set.sky_shooting, g_set.sky_bright);
     d3d8_set_water(g_set.water, g_set.water_v);
+    d3d8_set_water_body(g_set.water_body);
     entity_looks();
     precipitation();
     {

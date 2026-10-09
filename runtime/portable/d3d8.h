@@ -47,6 +47,8 @@ void d3d8_set_sky(float stars, int shooting, float bright);
 void d3d8_falling(float* rain, float* snow);
 /* Still water (the overlay's settings): on, and 9 values (d3d8.c g_water) */
 void d3d8_set_water(int on, const float* v);
+/* The water's body (the overlay's): how opaque (0-1), and its deep color r, g, b */
+void d3d8_set_water_body(const float* v);
 /* The look (MogHouse's !skyfx, or the player's): sky 1 an aurora (aurora: r, g, b, strength, 0-1);
  * world 1 the zone's meshes in wireframe, 2 everything; filter 1 grey, 2 sepia, 3 a color, 4 inverted,
  * 5 night vision (tint: r, g, b, amount, 0-1) */

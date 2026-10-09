@@ -253,7 +253,11 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "    float3 hor = u.fogcolor.rgb;\n"
             "    float3 sky = mix(hor, hor * float3(0.62, 0.76, 0.98) + float3(0.02, 0.05, 0.12), sqrt(e));\n"
             "    float tint = u.fxp[5].x;\n"
-            "    float3 c = cur.rgb * u.fxp[5].y;\n"
+            /* the water's own body: the game's sheets are thin (the floor under them shows through), so
+             * ours is as opaque as asked, its color the game's deepened toward the deep color */
+            "    float op = u.fxp[11].x;\n"
+            "    float3 body = mix(cur.rgb, u.fxp[11].yzw, 0.55 * op);\n"
+            "    float3 c = body * u.fxp[5].y;\n"
             "    float l = dot(c, float3(0.299, 0.587, 0.114));\n"
             "    float3 hue = tint < 0.0 ? float3(0.35, 0.68, 1.2) : float3(0.3, 1.05, 0.78);\n"
             "    c = mix(c, hue * (l * 1.3), abs(tint) * 0.7);\n"
@@ -266,7 +270,7 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             /* //xi fx mark 9: the water as the effect sees it - flat blue, steep yellow, the rest grey */
             "    if (u.params2.z < 0.0) c = fxw_flat > 0.5 ? float3(0.1, 0.4, 1.0) : fxw_steep > 0.5 ? float3(1.0, 0.9, 0.1) : float3(0.5, 0.5, 0.5), kw = 0.8;\n"
             "    cur.rgb = mix(cur.rgb, saturate(c), kw);\n"
-            "    cur.a = mix(cur.a, max(cur.a, saturate(k * 1.2 + sp)), kw);\n"
+            "    cur.a = mix(cur.a, max(cur.a, saturate(max(op * (0.8 + 0.2 * fres), k * 1.2 + sp))), kw);\n"
             /* steep: the falls' streaks running down it */
             "    float st = fx_fbm(float2(fxw_fall.x, fxw_fall.y + fx_t * 1.2), float2(4096.0, 4096.0));\n"
             "    float kf = fx_k * fxw_steep;\n"

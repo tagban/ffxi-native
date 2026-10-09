@@ -3466,6 +3466,13 @@ static int fx_callers(uint32_t* out);
  * blue to green (-1..1, 0 the game's), brightness, sky reflection, glint, glint size */
 static int g_water_on = 1;
 static float g_water[9] = { 1.0f, 1.0f, 1.0f, 35.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+static float g_water_body[4] = { 0.75f, 0.03f, 0.10f, 0.14f }; /* opacity, the deep color */
+
+void d3d8_set_water_body(const float* v)
+{
+    if (v)
+        memcpy(g_water_body, v, sizeof g_water_body);
+}
 
 void d3d8_set_water(int on, const float* v)
 {
@@ -4048,6 +4055,7 @@ static void fx_classify(GfxDraw* d)
                 d->u.fxp[4][3] = g_water[3] * 3.14159265f / 180.0f;
                 d->u.fxp[5][0] = g_water[4], d->u.fxp[5][1] = g_water[5], d->u.fxp[5][2] = g_water[6], d->u.fxp[5][3] = g_water[7];
                 d->u.fxp[2][3] = g_water[8];
+                memcpy(d->u.fxp[11], g_water_body, sizeof g_water_body);
             }
             d->fs.fx = r->fx;
             d->u.params2[1] = (float)fmod((double)rt_monotonic_ns() / 1e9, 4096.0);

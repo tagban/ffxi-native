@@ -24,7 +24,7 @@
 #include "gfx_glsl.h"
 #include "gfx_fx.h"
 
-_Static_assert(sizeof(GfxU) == 3712, "GfxU must match the GLSL block CU");
+_Static_assert(sizeof(GfxU) == 3728, "GfxU must match the GLSL block CU");
 
 void sb_printf(Sb* b, const char* fmt, ...)
 {
@@ -62,7 +62,7 @@ static const char PRELUDE[] =
     "  ivec4 offset[5];\n"
     "  Light light[8];\n"
     "  vec4 vsc[96];\n"
-    "  vec4 psc[8];\n  vec4 fxp[11];\n"
+    "  vec4 psc[8];\n  vec4 fxp[12];\n"
     "} u;\n"
     "#ifdef VERTEX\n"
     "uniform usamplerBuffer s0, s1, s2, s3;\n"

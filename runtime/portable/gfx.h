@@ -180,8 +180,9 @@ typedef struct GfxU
      *   [6..8] a color filter on every draw but the interface's: each row the change to r, g, b
      *       (row . color + w), all 0 none
      *   [9] water: the world's east in eye space, the camera's place along it
-     *   [10] water: the world's north in eye space, the camera's place along it */
-    float fxp[11][4];
+     *   [10] water: the world's north in eye space, the camera's place along it
+     *   [11] water: how opaque (0 the game's sheets as they are, 1 solid), and its deep color r, g, b */
+    float fxp[12][4];
 } GfxU;
 
 typedef struct GfxSampler
