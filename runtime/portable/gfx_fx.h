@@ -4,13 +4,19 @@
  *
  *   GFX_FX_MARK    painted magenta: //xi fx mark, to see which draws a rule takes
  *   GFX_FX_CLOUDS  the sky's cloud layers: shapes broken up by moving noise, lit tops, darker undersides
- *   GFX_FX_POOL    still water: the texture rippled, the light glinting off it
+ *   GFX_FX_POOL    still water: waves (whole waves to the texture's repeat, so they meet where its
+ *                  pieces do, and fine ripples), the sky mirrored by them - far more at a glancing look
+ *                  (Fresnel) - and the sun's or moon's glint; the game's water seen through them, tinted
+ *                  as the player likes (GfxU.fxp[4], [5])
  *   GFX_FX_FALLS   falling water: streaks running down it
  *   GFX_FX_WET     a zone's ground and walls in the rain: darker and deeper in colour as they soak,
  *                  shiny (the sky mirrored, most at a glancing look and on the ground: the surface's
  *                  tilt from its eye depth's change across the pixel, GfxU.fxp), and drops striking the
  *                  ground - a small dark dot that fades over a second or so. GfxU.params2.w carries the
  *                  wetness (0-1) plus 2 x the rain (0 none, 1 rain, 2 a downpour)
+ *
+ * And the weather on every fogged draw (gfx_fx_weather_*): its fog, nearer (GfxU.fxp[0].w), and the
+ * heat's shimmer, the textures read a pixel or two aside in rising bands, the more the farther (.z).
  *
  * The code is written once, in the shared subset of the three languages (float2..float4, fract, mix,
  * saturate, smoothstep), with a few #defines for GLSL and HLSL. */
@@ -58,8 +64,9 @@ static void gfx_fx_functions(Sb* b, int fx, int lang)
         "}\n");
 }
 
-/* At the top of the fragment function: the time and strength, and for still water the ripple that
- * moves where the first texture is read (gfx_fx_coord). `in` is the inputs' name. */
+/* At the top of the fragment function: the time and strength, and for still water its waves: the
+ * surface's normal (up, tilted by them) and the look at it, and the ripple that moves where the first
+ * texture is read (gfx_fx_coord). `in` is the inputs' name. */
 static void gfx_fx_begin(Sb* b, int fx, const char* in)
 {
     if (fx < GFX_FX_CLOUDS)
@@ -67,15 +74,94 @@ static void gfx_fx_begin(Sb* b, int fx, const char* in)
     sb_printf(b, "  float fx_t = u.params2.y, fx_k = u.params2.z;\n");
     if (fx == GFX_FX_POOL)
         sb_printf(b,
-            "  float2 fx_rip = (float2(fx_fbm(%s.t0.xy * 7.0 + float2(fx_t * 0.07, 0.0), float2(7.0, 7.0)),\n"
-            "                         fx_fbm(%s.t0.xy * 7.0 + float2(5.2, 1.3 - fx_t * 0.06), float2(7.0, 7.0))) - 0.5) * (0.03 * fx_k);\n",
-            in, in);
+            "  float3 fxw_n, fxw_v;\n"
+            "  float2 fx_rip;\n"
+            "  {\n"
+            "    float2 uv = %s.t0.xy;\n"
+            "    float ez = %s.ez;\n"
+            /* the point in eye space, from its pixel and depth */
+            "    float3 p = float3((%s.pos.x - u.fxp[2].x) * u.fxp[0].x * ez, -(%s.pos.y - u.fxp[2].y) * fx_dy * u.fxp[0].y * ez, ez);\n"
+            "    float3 up = u.fxp[1].xyz;\n"
+            /* which ways the texture runs across the water (its cotangent frame) */
+            "    float3 dp1 = dfdx(p), dp2 = dfdy(p);\n"
+            "    float2 du1 = dfdx(uv), du2 = dfdy(uv);\n"
+            "    float3 c2 = cross(dp2, up), c1 = cross(up, dp1);\n"
+            "    float3 T = c2 * du1.x + c1 * du2.x, B = c2 * du1.y + c1 * du2.y;\n"
+            "    float im = 1.0 / sqrt(max(max(dot(T, T), dot(B, B)), 1e-20));\n"
+            "    T = T * im; B = B * im;\n"
+            "    float spd = u.fxp[4].y, sz = max(u.fxp[4].z, 0.05), dir = u.fxp[4].w;\n"
+            /* five long waves, near the direction the player picked: whole waves to the texture's repeat */
+            "    float2 g = float2(0.0, 0.0);\n"
+            "    for (int i = 0; i < 5; ++i) {\n"
+            "      float fi = float(i);\n"
+            "      float a = dir + (fract(fi * 0.618) - 0.5) * 1.4;\n"
+            "      float2 K = floor(float2(cos(a), sin(a)) * ((3.0 / sz) * (1.0 + fi * 0.9)) + 0.5);\n"
+            "      float kl = max(length(K), 1e-3);\n"
+            "      float ph = dot(K, uv) * 6.2831853 - fx_t * spd * (1.0 + sqrt(kl) * 0.6);\n"
+            "      g = g + (K / kl) * (cos(ph) * step(0.5, kl) / (1.0 + fi * 0.5));\n"
+            "    }\n"
+            /* and fine ripples drifting over them */
+            "    float per = max(floor(12.0 / sz + 0.5), 1.0);\n"
+            "    float2 q = uv * per + float2(fx_t * 0.06, -fx_t * 0.045) * spd;\n"
+            "    float n0 = fx_fbm(q, float2(per, per)), nx = fx_fbm(q + float2(0.12, 0.0), float2(per, per)),\n"
+            "          ny = fx_fbm(q + float2(0.0, 0.12), float2(per, per));\n"
+            "    g = g * 0.5 + float2(nx - n0, ny - n0) * (1.0 / 0.12) * 0.4;\n"
+            "    float2 s = g * u.fxp[4].x * 0.25;\n"
+            "    fxw_n = normalize(up - T * s.x - B * s.y);\n"
+            "    fxw_v = normalize(p + float3(0.0, 0.0, 1e-4));\n"
+            "    fx_rip = s * (0.012 * fx_k);\n"
+            "  }\n",
+            in, in, in, in);
 }
 
 /* The first stage's texture coordinate, rippled for still water. */
 static const char* gfx_fx_coord(int fx, int stage)
 {
     return fx == GFX_FX_POOL && stage == 0 ? " + fx_rip" : "";
+}
+
+/* --- the weather, on every fogged draw ------------------------------------------------------------------- */
+/* Before the fragment function: reading a texture a few pixels aside (the heat's shimmer). */
+static void gfx_fx_weather_functions(Sb* b, int fog, int lang)
+{
+    if (!fog)
+        return;
+    if (lang == GFX_FX_GLSL)
+        sb_printf(b, "vec2 fxw_uv(vec2 c, vec2 s) { return c + dFdx(c) * s.x + dFdy(c) * s.y; }\n");
+    else if (lang == GFX_FX_HLSL)
+        sb_printf(b, "float2 fxw_uv(float2 c, float2 s) { return c + ddx(c) * s.x + ddy(c) * s.y; }\n");
+    else
+        sb_printf(b, "float2 fxw_uv(float2 c, float2 s) { return c + dfdx(c) * s.x + dfdy(c) * s.y; }\n");
+}
+
+/* At the top: how far aside, in pixels (0 without heat): rising bands, wavering, more far away. */
+static void gfx_fx_weather_begin(Sb* b, int fog, int lang, const char* in)
+{
+    if (!fog)
+        return;
+    const char* v2 = lang == GFX_FX_GLSL ? "vec2" : "float2";
+    sb_printf(b,
+        "  %s fxw_p = %s.pos.xy / max(u.fxp[2].z, 0.25);\n"
+        "  float fxw_d = smoothstep(10.0, 55.0, abs(%s.ez)) * u.fxp[0].z * max(u.fxp[2].z, 0.25);\n"
+        "  %s fxw_s = %s(sin(fxw_p.y * 0.23 + u.fxp[1].w * 6.0 + sin(fxw_p.x * 0.031 + u.fxp[1].w * 1.3) * 2.5) * 1.5,\n"
+        "                 sin(fxw_p.y * 0.11 + u.fxp[1].w * 4.0 + fxw_p.x * 0.047) * 0.8) * fxw_d;\n",
+        v2, in, in, v2, v2);
+}
+
+/* A texture coordinate (an expression) read where the heat moves it: into out. */
+static const char* gfx_fx_weather_uv(char* out, size_t n, int fog, const char* coord)
+{
+    if (fog)
+        snprintf(out, n, "fxw_uv(%s, fxw_s)", coord);
+    else
+        snprintf(out, n, "%s", coord);
+    return out;
+}
+
+/* The fog factor f (1 clear) thinned by the weather's fog, by the eye depth: after the game's own. */
+static void gfx_fx_weather_fog(Sb* b, const char* in)
+{
+    sb_printf(b, "  f = f * exp(-abs(%s.ez) * u.fxp[0].w);\n", in);
 }
 
 /* After the texture stages, on `cur` (the color the game's stages made). */
@@ -93,17 +179,35 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "    float c = saturate(n * 0.7 + d * 0.3);\n"
             "    cur.a = cur.a * mix(1.0, smoothstep(0.3, 0.72, c) * 1.25, fx_k);\n"
             "    cur.rgb = saturate(cur.rgb * mix(1.0, 0.78 + 0.34 * smoothstep(0.35, 0.8, c), fx_k));\n"
+            /* in a fog (the weather's), the clouds all but lost in it */
+            "    cur.rgb = mix(cur.rgb, u.fogcolor.rgb, saturate(u.fxp[0].w * 15.0));\n"
             "  }\n",
             in);
         break;
     case GFX_FX_POOL:
         sb_printf(b,
             "  {\n"
-            "    float w = fx_fbm(%s.t0.xy * 11.0 + float2(fx_t * 0.09, -fx_t * 0.07), float2(11.0, 11.0));\n"
-            "    float g = pow(saturate(w * 1.8 - 0.95), 3.0);\n"
-            "    cur.rgb = saturate(cur.rgb * mix(1.0, 0.85 + 0.25 * w, fx_k) + g * (0.6 * fx_k));\n"
-            "  }\n",
-            in);
+            "    float3 n = fxw_n, v = fxw_v, up = u.fxp[1].xyz;\n"
+            "    float nv = saturate(-dot(v, n));\n"
+            "    float fres = 0.02 + 0.98 * pow(saturate(1.0 - nv), 5.0);\n"
+            "    float3 r = v - 2.0 * dot(v, n) * n;\n"
+            /* the sky it mirrors: the horizon is the game's fog colour, deeper and bluer overhead */
+            "    float e = saturate(dot(r, up));\n"
+            "    float3 hor = u.fogcolor.rgb;\n"
+            "    float3 sky = mix(hor, hor * float3(0.62, 0.76, 0.98) + float3(0.02, 0.05, 0.12), sqrt(e));\n"
+            "    float tint = u.fxp[5].x;\n"
+            "    float3 c = cur.rgb * u.fxp[5].y;\n"
+            "    float l = dot(c, float3(0.299, 0.587, 0.114));\n"
+            "    float3 hue = tint < 0.0 ? float3(0.35, 0.68, 1.2) : float3(0.3, 1.05, 0.78);\n"
+            "    c = mix(c, hue * (l * 1.3), abs(tint) * 0.7);\n"
+            "    float k = saturate(fres * u.fxp[5].z);\n"
+            "    c = mix(c, sky, k);\n"
+            /* the sun's (or moon's) glint off the waves */
+            "    float sp = pow(saturate(dot(r, u.fxp[3].xyz)), 500.0 / max(u.fxp[2].w, 0.1)) * u.fxp[5].w * u.fxp[3].w;\n"
+            "    c = c + float3(1.0, 0.95, 0.85) * (sp * 4.0);\n"
+            "    cur.rgb = mix(cur.rgb, saturate(c), saturate(fx_k));\n"
+            "    cur.a = mix(cur.a, max(cur.a, saturate(k * 1.2 + sp)), saturate(fx_k));\n"
+            "  }\n");
         break;
     case GFX_FX_FALLS:
         sb_printf(b,

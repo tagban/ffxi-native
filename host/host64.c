@@ -1049,7 +1049,7 @@ static void fly_tick(void)
 static void scene_tick(void)
 {
     fly_tick();
-    d3d8_set_rain(gamestate_rain());
+    d3d8_set_weather(gamestate_weather());
     static float last[3], from[3], to[3];
     static int have_last, active, frames;
     static uint64_t t0;

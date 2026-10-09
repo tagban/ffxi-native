@@ -1679,6 +1679,8 @@ static void draw_encode(const GfxDraw* d)
     if (!u.cpu)
         return;
     memcpy(u.cpu, &d->u, need);
+    if (need < sizeof(GfxU)) /* the effects' and the weather's (fxp, at the end) always */
+        memcpy((char*)u.cpu + offsetof(GfxU, fxp), d->u.fxp, sizeof d->u.fxp);
     GfxU* gu = (GfxU*)u.cpu;
     for (int r = 0; r < GFX_NREGS; ++r)
         if (d->vs.el[r].used && d->vs.el[r].stream < GFX_NSTREAMS)

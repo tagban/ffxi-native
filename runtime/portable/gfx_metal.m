@@ -1494,6 +1494,8 @@ static void draw_encode(const GfxDraw* d)
             need = sizeof(GfxU);
         void* u = ring(sizeof(GfxU), 256, &buf, &off);
         memcpy(u, &d->u, need);
+        if (need < sizeof(GfxU)) /* the effects' and the weather's (fxp, at the end) always */
+            memcpy((char*)u + offsetof(GfxU, fxp), d->u.fxp, sizeof d->u.fxp);
         [g_enc setVertexBuffer:buf offset:off atIndex:4];
         [g_enc setFragmentBuffer:buf offset:off atIndex:4];
         if (d->caster && !g_rt_face && !g_rt_level)

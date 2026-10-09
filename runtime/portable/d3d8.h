@@ -36,5 +36,10 @@ void d3d8_backbuffer_size(uint32_t* w, uint32_t* h);
 void d3d8_texture_pack(const char* dir);
 /* //xi fx ...: effects of our own on some of the game's draws (d3d8.c fx_classify). 1 if it was one. */
 int d3d8_fx_command(const char* text);
-/* How hard it rains (0 dry, 0.5 rain, 1 a downpour), for the wet ground: from the server's weather */
-void d3d8_set_rain(float rain);
+/* The server's weather (LandSandBoat's xi::Weather, 0-19): the rain on the ground, a fog, the heat's
+ * shimmer (d3d8.c wx_of) */
+void d3d8_set_weather(int weather);
+/* Which of the weather's effects the player wants (the overlay's settings) */
+void d3d8_set_weather_effects(int rain, int fog, int heat);
+/* Still water (the overlay's settings): on, and 9 values (d3d8.c g_water) */
+void d3d8_set_water(int on, const float* v);

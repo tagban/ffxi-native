@@ -21,6 +21,8 @@
 #include "fonts/roboto_medium.h"
 
 extern "C" int dsound_in_world(void);
+extern "C" void d3d8_set_weather_effects(int rain, int fog, int heat);
+extern "C" void d3d8_set_water(int on, const float* v);
 
 /* Fonts: Roboto is built in; the others are the player's own system's, loaded from where each
  * system keeps them if they are there (nothing of theirs is shipped). Kept in overlay.ini by name. */
@@ -78,6 +80,15 @@ static bool font_combo(const char* label, char* name, size_t size)
 }
 
 static bool g_ready, g_shown = true; /* the modern interface is on from the start (Cmd+U, Ctrl+Shift+U elsewhere, hides it) */
+/* and shows once a character is on its way into the world (its zone's connection open), not over the
+ * title, the login or the character list */
+static bool ui_on(void)
+{
+    return g_shown && dsound_in_world();
+}
+/* Edit GUI (the Overlay window): the windows can be moved and sized, with their names on them; else
+ * they stay where they were put, with no title bars and nothing to close by accident */
+static bool g_edit;
 static void chat_register(void);
 static void overlay_register(void);
 static int (*g_run_line)(const char* line); /* host64: the game's parser of a typed line */
@@ -156,6 +167,13 @@ static struct
     bool bar = true, settings_open = false; /* the bar of icons; the Overlay window */
     bool chat_pinned = true; /* the chat held to the bottom right corner */
     bool equip = false, items = false; /* the equipment and item windows */
+    float map_alpha = 1.0f; /* the map's opacity (its right-click menu) */
+    /* the weather's effects (d3d8.c): rain on the ground, its fog, the heat's shimmer */
+    bool wx_rain = true, wx_fog = true, wx_heat = true;
+    /* still water (d3d8.c g_water): wave height, speed, size, direction (degrees), blue to green, brightness,
+     * sky reflection, glint, glint size */
+    bool water = true;
+    float water_v[9] = { 1.0f, 1.0f, 1.0f, 35.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f };
     /* the windows' background and the chat's: a color and how solid (the player's) */
     float win_bg[4] = { 0.102f, 0.118f, 0.180f, 0.88f }, chat_bg[4] = { 0.094f, 0.118f, 0.188f, 0.80f }; /* the interface skin's slate */
     /* the chat, as the game's log: down to a few lines when nothing has come for a while */
@@ -263,7 +281,7 @@ extern "C" void overlay_set_nameplates_available(int yes)
 
 extern "C" int overlay_nameplates_wanted(void)
 {
-    return g_ready && g_shown && g_plates_available && g_set.plates;
+    return g_ready && ui_on() && g_plates_available && g_set.plates;
 }
 
 extern "C" int overlay_plate_points(float* xy, int max, int* token)
@@ -622,7 +640,7 @@ extern "C" void overlay_fly_keys(int* up, int* down)
 
 extern "C" int overlay_shown(void)
 {
-    return g_ready && g_shown;
+    return g_ready && ui_on();
 }
 
 extern "C" void overlay_note_present(int frame_w, int frame_h, int screen_w, int screen_h, int metalfx, float fps)
@@ -714,7 +732,7 @@ extern "C" int overlay_event(const SDL_Event* e)
     if ((e->type == SDL_EVENT_KEY_DOWN || e->type == SDL_EVENT_KEY_UP) && e->key.key == SDLK_TAB && !ImGui::GetIO().WantTextInput)
         return 0; /* Tab is the game's (the next target), not a way into the overlay's boxes */
     ImGui_ImplSDL3_ProcessEvent(e);
-    if (!g_shown)
+    if (!ui_on())
         return 0;
     if (g_send_open && (e->type == SDL_EVENT_KEY_DOWN || e->type == SDL_EVENT_TEXT_INPUT))
         return 1; /* typed before the box has opened: the box's */
@@ -814,6 +832,17 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "chat_pinned=%d", &v) == 1) g_set.chat_pinned = v != 0;
     else if (sscanf(line, "equip=%d", &v) == 1) g_set.equip = v != 0;
     else if (sscanf(line, "items=%d", &v) == 1) g_set.items = v != 0;
+    else if (sscanf(line, "map_alpha=%f", &f) == 1 && f >= 0.1f && f <= 1.0f) g_set.map_alpha = f;
+    else if (sscanf(line, "wx_rain=%d", &v) == 1) g_set.wx_rain = v != 0;
+    else if (sscanf(line, "wx_fog=%d", &v) == 1) g_set.wx_fog = v != 0;
+    else if (sscanf(line, "wx_heat=%d", &v) == 1) g_set.wx_heat = v != 0;
+    else if (sscanf(line, "water=%d", &v) == 1) g_set.water = v != 0;
+    else if (!strncmp(line, "water_v=", 8))
+    {
+        float w[9];
+        if (sscanf(line + 8, "%f,%f,%f,%f,%f,%f,%f,%f,%f", &w[0], &w[1], &w[2], &w[3], &w[4], &w[5], &w[6], &w[7], &w[8]) == 9)
+            memcpy(g_set.water_v, w, sizeof w);
+    }
 }
 
 static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextBuffer* out)
@@ -831,6 +860,10 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("chat_shrink=%d\nchat_quiet_lines=%d\nchat_quiet_secs=%g\n", g_set.chat_shrink, g_set.chat_quiet_lines,
         g_set.chat_quiet_secs);
     out->appendf("death_screen=%d\nspace_jumps=%d\n", g_set.death_screen, g_set.space_jumps);
+    out->appendf("map_alpha=%.2f\nwx_rain=%d\nwx_fog=%d\nwx_heat=%d\nwater=%d\n", g_set.map_alpha, g_set.wx_rain, g_set.wx_fog,
+        g_set.wx_heat, g_set.water);
+    const float* w = g_set.water_v;
+    out->appendf("water_v=%g,%g,%g,%g,%g,%g,%g,%g,%g\n", w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8]);
     out->appendf("win_bg=%.3f,%.3f,%.3f,%.3f\nchat_bg=%.3f,%.3f,%.3f,%.3f\n", g_set.win_bg[0], g_set.win_bg[1], g_set.win_bg[2],
         g_set.win_bg[3], g_set.chat_bg[0], g_set.chat_bg[1], g_set.chat_bg[2], g_set.chat_bg[3]);
     for (int k = 0; k < MC_COUNT; ++k)
@@ -852,6 +885,95 @@ static void overlay_register(void)
     ImGui::AddSettingsHandler(&h);
 }
 
+/* --- Edit GUI ------------------------------------------------------------------------------------------ */
+/* A window that stays put: its title bar only while editing, moved and sized only then */
+static ImGuiWindowFlags lockable(ImGuiWindowFlags f)
+{
+    return g_edit ? f & ~ImGuiWindowFlags_NoTitleBar : f | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
+}
+
+/* while editing, each window that can be moved outlined, so the layout is easy to see */
+static void edit_outline(void)
+{
+    if (!g_edit)
+        return;
+    ImGuiWindow* w = ImGui::GetCurrentWindow();
+    ImGui::GetForegroundDrawList()->AddRect(w->Pos, ImVec2(w->Pos.x + w->Size.x, w->Pos.y + w->Size.y), IM_COL32(255, 200, 80, 220), 4.0f, 0, 2.0f);
+}
+
+/* the banner while editing: what to do, and Lock */
+static void edit_banner(void)
+{
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.22f), ImGuiCond_Always, ImVec2(0.5f, 0));
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    if (ImGui::Begin("##editgui", NULL,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize |
+                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse))
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "Editing the GUI");
+        ImGui::TextUnformatted("Drag the windows by their title bars, size them by their edges.");
+        if (ImGui::Button("Lock the GUI", ImVec2(-FLT_MIN, 0)))
+            g_edit = false, ImGui::MarkIniSettingsDirty();
+    }
+    ImGui::End();
+}
+
+/* --- Graphics: our own effects on the game's picture ---------------------------------------------------- */
+static bool g_gfx_open;
+
+static void graphics_window(void)
+{
+    ImGui::SetNextWindowPos(ImVec2(320, 24), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Graphics", &g_gfx_open, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
+    bool dirty = false;
+    if (ImGui::BeginTabBar("gfx"))
+    {
+        if (ImGui::BeginTabItem("Water"))
+        {
+            dirty |= ImGui::Checkbox("Our water (still water: ponds, pools, the sea's calm)", &g_set.water);
+            ImGui::TextDisabled("Waves, the sky mirrored in them, the sun's and moon's glint.");
+            ImGui::BeginDisabled(!g_set.water);
+            float* w = g_set.water_v;
+            ImGui::PushItemWidth(-130);
+            dirty |= ImGui::SliderFloat("Blue to green", &w[4], -1.0f, 1.0f, w[4] == 0.0f ? "the game's" : "%.2f");
+            dirty |= ImGui::SliderFloat("Brightness", &w[5], 0.5f, 2.0f, "%.2f");
+            dirty |= ImGui::SliderFloat("Wave height", &w[0], 0.0f, 3.0f, "%.2f");
+            dirty |= ImGui::SliderFloat("Wave speed", &w[1], 0.0f, 3.0f, "%.2f");
+            dirty |= ImGui::SliderFloat("Wave size", &w[2], 0.25f, 4.0f, "%.2f");
+            dirty |= ImGui::SliderFloat("Wave direction", &w[3], 0.0f, 360.0f, "%.0f deg");
+            dirty |= ImGui::SliderFloat("Sky reflection", &w[6], 0.0f, 2.0f, "%.2f");
+            dirty |= ImGui::SliderFloat("Sun and moon glint", &w[7], 0.0f, 3.0f, "%.2f");
+            dirty |= ImGui::SliderFloat("Glint size", &w[8], 0.25f, 4.0f, "%.2f");
+            ImGui::PopItemWidth();
+            if (ImGui::SmallButton("Defaults##water"))
+            {
+                const float d[9] = { 1.0f, 1.0f, 1.0f, 35.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+                memcpy(w, d, sizeof d), dirty = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Weather"))
+        {
+            ImGui::TextDisabled("With the zone's weather, as the server sends it:");
+            dirty |= ImGui::Checkbox("Rain: the ground soaks, shines and takes the drops", &g_set.wx_rain);
+            dirty |= ImGui::Checkbox("Fog, storms, snow: a fog nearer than the game's", &g_set.wx_fog);
+            dirty |= ImGui::Checkbox("Hot spells, heat waves: the air shimmers far off", &g_set.wx_heat);
+            ImGui::TextDisabled("//xi fx weather <0-19> tries one out; -1 back to the server's.");
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    if (dirty)
+        ImGui::MarkIniSettingsDirty();
+    ImGui::End();
+}
+
 /* The overlay's own window: which windows show, text sizes, and what the host knows */
 static void overlay_window(void)
 {
@@ -860,6 +982,13 @@ static void overlay_window(void)
     if (ImGui::Begin("Overlay", &g_set.settings_open, ImGuiWindowFlags_AlwaysAutoResize))
     {
         bool dirty = false;
+        if (ImGui::Button(g_edit ? "Lock the GUI" : "Edit GUI", ImVec2(120, 0)))
+            g_edit = !g_edit, ImGui::MarkIniSettingsDirty();
+        ImGui::SameLine();
+        if (ImGui::Button("Graphics...", ImVec2(120, 0)))
+            g_gfx_open = true;
+        ImGui::TextDisabled(g_edit ? "Move and size the windows; then lock them" : "The windows are locked where they are");
+        ImGui::Separator();
         ImGui::TextDisabled("Windows");
         dirty |= ImGui::Checkbox("Chat", &g_set.chat);
         ImGui::SameLine(100);
@@ -1027,8 +1156,10 @@ static void bar_window(void)
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, 8), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0));
     ImGui::SetNextWindowBgAlpha(g_set.win_bg[3] * 0.8f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
-    if (ImGui::Begin("Bar", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
+    if (ImGui::Begin("Bar", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar |
+                                      (g_edit ? 0 : ImGuiWindowFlags_NoMove)))
     {
+        edit_outline();
         float h = ImGui::GetFontSize() * 1.9f;
         ImDrawList* dl = ImGui::GetWindowDrawList();
         for (int i = 0; i < (int)(sizeof items / sizeof *items); ++i)
@@ -1763,7 +1894,7 @@ static void chat_window(void)
         placing = false;
     }
     auto under_other = [&](ImVec2 pos) { return false && under_question(pos); }; /* likewise: where it is is not known */
-    if (g_set.chat_pinned)
+    if (g_set.chat_pinned && !g_edit)
     {
         /* the bottom left corner, where the game's own log was */
         ImVec2 at(margin, disp.y - margin - size.y);
@@ -1820,8 +1951,8 @@ static void chat_window(void)
     }
     ImGui::SetNextWindowSizeConstraints(ImVec2(240, 120), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(g_set.chat_bg[0], g_set.chat_bg[1], g_set.chat_bg[2], g_set.chat_bg[3]));
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
-                             (g_set.chat_pinned ? ImGuiWindowFlags_NoMove : 0);
+    ImGuiWindowFlags flags = lockable(ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+                                      (g_set.chat_pinned && !g_edit ? ImGuiWindowFlags_NoMove : 0));
     /* while the game asks, the rest of the overlay fades; the chat stays readable, all of it to its
      * End (an NPC's words are in it, the game's log being hidden, and it waits on Enter for the
      * next line), since it has moved out of the way */
@@ -1836,8 +1967,11 @@ static void chat_window(void)
     bool shown = ImGui::Begin("Chat", NULL, flags);
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
+    if (g_edit && GImGui->MovingWindow == ImGui::GetCurrentWindow())
+        g_set.chat_pinned = false; /* moved by hand: where the player puts it */
     if (shown)
     {
+        edit_outline();
         if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_FittingPolicyScroll))
         {
             for (int i = 0; i < g_ntabs; ++i)
@@ -1937,8 +2071,9 @@ static void party_window(void)
     ImGui::SetNextWindowBgAlpha(g_set.win_bg[3] * 0.8f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1));
-    if (ImGui::Begin("Party", &g_set.party, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse))
+    if (ImGui::Begin("Party", g_edit ? &g_set.party : NULL, lockable(ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse)))
     {
+        edit_outline();
         if (!n)
             ImGui::TextDisabled("Party");
         uint16_t here = gamestate_zone();
@@ -2385,8 +2520,9 @@ static void target_window(void)
     ImGui::SetNextWindowBgAlpha(g_set.win_bg[3] * (have ? 0.8f : 0.35f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 2));
-    if (ImGui::Begin("Target", &g_set.target, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse))
+    if (ImGui::Begin("Target", g_edit ? &g_set.target : NULL, lockable(ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse)))
     {
+        edit_outline();
         if (!have)
             ImGui::TextDisabled("No target");
         else
@@ -2519,11 +2655,16 @@ static void map_window(void)
     ImGui::SetNextWindowPos(ImVec2(1200, 24), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(260, 280), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.0f);
-    if (!ImGui::Begin("Map", &g_set.map, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+    if (!ImGui::Begin("Map", g_edit ? &g_set.map : NULL,
+            lockable(ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | (g_edit ? 0 : ImGuiWindowFlags_NoTitleBar))))
     {
         ImGui::End();
         return;
     }
+    edit_outline();
+    /* its opacity (the right-click menu): everything it draws from here faded, at the end */
+    ImDrawList* fade_dl = ImGui::GetWindowDrawList();
+    int fade_from = fade_dl->VtxBuffer.Size;
     float me_x, me_y, me_z, t;
     bool known = gamestate_self(&me_x, &me_y, &me_z, &t) != 0;
     ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -2547,6 +2688,10 @@ static void map_window(void)
         if (ImGui::MenuItem("The game's map", NULL, &g_set.map_art, g_art_tex && g_map.art_scale > 0))
             ImGui::MarkIniSettingsDirty();
         ImGui::Separator();
+        ImGui::SetNextItemWidth(150);
+        float pct = g_set.map_alpha * 100.0f;
+        if (ImGui::SliderFloat("Opacity", &pct, 10.0f, 100.0f, "%.0f%%"))
+            g_set.map_alpha = pct / 100.0f, ImGui::MarkIniSettingsDirty();
         if (ImGui::MenuItem("Colors..."))
             g_map_colors_open = true;
         ImGui::EndPopup();
@@ -2693,6 +2838,12 @@ static void map_window(void)
         ImGui::TextDisabled("%.1f yalms, HP %u%%", sqrtf(dx * dx + dz * dz), near_one->hpp);
         ImGui::EndTooltip();
     }
+    if (g_set.map_alpha < 1.0f)
+        for (int i = fade_from; i < fade_dl->VtxBuffer.Size; ++i)
+        {
+            ImU32& c = fade_dl->VtxBuffer[i].col;
+            c = (c & ~IM_COL32_A_MASK) | ((ImU32)((float)(c >> IM_COL32_A_SHIFT & 255) * g_set.map_alpha) << IM_COL32_A_SHIFT);
+        }
     ImGui::End();
 }
 
@@ -2795,7 +2946,7 @@ static void ko_tick(const char* focus)
 {
     double home;
     bool dead = gamestate_dead(&home) != 0 || getenv("XI_DEATH_PREVIEW");
-    bool on = dead && g_shown && g_set.death_screen;
+    bool on = dead && ui_on() && g_set.death_screen;
     if (on && !g_ko.on)
         g_ko.waiting = false, g_ko.step = 0, g_ko.note = NULL;
     g_ko.on = on;
@@ -2983,7 +3134,7 @@ extern "C" void overlay_build_frame(void)
             ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
         /* the game's own typing line opened (by a key the overlay does not take): closed by the game's
          * own close, and the overlay's chat box opened instead */
-        if (!strncmp(f, "inline", 6) && g_shown && g_set.chat && g_set.hide_game_log && g_close_game && !ImGui::GetIO().WantTextInput)
+        if (!strncmp(f, "inline", 6) && ui_on() && g_set.chat && g_set.hide_game_log && g_close_game && !ImGui::GetIO().WantTextInput)
         {
             g_close_game("inline  ");
             if (!g_send_open)
@@ -2993,12 +3144,16 @@ extern "C" void overlay_build_frame(void)
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
     bool was[7] = { g_set.chat, g_set.party, g_set.map, g_set.status, g_set.target, g_set.equip, g_set.items };
-    if (g_shown && g_set.plates)
+    if (ui_on() && g_set.plates)
         draw_nameplates();
     else
         g_nplates = 0;
-    if (g_shown)
+    if (!dsound_in_world())
+        g_edit = false;
+    if (ui_on())
     {
+        if (g_edit)
+            edit_banner();
         if (g_set.bar)
             bar_window();
         if (g_set.settings_open || !g_set.bar)
@@ -3012,6 +3167,8 @@ extern "C" void overlay_build_frame(void)
         if (g_set.map)
             map_window();
         map_colors_window();
+        if (g_gfx_open)
+            graphics_window();
         if (g_set.target)
             target_window();
         if (g_set.equip)
@@ -3024,7 +3181,7 @@ extern "C" void overlay_build_frame(void)
     /* the game's own windows the overlay's stand in for: back whenever the overlay is hidden */
     if (g_place_log)
     {
-        ImGuiWindow* cw = g_shown && g_set.chat ? ImGui::FindWindowByName("Chat") : NULL;
+        ImGuiWindow* cw = ui_on() && g_set.chat ? ImGui::FindWindowByName("Chat") : NULL;
         ImVec2 d = ImGui::GetIO().DisplaySize;
         if (cw && !cw->Hidden && d.x > 0 && d.y > 0)
             g_place_log(cw->Pos.x / d.x, cw->Pos.y / d.y, (cw->Pos.x + cw->Size.x) / d.x, (cw->Pos.y + cw->Size.y) / d.y);
@@ -3032,10 +3189,12 @@ extern "C" void overlay_build_frame(void)
             g_place_log(-1, -1, -1, -1);
     }
     if (g_hide_game)
-        g_hide_game(g_shown && g_set.chat && g_set.hide_game_log, g_shown && g_set.party && g_set.hide_game_party,
-            g_shown && g_set.target && g_set.hide_game_target);
+        g_hide_game(ui_on() && g_set.chat && g_set.hide_game_log, ui_on() && g_set.party && g_set.hide_game_party,
+            ui_on() && g_set.target && g_set.hide_game_target);
     if (was[0] != g_set.chat || was[1] != g_set.party || was[2] != g_set.map || was[3] != g_set.status || was[4] != g_set.target ||
         was[5] != g_set.equip || was[6] != g_set.items)
         ImGui::MarkIniSettingsDirty(); /* a window closed with its x */
+    d3d8_set_weather_effects(g_set.wx_rain, g_set.wx_fog, g_set.wx_heat);
+    d3d8_set_water(g_set.water, g_set.water_v);
     ImGui::Render();
 }

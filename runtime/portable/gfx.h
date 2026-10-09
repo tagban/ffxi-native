@@ -166,10 +166,16 @@ typedef struct GfxU
     GfxLight light[GFX_NLIGHTS];
     float vsc[GFX_NVSC][4];
     float psc[GFX_NPSC][4];
-    /* effects (gfx_fx.h): [0] x, y the slopes that turn a change in eye depth across a pixel into a
-     * surface's tilt (2 / (viewport width x projection[0]), 2 / (height x projection[5])); [1] xyz which
-     * way is up, in eye space */
-    float fxp[2][4];
+    /* effects (gfx_fx.h), and the weather's on every draw:
+     *   [0] x, y the slopes that turn a pixel's offset from the viewport's middle, times its eye depth,
+     *       into eye space (2 / (viewport width x projection[0]), 2 / (height x projection[5]));
+     *       z the heat's shimmer (0-1), w the weather's fog (more of it per yalm, on every fogged draw)
+     *   [1] xyz which way is up, in eye space; w seconds (wrapping)
+     *   [2] xy the viewport's middle, in the target's pixels; z its height / 720
+     *   [3] xyz toward the sun (or moon), in eye space; w how bright (0: no such light)
+     *   [4] still water: wave height, speed, size, direction (radians)
+     *   [5] still water: blue (-1) to green (1) (0 the game's), brightness, sky reflection, glint */
+    float fxp[6][4];
 } GfxU;
 
 typedef struct GfxSampler

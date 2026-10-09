@@ -2423,6 +2423,16 @@ static void apply_targets(void)
 
 static GfxDraw g_draw; /* one device, one draw at a time */
 
+/* The weather, on every fogged draw (gfx_fx.h): the server's (d3d8_set_weather) as a fog nearer than
+ * the game's and the heat's shimmer, each eased in and out over some seconds (fx_weather_tick, once a
+ * frame); the player can turn each off (d3d8_set_weather_effects). //xi fx weather <n> pretends. */
+static struct
+{
+    int weather, forced, rain_on, fog_on, heat_on;
+    float fog, heat, t;
+    uint64_t at;
+} g_wx = { 0, -1, 1, 1, 1 };
+
 /* The keys and uniforms for the current state; 0 when the state cannot be drawn. */
 static int build_draw(GfxDraw* d)
 {
@@ -2502,6 +2512,11 @@ static int build_draw(GfxDraw* d)
         d->u.vp[i] = (float)s->vp[i];
     memcpy(d->vp, s->vp, sizeof d->vp);
     scale_to_target(d->vp, NULL, 0); /* the XYZRHW mapping (u.vp) stays in the game's pixels */
+    /* the weather's fog and heat, the time, the target's scale (gfx.h fxp); fx_classify adds the rest */
+    memset(d->u.fxp, 0, sizeof d->u.fxp);
+    d->u.fxp[0][2] = g_wx.heat, d->u.fxp[0][3] = g_wx.fog;
+    d->u.fxp[1][3] = g_wx.t;
+    d->u.fxp[2][2] = d->vp[3] ? (float)d->vp[3] / 720.0f : 1.0f;
 
     int ff_vertex = !d->vs.prog && !lay->rhw;
     if (ff_vertex && rs[137]) /* LIGHTING */
@@ -3170,9 +3185,12 @@ static void scene_trace(GfxTex* world_before)
     gfx_trace_dump(out);
 }
 
+static void fx_weather_tick(void);
+
 static void scene_present(void)
 {
     scene_finish("present");
+    fx_weather_tick();
     GfxTex* world_before = g_scene.world;
     /* next frame's world: this frame's busiest target */
     uint32_t best = 0;
@@ -3219,14 +3237,87 @@ static const FxRule g_fx_rules[] = {
     { 0x10183c31u, 1, 0, 5, GFX_FX_FALLS, "falling water" },
     { 0x1017dc92u, -1, 0, 0, GFX_FX_WET, "wet ground and walls (in the rain)" }, /* the zone's own meshes */
 };
-/* the rain (d3d8_set_rain, from the server's weather) and how soaked the world is: it soaks in over a
+/* the rain (d3d8_set_weather, from the server's) and how soaked the world is: it soaks in over a
  * minute and dries over three; //xi fx rain <0-2> pretends */
 static float g_fx_rain, g_fx_wet, g_fx_rain_forced = -1.0f;
 static uint64_t g_fx_wet_at;
 
-void d3d8_set_rain(float rain)
+static int g_fx_on = 1, g_fx_mark;
+static float g_fx_k = 1.0f;
+
+/* what each weather (LandSandBoat's xi::Weather) brings: rain (0.5 rain, 1 a downpour), more fog
+ * (per yalm), heat (0-1) */
+static void wx_of(int w, float* rain, float* fog, float* heat)
 {
-    g_fx_rain = rain;
+    *rain = *fog = *heat = 0.0f;
+    switch (w)
+    {
+    case 3: *fog = 0.035f; break;                    /* fog */
+    case 4: *heat = 0.5f, *fog = 0.003f; break;      /* hot spell */
+    case 5: *heat = 1.0f, *fog = 0.006f; break;      /* heat wave */
+    case 6: case 14: *rain = 0.5f, *fog = 0.006f; break;  /* rain, thunder */
+    case 7: case 15: *rain = 1.0f, *fog = 0.014f; break;  /* squall, thunderstorms */
+    case 8: *fog = 0.012f; break;                    /* dust storm */
+    case 9: *fog = 0.03f; break;                     /* sand storm */
+    case 12: *fog = 0.008f; break;                   /* snow */
+    case 13: *fog = 0.025f; break;                   /* blizzards */
+    case 18: *fog = 0.01f; break;                    /* gloom */
+    case 19: *fog = 0.02f; break;                    /* darkness */
+    default: break;
+    }
+}
+
+static const char* const WX_NAMES[20] = { "none", "sunshine", "clouds", "fog", "a hot spell", "a heat wave", "rain", "a squall",
+    "a dust storm", "a sand storm", "wind", "gales", "snow", "blizzards", "thunder", "thunderstorms", "auroras", "stellar glare",
+    "gloom", "darkness" };
+
+void d3d8_set_weather(int weather)
+{
+    if (weather != g_wx.weather)
+    {
+        /* the server's weather changed: anything //xi fx pretended gives way to it */
+        g_fx_rain_forced = -1.0f, g_wx.forced = -1;
+        rt_log("[recomp] fx: the weather is %s (%d)\n", weather >= 0 && weather < 20 ? WX_NAMES[weather] : "unknown", weather);
+    }
+    g_wx.weather = weather;
+}
+
+void d3d8_set_weather_effects(int rain, int fog, int heat)
+{
+    g_wx.rain_on = rain, g_wx.fog_on = fog, g_wx.heat_on = heat;
+}
+
+/* still water's settings (the overlay's): on, then wave height, speed, size, direction (degrees),
+ * blue to green (-1..1, 0 the game's), brightness, sky reflection, glint, glint size */
+static int g_water_on = 1;
+static float g_water[9] = { 1.0f, 1.0f, 1.0f, 35.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+
+void d3d8_set_water(int on, const float* v)
+{
+    g_water_on = on;
+    if (v)
+        memcpy(g_water, v, sizeof g_water);
+}
+
+static void fx_weather_tick(void)
+{
+    uint64_t now = rt_monotonic_ns();
+    float dt = g_wx.at ? (float)((double)(now - g_wx.at) / 1e9) : 0.0f;
+    g_wx.at = now;
+    dt = dt > 1.0f ? 1.0f : dt;
+    g_wx.t = (float)fmod((double)now / 1e9, 4096.0);
+    float rain, fog, heat;
+    wx_of(g_wx.forced >= 0 ? g_wx.forced : g_wx.weather, &rain, &fog, &heat);
+    g_fx_rain = g_wx.rain_on ? rain : 0.0f;
+    fog = g_fx_on && g_wx.fog_on ? fog : 0.0f;
+    heat = g_fx_on && g_wx.heat_on ? heat : 0.0f;
+    float k = 1.0f - expf(-dt / 5.0f); /* most of the way in ten seconds or so */
+    g_wx.fog += (fog - g_wx.fog) * k;
+    g_wx.heat += (heat - g_wx.heat) * k;
+    if (fabsf(g_wx.fog - fog) < 1e-5f)
+        g_wx.fog = fog;
+    if (fabsf(g_wx.heat - heat) < 1e-4f)
+        g_wx.heat = heat;
 }
 
 static void fx_soak(void)
@@ -3241,8 +3332,6 @@ static void fx_soak(void)
     g_fx_wet = rain > 0.0f ? g_fx_wet + dt / 60.0f : g_fx_wet - dt / 180.0f;
     g_fx_wet = g_fx_wet < 0.0f ? 0.0f : g_fx_wet > 1.0f ? 1.0f : g_fx_wet;
 }
-static int g_fx_on = 1, g_fx_mark;
-static float g_fx_k = 1.0f;
 
 /* The game's return addresses nearest the draw call (as the frame capture finds them): up to 4. */
 static int fx_callers(uint32_t* out)
@@ -3314,6 +3403,20 @@ static void fx_classify(GfxDraw* d)
                     return; /* dry: the game's own shader */
                 d->u.params2[3] = g_fx_wet + 2.0f * floorf(rain * 2.0f + 0.5f);
             }
+            if (r->fx == GFX_FX_POOL)
+            {
+                if (!g_water_on)
+                    return; /* the game's own water */
+                /* the sun (or moon) as the scene found it, toward it in eye space; how bright */
+                const GfxScene* sc = &g_scene.s;
+                float sl = 0.299f * sc->sun_color[0] + 0.587f * sc->sun_color[1] + 0.114f * sc->sun_color[2];
+                d->u.fxp[3][0] = sc->sun_dir[0], d->u.fxp[3][1] = sc->sun_dir[1], d->u.fxp[3][2] = sc->sun_dir[2];
+                d->u.fxp[3][3] = sc->sun_dir[3] != 0.0f ? (sl < 0.0f ? 0.0f : sl > 1.5f ? 1.5f : sl) : 0.0f;
+                d->u.fxp[4][0] = g_water[0], d->u.fxp[4][1] = g_water[1], d->u.fxp[4][2] = g_water[2];
+                d->u.fxp[4][3] = g_water[3] * 3.14159265f / 180.0f;
+                d->u.fxp[5][0] = g_water[4], d->u.fxp[5][1] = g_water[5], d->u.fxp[5][2] = g_water[6], d->u.fxp[5][3] = g_water[7];
+                d->u.fxp[2][3] = g_water[8];
+            }
             d->fs.fx = r->fx;
             d->u.params2[1] = (float)fmod((double)rt_monotonic_ns() / 1e9, 4096.0);
             d->u.params2[2] = g_fx_k;
@@ -3322,6 +3425,7 @@ static void fx_classify(GfxDraw* d)
             const float* P = g_dev.cur.xf[3];
             const float* V = g_dev.cur.xf[2];
             float vw = d->vp[2] ? (float)d->vp[2] : 1.0f, vh = d->vp[3] ? (float)d->vp[3] : 1.0f;
+            d->u.fxp[2][0] = (float)d->vp[0] + vw * 0.5f, d->u.fxp[2][1] = (float)d->vp[1] + vh * 0.5f;
             d->u.fxp[0][0] = P[0] != 0.0f ? 2.0f / (vw * P[0]) : 0.0f;
             d->u.fxp[0][1] = P[5] != 0.0f ? 2.0f / (vh * P[5]) : 0.0f;
             float ux = -V[4], uy = -V[5], uz = -V[6], ul = sqrtf(ux * ux + uy * uy + uz * uz);
@@ -3341,8 +3445,9 @@ int d3d8_fx_command(const char* t)
     int m;
     if (!strcmp(t, "fx"))
     {
-        rt_log("[recomp] fx: %s, strength %.2f, marking %d, rain %.1f, wet %.2f\n", g_fx_on ? "on" : "off", g_fx_k, g_fx_mark,
-            g_fx_rain_forced >= 0.0f ? g_fx_rain_forced : g_fx_rain, g_fx_wet);
+        rt_log("[recomp] fx: %s, strength %.2f, marking %d, weather %d%s, rain %.1f, wet %.2f, fog %.3f, heat %.2f, water %s\n",
+            g_fx_on ? "on" : "off", g_fx_k, g_fx_mark, g_wx.forced >= 0 ? g_wx.forced : g_wx.weather, g_wx.forced >= 0 ? " (pretended)" : "",
+            g_fx_rain_forced >= 0.0f ? g_fx_rain_forced : g_fx_rain, g_fx_wet, g_wx.fog, g_wx.heat, g_water_on ? "on" : "off");
         for (size_t i = 0; i < sizeof g_fx_rules / sizeof *g_fx_rules; ++i)
         {
             rt_log("[recomp] fx %d: %s (the game's code at %08x, fog %d, blend to %u, alpha op %u): %u draws of its kind, %u "
@@ -3362,7 +3467,10 @@ int d3d8_fx_command(const char* t)
         return g_fx_k = v < 0.0f ? 0.0f : v > 2.0f ? 2.0f : v, rt_log("[recomp] fx: strength %.2f\n", g_fx_k), 1;
     if (sscanf(t, "fx rain %f", &v) == 1)
         return g_fx_rain_forced = v < 0.0f ? -1.0f : v > 2.0f ? 1.0f : v * 0.5f,
-               rt_log("[recomp] fx: rain %s\n", v < 0.0f ? "as the server says" : v >= 2.0f ? "a downpour" : v >= 1.0f ? "rain" : "none"), 1;
+               rt_log("[recomp] fx: rain %s\n", v < 0.0f ? "as the server says" : v >= 2.0f ? "a downpour" : v >= 1.0f ? "rain" : "none (until the weather changes)"), 1;
+    if (sscanf(t, "fx weather %d", &m) == 1)
+        return g_wx.forced = m < 0 || m > 19 ? -1 : m,
+               rt_log("[recomp] fx: weather %s\n", g_wx.forced < 0 ? "as the server says" : WX_NAMES[g_wx.forced]), 1;
     if (sscanf(t, "fx mark %d", &m) == 1)
         return g_fx_mark = m, rt_log("[recomp] fx: marking effect %d's draws magenta\n", m), 1;
     return 0;

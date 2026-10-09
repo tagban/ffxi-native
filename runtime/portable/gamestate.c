@@ -404,16 +404,6 @@ int gamestate_weather(void)
     return g_weather;
 }
 
-float gamestate_rain(void)
-{
-    switch (g_weather)
-    {
-    case 6: case 14: return 0.5f;  /* rain, thunder */
-    case 7: case 15: return 1.0f;  /* squall, thunderstorms */
-    default: return 0.0f;
-    }
-}
-
 static void self_status(const uint8_t* p, uint32_t size)
 {
     if (size < 0x3C)

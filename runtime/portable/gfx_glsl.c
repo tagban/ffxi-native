@@ -24,7 +24,7 @@
 #include "gfx_glsl.h"
 #include "gfx_fx.h"
 
-_Static_assert(sizeof(GfxU) == 3568, "GfxU must match the GLSL block CU");
+_Static_assert(sizeof(GfxU) == 3632, "GfxU must match the GLSL block CU");
 
 void sb_printf(Sb* b, const char* fmt, ...)
 {
@@ -62,7 +62,7 @@ static const char PRELUDE[] =
     "  ivec4 offset[5];\n"
     "  Light light[8];\n"
     "  vec4 vsc[96];\n"
-    "  vec4 psc[8];\n  vec4 fxp[2];\n"
+    "  vec4 psc[8];\n  vec4 fxp[6];\n"
     "} u;\n"
     "#ifdef VERTEX\n"
     "uniform usamplerBuffer s0, s1, s2, s3;\n"
@@ -393,6 +393,7 @@ static void emit_fs_tail(Sb* b, const GfxFsKey* k, const char* col)
             sb_printf(b, "  float f;\n  float fd = abs(vin.ez);\n");
             emit_fog_factor(b, "f", k->fog, "fd");
         }
+        gfx_fx_weather_fog(b, "vin");
         sb_printf(b, "  %s.rgb = mix(u.fogcolor.rgb, %s.rgb, f);\n", col, col);
     }
     sb_printf(b, "  return %s;\n}\n", col);
@@ -401,13 +402,15 @@ static void emit_fs_tail(Sb* b, const GfxFsKey* k, const char* col)
 static void emit_ff_fs(Sb* b, const GfxFsKey* k)
 {
     gfx_fx_functions(b, k->fx, GFX_FX_GLSL);
+    gfx_fx_weather_functions(b, k->fog, GFX_FX_GLSL);
     emit_fs_signature(b);
     sb_printf(b, "  vec4 cur = vin.d, tmp = vec4(0.0), tex = vec4(1.0);\n");
     gfx_fx_begin(b, k->fx, "vin");
+    gfx_fx_weather_begin(b, k->fog, GFX_FX_GLSL, "vin");
     for (int i = 0; i < k->nstages; ++i)
     {
         const GfxStage* s = &k->st[i];
-        char coord[64];
+        char coord[96];
         if (s->tex == 1)
         {
             if (s->projected)
@@ -416,7 +419,11 @@ static void emit_ff_fs(Sb* b, const GfxFsKey* k)
                 snprintf(coord, sizeof coord, "vin.t%d.xy / vin.t%d.%s", i, i, w);
             }
             else
-                snprintf(coord, sizeof coord, "vin.t%d.xy%s", i, gfx_fx_coord(k->fx, i));
+            {
+                char c0[64];
+                snprintf(c0, sizeof c0, "vin.t%d.xy%s", i, gfx_fx_coord(k->fx, i));
+                gfx_fx_weather_uv(coord, sizeof coord, k->fog, c0);
+            }
             gfx_glsl_sample(b, "tex", i, coord);
         }
         else if (s->tex == 2)

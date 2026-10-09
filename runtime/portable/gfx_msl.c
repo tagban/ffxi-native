@@ -20,7 +20,7 @@
 #include "gfx_msl.h"
 #include "gfx_fx.h"
 
-_Static_assert(sizeof(GfxU) == 3568, "GfxU must match the MSL struct U");
+_Static_assert(sizeof(GfxU) == 3632, "GfxU must match the MSL struct U");
 
 void sb_printf(Sb* b, const char* fmt, ...)
 {
@@ -55,7 +55,7 @@ static const char PRELUDE[] =
     "  int4 offset[5];\n"
     "  Light light[8];\n"
     "  float4 vsc[96];\n"
-    "  float4 psc[8];\n  float4 fxp[2];\n"
+    "  float4 psc[8];\n  float4 fxp[6];\n"
     "};\n"
     "static inline int reg_offset(constant U& u, int r) { return u.offset[r >> 2][r & 3]; }\n"
     "static inline float4 ld_color(device const uchar* p) { uchar4 c = *(device const uchar4*)p; return float4(c.z, c.y, c.x, c.w) / 255.0; }\n";
@@ -440,6 +440,7 @@ static void emit_fs_tail(Sb* b, const GfxFsKey* k, const char* col)
             sb_printf(b, "  float f;\n  float fd = abs(in.ez);\n");
             emit_fog_factor(b, "f", k->fog, "fd");
         }
+        gfx_fx_weather_fog(b, "in");
         sb_printf(b, "  %s.rgb = mix(u.fogcolor.rgb, %s.rgb, f);\n", col, col);
     }
     sb_printf(b, "  return %s;\n}\n", col);
@@ -448,9 +449,11 @@ static void emit_fs_tail(Sb* b, const GfxFsKey* k, const char* col)
 static void emit_ff_fs(Sb* b, const GfxFsKey* k, const GfxVsKey* vk)
 {
     gfx_fx_functions(b, k->fx, GFX_FX_MSL);
+    gfx_fx_weather_functions(b, k->fog, GFX_FX_MSL);
     emit_fs_signature(b, k, vk);
     sb_printf(b, "  float4 cur = in.d, tmp = float4(0), tex = float4(1);\n");
     gfx_fx_begin(b, k->fx, "in");
+    gfx_fx_weather_begin(b, k->fog, GFX_FX_MSL, "in");
     for (int i = 0; i < k->nstages; ++i)
     {
         const GfxStage* s = &k->st[i];
@@ -462,7 +465,11 @@ static void emit_ff_fs(Sb* b, const GfxFsKey* k, const GfxVsKey* vk)
                 sb_printf(b, "  tex = tx%d.sample(sp%d, in.t%d.xy / in.t%d.%s);\n", i, i, i, i, w);
             }
             else
-                sb_printf(b, "  tex = tx%d.sample(sp%d, in.t%d.xy%s);\n", i, i, i, gfx_fx_coord(k->fx, i));
+            {
+                char c0[64], c1[96];
+                snprintf(c0, sizeof c0, "in.t%d.xy%s", i, gfx_fx_coord(k->fx, i));
+                sb_printf(b, "  tex = tx%d.sample(sp%d, %s);\n", i, i, gfx_fx_weather_uv(c1, sizeof c1, k->fog, c0));
+            }
         }
         else if (s->tex == 2)
             sb_printf(b, "  tex = tx%d.sample(sp%d, in.t%d.xyz);\n", i, i, i);

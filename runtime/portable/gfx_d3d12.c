@@ -1779,6 +1779,8 @@ static void draw_encode(const GfxDraw* d)
     if (!u.cpu)
         return;
     memcpy(u.cpu, &d->u, need);
+    if (need < sizeof(GfxU)) /* the effects' and the weather's (fxp, at the end) always */
+        memcpy((char*)u.cpu + offsetof(GfxU, fxp), d->u.fxp, sizeof d->u.fxp);
     ID3D12GraphicsCommandList_SetGraphicsRootConstantBufferView(l, ROOT_U, u.gpu);
     for (int s = 0; s < GFX_NSTREAMS; ++s)
     {
