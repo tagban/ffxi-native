@@ -33,6 +33,7 @@ extern "C" void d3d8_set_entity_others(int n, const float (*pos)[3]);
 extern "C" void d3d8_set_creatures(float birds, float fish, int flying_fish);
 extern "C" int d3d8_creatures_known(int which);
 extern "C" int d3d8_world_up_sign(void);
+extern "C" void d3d8_set_world_rock(int on, const float* m);
 extern "C" int d3d8_cam_command(const char* text);
 extern "C" int d3d8_cam_playing(void);
 extern "C" int d3d8_cam_hides_ui(void);
@@ -202,6 +203,7 @@ static struct
     float fun_birds = 1.0f, fun_fish = 1.0f; /* how many of the zone's birds and fish (1 as the game has them) */
     bool fun_ships = true;                    /* ships rock at the dock */
     bool fun_flying_fish = false;             /* the fish's copies through the air, as the birds' */
+    bool fun_aboard = true;                   /* aboard a ship, the world rocks (the deck with you) */
     float cam_pace = 0.5f, cam_smooth = 1.0f; /* the cinematic camera: how fast it flies the path, smoothing (seconds) */
     bool cam_hide = true, cam_bars = true;    /* the interfaces gone while it flies; black bars, as a film */
     float fun_ships_k = 1.0f;
@@ -884,6 +886,7 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "fun_fish=%f", &f) == 1 && f >= 1 && f <= 2000) g_set.fun_fish = f;
     else if (sscanf(line, "fun_ships=%d", &v) == 1) g_set.fun_ships = v != 0;
     else if (sscanf(line, "fun_flying_fish=%d", &v) == 1) g_set.fun_flying_fish = v != 0;
+    else if (sscanf(line, "fun_aboard=%d", &v) == 1) g_set.fun_aboard = v != 0;
     else if (sscanf(line, "cam_pace=%f", &f) == 1 && f >= 0.05f && f <= 4) g_set.cam_pace = f;
     else if (sscanf(line, "cam_smooth=%f", &f) == 1 && f >= 0 && f <= 5) g_set.cam_smooth = f;
     else if (sscanf(line, "cam_hide=%d", &v) == 1) g_set.cam_hide = v != 0;
@@ -926,7 +929,7 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("fun_server=%d\nfun_aurora=%d\nfun_world=%d\nfun_filter=%d\n", g_set.fun_server, g_set.fun_aurora, g_set.fun_world,
         g_set.fun_filter);
     out->appendf("cam_pace=%g\ncam_smooth=%g\ncam_hide=%d\ncam_bars=%d\n", g_set.cam_pace, g_set.cam_smooth, g_set.cam_hide, g_set.cam_bars);
-    out->appendf("fun_flying_fish=%d\n", g_set.fun_flying_fish);
+    out->appendf("fun_flying_fish=%d\nfun_aboard=%d\n", g_set.fun_flying_fish, g_set.fun_aboard);
     out->appendf("fun_birds=%g\nfun_fish=%g\nfun_ships=%d\nfun_ships_k=%g\n", g_set.fun_birds, g_set.fun_fish, g_set.fun_ships,
         g_set.fun_ships_k);
     const float *fa = g_set.fun_aurora_c, *ff = g_set.fun_filter_c;
@@ -1122,9 +1125,31 @@ static void entity_looks(void)
             mm[12] = px - (px * R[0] + py * R[3] + pz * R[6]);
             mm[13] = py - (px * R[1] + py * R[4] + pz * R[7]) - down * (float)d3d8_world_up_sign();
             mm[14] = pz - (px * R[2] + py * R[5] + pz * R[8]);
-            pos[k][0] = px, pos[k][1] = py, pos[k][2] = pz, pos[k][3] = 0.0f;
+            pos[k][0] = px, pos[k][1] = py, pos[k][2] = pz, pos[k][3] = -30.0f; /* its parts within 30 yalms too */
             memcpy(m[k++], mm, sizeof mm);
         }
+    }
+    {
+        /* aboard a ship: the whole world rocked gently about the player, so the deck moves with them
+         * (the ferries between Selbina and Mhaura, with and without pirates; the Manaclipper; the barge) */
+        uint16_t z = gamestate_zone();
+        bool aboard = z == 220 || z == 221 || z == 227 || z == 228 || z == 3 || z == 1;
+        float x, y, zz, f;
+        if (aboard && g_set.fun_aboard && g_set.fun_ships_k > 0.0f && dsound_in_world() && gamestate_self(&x, &y, &zz, &f))
+        {
+            float k = g_set.fun_ships_k;
+            float roll = 0.018f * k * sinf(t * 0.62f), pitch = 0.009f * k * sinf(t * 0.47f + 1.3f);
+            float heave = 0.12f * k * sinf(t * 0.8f + 0.4f) * (float)d3d8_world_up_sign();
+            float cr = cosf(roll), sr = sinf(roll), cp = cosf(pitch), sp = sinf(pitch);
+            float R[9] = { cp, sp, 0, -sp * cr, cp * cr, sr, sp * sr, -cp * sr, cr };
+            float mm[16] = { R[0], R[1], R[2], 0, R[3], R[4], R[5], 0, R[6], R[7], R[8], 0, 0, 0, 0, 1 };
+            mm[12] = x - (x * R[0] + y * R[3] + zz * R[6]);
+            mm[13] = y - (x * R[1] + y * R[4] + zz * R[7]) + heave;
+            mm[14] = zz - (x * R[2] + y * R[5] + zz * R[8]);
+            d3d8_set_world_rock(1, mm);
+        }
+        else
+            d3d8_set_world_rock(0, NULL);
     }
     d3d8_set_entity_xforms(k, pos, m);
     /* everyone not sized, the player first: a body drawn in world space is the nearest one's, so the
@@ -1331,6 +1356,7 @@ static void graphics_window(void)
             ImGui::SameLine();
             ImGui::SetNextItemWidth(-1);
             dirty |= ImGui::SliderFloat("##shipk", &g_set.fun_ships_k, 0.2f, 3.0f, "%.1f");
+            dirty |= ImGui::Checkbox("Aboard a ship, the sea rocks it (the deck with you)", &g_set.fun_aboard);
             ImGui::SetNextItemWidth(-90);
             dirty |= ImGui::SliderFloat("Birds", &g_set.fun_birds, 1.0f, 2000.0f, g_set.fun_birds >= 300.0f ? "x%.0f (insanity)" : "x%.0f",
                 ImGuiSliderFlags_Logarithmic);

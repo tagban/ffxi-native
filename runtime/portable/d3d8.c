@@ -3403,10 +3403,13 @@ void d3d8_set_look(int sky, const float* aurora, int world, int filter, const fl
 enum { ENT_XFORMS = 16 };
 static struct
 {
-    float pos[4]; /* x, y, z (the game's), reach (0: by the world matrix alone) */
+    float pos[4]; /* x, y, z (the game's), reach (0: by the world matrix alone; -r: a ship, with its parts
+                   * within r drawn by the same code as its hull - propellers, masts) */
     float m[16];
 } g_ent_xf[ENT_XFORMS];
 static int g_ent_nxf;
+static uint32_t g_ent_caller[ENT_XFORMS]; /* a ship's hull's code (the frame before), for its parts */
+static float g_ent_caller_at[ENT_XFORMS][3];
 /* everyone else around (the player first): a body drawn in world space is the nearest one's */
 enum { ENT_OTHERS = 128 };
 static float g_ent_others[ENT_OTHERS][3];
@@ -3450,7 +3453,30 @@ static void look_entities(GfxDraw* d, uint32_t first, uint32_t up_data, uint32_t
         const float* p = g_ent_xf[i].pos;
         float dx, dy, dz, r;
         if (placed)
+        {
             dx = W[12] - p[0], dy = W[13] - p[1], dz = W[14] - p[2], r = 0.75f;
+            if (p[3] < 0.0f)
+            {
+                /* a ship: its hull at its place (its code kept), and its parts near by the same code */
+                float d2 = dx * dx + dy * dy + dz * dz;
+                float* at = g_ent_caller_at[i];
+                if ((at[0] - p[0]) * (at[0] - p[0]) + (at[2] - p[2]) * (at[2] - p[2]) > 25.0f)
+                    g_ent_caller[i] = 0, at[0] = p[0], at[1] = p[1], at[2] = p[2];
+                if (d2 < r * r || (d2 < p[3] * p[3] && g_ent_caller[i]))
+                {
+                    uint32_t callers[4];
+                    int n = fx_callers(callers);
+                    uint32_t c = n > 1 ? callers[1] : n ? callers[0] : 0;
+                    if (d2 < r * r)
+                        g_ent_caller[i] = c;
+                    else if (c != g_ent_caller[i])
+                        continue;
+                    world_changed(d, g_ent_xf[i].m);
+                    return;
+                }
+                continue;
+            }
+        }
         else
         {
             if (p[3] <= 0.0f)
@@ -4193,10 +4219,37 @@ int d3d8_cam_hides_ui(void)
 }
 
 /* each draw: the game's view swapped for the flight's (the sky's, at the camera's place, its turn alone) */
+/* aboard a ship (the overlay's): the world rocked about the player, roll, pitch and heave (a change in
+ * world space, row vectors), on every draw's view - the deck with them, the sea and sky against it */
+static int g_rock_on;
+static float g_rock[16];
+
+void d3d8_set_world_rock(int on, const float* m)
+{
+    g_rock_on = on && m;
+    if (g_rock_on)
+        memcpy(g_rock, m, 64);
+}
+
 static void cam_draw_begin(void)
 {
     if (!g_cam.playing)
+    {
+        if (!g_rock_on)
+            return;
+        float* V = g_dev.cur.xf[2];
+        /* not the draws drawn with no view (their camera is in their world: creatures, effects) */
+        if (fabsf(V[0] - 1.0f) + fabsf(V[5] - 1.0f) + fabsf(V[10] - 1.0f) + fabsf(V[1]) + fabsf(V[2]) + fabsf(V[4]) < 1e-4f)
+            return;
+        memcpy(g_cam.game_view, V, 64);
+        float r[16];
+        memcpy(r, g_rock, 64);
+        if (fabsf(V[12]) + fabsf(V[13]) + fabsf(V[14]) < 1e-3f)
+            r[12] = r[13] = r[14] = 0.0f; /* the sky, at the camera's place: its turn alone */
+        mat_mul(V, r, g_cam.game_view);
+        g_cam.swapped = 1;
         return;
+    }
     float* V = g_dev.cur.xf[2];
     memcpy(g_cam.game_view, V, 64);
     int at_eye = fabsf(V[12]) + fabsf(V[13]) + fabsf(V[14]) < 1e-3f;

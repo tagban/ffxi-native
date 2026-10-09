@@ -63,6 +63,8 @@ void d3d8_set_creatures(float birds, float fish, int flying_fish);
 int d3d8_creatures_known(int which);
 /* Which way the drawn world's heights grow: +1 up is +y, -1 up is -y (the scene's camera) */
 int d3d8_world_up_sign(void);
+/* Aboard a ship: the world rocked about the player (a change in world space, 4x4 row vectors), or off */
+void d3d8_set_world_rock(int on, const float* m);
 /* The cinematic camera (d3d8.c): //xi cam record|stop|add|play|loop|clear|pace <x>|smooth <s>|ui|save <name>|load <name>
  * (1 if it was one); a tour round a point; whether it flies, and hides the interfaces; its settings
  * (each NULL to leave), the places on its path and whether it records */
