@@ -55,6 +55,8 @@ void d3d8_set_look(int sky, const float* aurora, int world, int filter, const fl
  * each the entity's place (x, y, z as the game has it; w the reach of a body drawn in world space, 0
  * for a model drawn at its place only) and a change in world space (4x4, row vectors) */
 void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float (*m)[16]);
+/* Everyone else around (x, y, z; the player first): a body drawn in world space goes to the nearest */
+void d3d8_set_entity_others(int n, const float (*pos)[3]);
 /* How many of the zone's birds and fish (1: as the game has them), and whether this build knows which
  * draws they are (0 birds, 1 fish) */
 void d3d8_set_creatures(float birds, float fish);

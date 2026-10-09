@@ -3392,6 +3392,16 @@ static struct
     float m[16];
 } g_ent_xf[ENT_XFORMS];
 static int g_ent_nxf;
+/* everyone else around (the player first): a body drawn in world space is the nearest one's */
+enum { ENT_OTHERS = 128 };
+static float g_ent_others[ENT_OTHERS][3];
+static int g_ent_nothers;
+
+void d3d8_set_entity_others(int n, const float (*pos)[3])
+{
+    g_ent_nothers = n < 0 ? 0 : n > ENT_OTHERS ? ENT_OTHERS : n;
+    memcpy(g_ent_others, pos, sizeof(float) * 3u * (size_t)g_ent_nothers);
+}
 
 void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float (*m)[16])
 {
@@ -3449,6 +3459,16 @@ static void look_entities(GfxDraw* d, uint32_t first, uint32_t up_data, uint32_t
                 have_v = 1;
             }
             dx = v[0] - p[0], dy = v[1] - p[1], dz = v[2] - p[2], r = p[3];
+            /* nearer someone else (the player in their armor, beside it): theirs, not its */
+            float mine = dx * dx + dy * dy + dz * dz;
+            int theirs = 0;
+            for (int o = 0; o < g_ent_nothers && !theirs && mine < r * r; ++o)
+            {
+                float ox = v[0] - g_ent_others[o][0], oy = v[1] - g_ent_others[o][1], oz = v[2] - g_ent_others[o][2];
+                theirs = ox * ox + oy * oy + oz * oz < mine;
+            }
+            if (theirs)
+                continue;
         }
         if (dx * dx + dy * dy + dz * dz < r * r)
         {

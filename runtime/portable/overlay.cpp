@@ -29,6 +29,7 @@ extern "C" void d3d8_falling(float* rain, float* snow);
 extern "C" void d3d8_set_water(int on, const float* v);
 extern "C" void d3d8_set_look(int sky, const float* aurora, int world, int filter, const float* tint);
 extern "C" void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float (*m)[16]);
+extern "C" void d3d8_set_entity_others(int n, const float (*pos)[3]);
 extern "C" void d3d8_set_creatures(float birds, float fish);
 extern "C" int d3d8_creatures_known(int which);
 extern "C" int d3d8_cam_command(const char* text);
@@ -1120,6 +1121,22 @@ static void entity_looks(void)
         }
     }
     d3d8_set_entity_xforms(k, pos, m);
+    /* everyone not sized, the player first: a body drawn in world space is the nearest one's, so the
+     * player's armor beside a sized prop stays the player's */
+    {
+        static float others[128][3];
+        int no = 0;
+        if (n && ents[n - 1].id == gamestate_self_id())
+            others[no][0] = ents[n - 1].x, others[no][1] = ents[n - 1].y, others[no][2] = ents[n - 1].z, ++no;
+        for (int i = 0; i < n && no < 128; ++i)
+        {
+            float* sc = size_of(ents[i].id, false);
+            if ((sc && *sc != 1.0f) || ents[i].id == gamestate_self_id())
+                continue;
+            others[no][0] = ents[i].x, others[no][1] = ents[i].y, others[no][2] = ents[i].z, ++no;
+        }
+        d3d8_set_entity_others(no, others);
+    }
     d3d8_set_creatures(g_set.fun_birds, g_set.fun_fish);
 }
 
