@@ -3266,7 +3266,7 @@ static const FxRule g_fx_rules[] = {
     { 0x1003d8f2u, 0, 0, 0, GFX_FX_SKY, 0, "the sky's dome (stars at night)" },
     { 0x1017dc92u, -1, 0, 0, GFX_FX_WET, 0, "wet ground and walls (in the rain)" }, /* the zone's own meshes */
 };
-/* the rain (d3d8_set_weather, from the server's) and how soaked the world is: it soaks in over a
+/* the rain (d3d8_set_weather, from the server's) and how soaked the world is: it soaks in over half a
  * minute and dries over three; //xi fx rain <0-2> pretends */
 static float g_fx_rain, g_fx_wet, g_fx_rain_forced = -1.0f;
 static uint64_t g_fx_wet_at;
@@ -3588,7 +3588,7 @@ static void fx_soak(void)
     g_fx_wet_at = now;
     dt = dt > 1.0f ? 1.0f : dt;
     float rain = g_fx_rain_forced >= 0.0f ? g_fx_rain_forced : g_fx_rain;
-    g_fx_wet = rain > 0.0f ? g_fx_wet + dt / 60.0f : g_fx_wet - dt / 180.0f;
+    g_fx_wet = rain > 0.0f ? g_fx_wet + dt / 25.0f : g_fx_wet - dt / 180.0f;
     g_fx_wet = g_fx_wet < 0.0f ? 0.0f : g_fx_wet > 1.0f ? 1.0f : g_fx_wet;
 }
 
@@ -3660,7 +3660,7 @@ static void fx_classify(GfxDraw* d)
             if (r->fx == GFX_FX_WET)
             {
                 fx_soak();
-                if (g_fx_wet <= 0.0f && rain <= 0.0f && g_wx.snow <= 0.0f)
+                if (g_fx_wet <= 0.0f && rain <= 0.0f && g_wx.snow <= 0.0f && g_fx_mark != 9)
                     return; /* dry: the game's own shader */
                 d->u.params2[3] = g_fx_wet + 2.0f * floorf(rain * 2.0f + 0.5f);
                 d->u.fxp[4][0] = g_wx.snow;
@@ -3689,11 +3689,6 @@ static void fx_classify(GfxDraw* d)
             {
                 if (!g_water_on)
                     return; /* the game's own water */
-                /* the sun (or moon) as the scene found it, toward it in eye space; how bright */
-                const GfxScene* sc = &g_scene.s;
-                float sl = 0.299f * sc->sun_color[0] + 0.587f * sc->sun_color[1] + 0.114f * sc->sun_color[2];
-                d->u.fxp[3][0] = sc->sun_dir[0], d->u.fxp[3][1] = sc->sun_dir[1], d->u.fxp[3][2] = sc->sun_dir[2];
-                d->u.fxp[3][3] = sc->sun_dir[3] != 0.0f ? (sl < 0.0f ? 0.0f : sl > 1.5f ? 1.5f : sl) : 0.0f;
                 d->u.fxp[4][0] = g_water[0], d->u.fxp[4][1] = g_water[1], d->u.fxp[4][2] = g_water[2];
                 d->u.fxp[4][3] = g_water[3] * 3.14159265f / 180.0f;
                 d->u.fxp[5][0] = g_water[4], d->u.fxp[5][1] = g_water[5], d->u.fxp[5][2] = g_water[6], d->u.fxp[5][3] = g_water[7];
@@ -3704,6 +3699,8 @@ static void fx_classify(GfxDraw* d)
             d->u.params2[2] = g_fx_k;
             if (r->fx == GFX_FX_POOL && d->pipe.blend && d->pipe.dst == 2)
                 d->u.params2[2] = g_fx_k * 0.35f; /* an added sheet (light on the water): touched lightly */
+            if (g_fx_mark == 9 && (r->fx == GFX_FX_POOL || r->fx == GFX_FX_WET))
+                d->u.params2[2] = -1.0f; /* //xi fx mark 9: painted by which way they face (gfx_fx.h) */
             /* a surface's tilt from its eye depth (gfx.h fxp): the projection's scale and the viewport's
              * size, and up (the game's world has heights more negative higher: up is -y) in eye space */
             const float* P = g_dev.cur.xf[3];
@@ -3718,8 +3715,13 @@ static void fx_classify(GfxDraw* d)
              * game's view counts its heights) */
             ul = uy < 0.0f ? -ul : ul;
             d->u.fxp[1][0] = ux * ul, d->u.fxp[1][1] = uy * ul, d->u.fxp[1][2] = uz * ul;
-            if (r->fx == GFX_FX_POOL)
+            if (r->fx == GFX_FX_POOL || r->fx == GFX_FX_WET)
             {
+                /* the sun (or moon) as the scene found it, toward it in eye space; how bright */
+                const GfxScene* sc = &g_scene.s;
+                float sl = 0.299f * sc->sun_color[0] + 0.587f * sc->sun_color[1] + 0.114f * sc->sun_color[2];
+                d->u.fxp[3][0] = sc->sun_dir[0], d->u.fxp[3][1] = sc->sun_dir[1], d->u.fxp[3][2] = sc->sun_dir[2];
+                d->u.fxp[3][3] = sc->sun_dir[3] != 0.0f ? (sl < 0.0f ? 0.0f : sl > 1.5f ? 1.5f : sl) : 0.0f;
                 /* the world's east and north in eye space, and the camera's place along them: the waves
                  * are the world's (gfx.h fxp[9], [10]) */
                 const float* V = g_dev.cur.xf[2];
@@ -3788,7 +3790,8 @@ int d3d8_fx_command(const char* t)
         }
     }
     if (sscanf(t, "fx mark %d", &m) == 1)
-        return g_fx_mark = m, rt_log("[recomp] fx: marking effect %d's draws magenta\n", m), 1;
+        return g_fx_mark = m, rt_log(m == 9 ? "[recomp] fx: painting the ground green, walls red, undersides blue; water flat blue, steep yellow\n"
+                                            : "[recomp] fx: marking effect %d's draws magenta\n", m), 1;
     return 0;
 }
 

@@ -256,6 +256,8 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "    float sp = pow(saturate(dot(r, u.fxp[3].xyz)), 500.0 / max(u.fxp[2].w, 0.1)) * u.fxp[5].w * u.fxp[3].w;\n"
             "    c = c + float3(1.0, 0.95, 0.85) * (sp * 4.0);\n"
             "    float kw = saturate(fx_k) * fxw_flat;\n"
+            /* //xi fx mark 9: the water as the effect sees it - flat blue, steep yellow, the rest grey */
+            "    if (u.params2.z < 0.0) c = fxw_flat > 0.5 ? float3(0.1, 0.4, 1.0) : fxw_steep > 0.5 ? float3(1.0, 0.9, 0.1) : float3(0.5, 0.5, 0.5), kw = 0.8;\n"
             "    cur.rgb = mix(cur.rgb, saturate(c), kw);\n"
             "    cur.a = mix(cur.a, max(cur.a, saturate(k * 1.2 + sp)), kw);\n"
             /* steep: the falls' streaks running down it */
@@ -279,23 +281,54 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
         sb_printf(b,
             "  {\n"
             "    float lvl = floor(u.params2.w * 0.5), wet = u.params2.w - 2.0 * lvl, rain = lvl * 0.5;\n"
-            /* the surface's tilt, from how its eye depth changes across the pixel: n faces the camera */
-            "    float ez = %s.ez, ezx = dfdx(ez), ezy = dfdy(ez) * fx_dy;\n"
-            "    float fa = u.fxp[0].x, fb = u.fxp[0].y;\n"
-            "    float3 n = normalize(float3(fb * ezx, -fa * ezy, -fa * fb * ez) + float3(0.0, 0.0, -1e-6));\n"
-            "    float upward = saturate(dot(n, u.fxp[1].xyz));\n"
+            /* the point in eye space and its surface (its triangle, facing the camera), as the water's;
+             * where it lies on the world's ground (fxp[9], [10]) */
+            "    float ez = %s.ez;\n"
+            "    float3 p = float3((%s.pos.x - u.fxp[2].x) * u.fxp[0].x * ez, -(%s.pos.y - u.fxp[2].y) * fx_dy * u.fxp[0].y * ez, ez);\n"
+            "    float3 up = u.fxp[1].xyz;\n"
+            "    float3 ng = normalize(cross(dfdx(p), dfdy(p)) + float3(0.0, 0.0, 1e-9));\n"
+            "    ng = dot(ng, p) > 0.0 ? -ng : ng;\n"
+            "    float upward = dot(ng, up);\n"
             "    float ground = smoothstep(0.55, 0.85, upward);\n"
+            "    float2 w = float2(u.fxp[9].w + dot(p, u.fxp[9].xyz), u.fxp[10].w + dot(p, u.fxp[10].xyz));\n"
             "    float3 c = cur.rgb;\n"
             "    float l = dot(c, float3(0.299, 0.587, 0.114));\n"
+            "    if (u.params2.z < 0.0) {\n"
+            /* //xi fx mark 9: which way each surface faces, as the effects see it - ground green, walls
+             * red, undersides blue */
+            "      float3 m = upward > 0.55 ? float3(0.1, 0.9, 0.2) : upward < -0.55 ? float3(0.2, 0.3, 1.0) : float3(0.95, 0.15, 0.1);\n"
+            "      cur.rgb = mix(cur.rgb, m, 0.7);\n"
+            "    } else {\n"
             /* soaked: deeper color, less light given back */
-            "    c = mix(c, saturate(float3(l, l, l) + (c - float3(l, l, l)) * 1.25), wet * 0.6);\n"
-            "    c = c * (1.0 - 0.32 * wet);\n"
-            /* wet and shiny: the sky (the game's fog color is its horizon) mirrored, far more at a glancing
-             * look across the surface (Fresnel); the ground most, walls and things standing a little */
-            "    float glance = 1.0 - saturate(-n.z);\n"
-            "    float fres = 0.04 + 0.96 * glance * glance * glance * glance * glance;\n"
-            "    float3 sky = mix(u.fogcolor.rgb, float3(1.0, 1.0, 1.0), 0.15);\n"
-            "    c = mix(c, sky, saturate(fres * 1.6) * wet * (0.3 + 0.7 * ground) * 0.85);\n"
+            "    c = mix(c, saturate(float3(l, l, l) + (c - float3(l, l, l)) * 1.35), wet * 0.7);\n"
+            "    c = c * (1.0 - 0.42 * wet);\n"
+            /* puddles: on the ground, where the world's own noise is low, spreading as it soaks */
+            "    float pn = fx_fbm(w * 0.18, float2(4096.0, 4096.0));\n"
+            "    float puddle = smoothstep(0.6 - 0.14 * wet, 0.68 - 0.14 * wet, 1.0 - pn) * ground * smoothstep(0.3, 0.9, wet);\n"
+            /* wet and slick: the sky mirrored (the horizon the game's fog color, deeper overhead), far more
+             * at a glancing look (Fresnel) and in the puddles, almost a mirror there */
+            "    float3 v = normalize(p + float3(0.0, 0.0, 1e-4));\n"
+            "    float3 r = v - 2.0 * dot(v, ng) * ng;\n"
+            "    float nv = saturate(-dot(v, ng));\n"
+            "    float fres = 0.03 + 0.97 * pow(saturate(1.0 - nv), 5.0);\n"
+            "    float e = saturate(dot(r, up));\n"
+            "    float3 sky = mix(u.fogcolor.rgb, u.fogcolor.rgb * float3(0.7, 0.8, 1.0) + float3(0.05, 0.07, 0.12), sqrt(e));\n"
+            "    float refl = saturate(fres * 1.5 * (0.35 + 0.65 * ground) + puddle * (0.55 + 0.4 * fres)) * wet;\n"
+            "    c = mix(c, sky, refl);\n"
+            /* the sun's (or moon's) glint off it: sharp in the puddles */
+            "    float sp = pow(saturate(dot(r, u.fxp[3].xyz)), 60.0 + 400.0 * puddle) * u.fxp[3].w * wet * (0.4 + 0.6 * ground);\n"
+            "    c = c + float3(1.0, 0.96, 0.88) * (sp * 2.0);\n"
+            /* rings spreading in the puddles where the rain strikes */
+            "    float2 rq = w * 0.8;\n"
+            "    float2 rc = floor(rq), rf = fract(rq);\n"
+            "    float rh = fx_hash(rc);\n"
+            "    float rper = 0.9 + 0.8 * rh;\n"
+            "    float rk = floor((fx_t + rh * 7.0) / rper);\n"
+            "    float rage = fx_t + rh * 7.0 - rk * rper;\n"
+            "    float2 rat = float2(fx_hash(rc + float2(rk, 3.1)), fx_hash(rc + float2(5.7, rk))) * 0.6 + 0.2;\n"
+            "    float ring = (1.0 - smoothstep(0.0, 0.04, abs(length(rf - rat) - rage * 0.45))) * exp(-rage * 3.0) *\n"
+            "                 step(fx_hash(rc + float2(rk * 0.7, rk)), rain * 1.6);\n"
+            "    c = c + float3(0.8, 0.85, 0.9) * (ring * puddle * 0.35);\n"
             /* drops: a cell of the texture each, striking now and then somewhere in it, on the ground */
             "    float2 q = %s.t0.xy * 18.0;\n"
             "    float2 cell = floor(q), f = fract(q);\n"
@@ -305,7 +338,7 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "    float age = (fx_t + h * 13.0) - k * period;\n"
             "    float2 at = float2(fx_hash(cell + float2(k, 1.7)), fx_hash(cell + float2(2.3, k))) * 0.7 + 0.15;\n"
             "    float hit = step(fx_hash(cell + float2(k * 0.37, k * 1.3)), rain);\n"
-            "    float drop = (1.0 - smoothstep(0.05, 0.1, length(f - at))) * exp(-age * 2.2) * hit * (0.25 + 0.75 * ground);\n"
+            "    float drop = (1.0 - smoothstep(0.05, 0.1, length(f - at))) * exp(-age * 2.2) * hit * (0.25 + 0.75 * ground) * (1.0 - puddle);\n"
             "    c = c * (1.0 - 0.38 * drop);\n"
             /* snow lying: on the ground, in patches that grow until it is all white, lit as the ground
              * was (its brightness), glinting here and there */
@@ -320,9 +353,10 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "      float glint = step(0.985, gh) * (1.0 - smoothstep(0.1, 0.3, length(fract(gq) - 0.5))) * (0.5 + 0.5 * sin(fx_t * 3.0 + gh * 40.0));\n"
             "      c = mix(c, white + glint * 0.6, cover);\n"
             "    }\n"
-            "    cur.rgb = mix(cur.rgb, c, saturate(fx_k));\n"
+            "    cur.rgb = mix(cur.rgb, saturate(c), saturate(fx_k));\n"
+            "    }\n"
             "  }\n",
-            in, in, in);
+            in, in, in, in, in);
         break;
     case GFX_FX_SKY:
         sb_printf(b,
