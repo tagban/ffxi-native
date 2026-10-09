@@ -204,7 +204,12 @@ static void gfx_fx_aurora(Sb* b, const char* in, const char* row)
         "    float h = (e - mid) / 0.14;\n"
         "    float band = exp(-h * h) * smoothstep(0.0, 0.06, e);\n"
         "    float rays = fx_fbm(float2(az * 64.0 + sway * 6.0, fx_t * 0.12), float2(64.0, 4096.0));\n"
-        "    float a = saturate(smoothstep(0.3, 0.75, rays) * band * (1.2 - 0.6 * saturate(h)) * %s.x);\n"
+        /* one display in one part of the sky, as the sun or moon: round the north, a hundred degrees or
+         * so across, wandering slowly */
+        "    float c0 = 0.25 + 0.06 * sin(fx_t * 0.004);\n"
+        "    float da = abs(az - c0); da = min(da, 1.0 - da);\n"
+        "    float sector = 1.0 - smoothstep(0.08, 0.16, da);\n"
+        "    float a = saturate(smoothstep(0.3, 0.75, rays) * band * sector * (1.2 - 0.6 * saturate(h)) * %s.x);\n"
         "    float3 c = %s.yzw;\n"
         "    c = mix(c, float3(c.z, c.x * 0.4, c.y) * 0.8 + float3(0.2, 0.0, 0.25), saturate(h * 0.6));\n"
         "    cur.rgb = saturate(mix(cur.rgb, c, a) + c * (a * 0.35));\n"

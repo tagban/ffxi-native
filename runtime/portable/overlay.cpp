@@ -32,6 +32,7 @@ extern "C" void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float
 extern "C" void d3d8_set_entity_others(int n, const float (*pos)[3]);
 extern "C" void d3d8_set_creatures(float birds, float fish, int flying_fish);
 extern "C" int d3d8_creatures_known(int which);
+extern "C" int d3d8_world_up_sign(void);
 extern "C" int d3d8_cam_command(const char* text);
 extern "C" int d3d8_cam_playing(void);
 extern "C" int d3d8_cam_hides_ui(void);
@@ -1106,7 +1107,7 @@ static void entity_looks(void)
         }
         else if (e.ship && g_set.fun_ships && g_set.fun_ships_k > 0.0f)
         {
-            /* heights grow downward in the game's world: + is down */
+            /* down, in the drawn world: against its up (the camera's to say) */
             float ph = (float)(e.id % 97) * 0.37f, A = 0.22f * g_set.fun_ships_k;
             float wave = 0.45f + 0.4f * sinf(t * 0.9f + ph) + 0.15f * sinf(t * 1.7f + ph * 2.0f); /* -0.1 .. 1 */
             float down = A * wave;
@@ -1117,7 +1118,7 @@ static void entity_looks(void)
             float mm[16] = { R[0], R[1], R[2], 0, R[3], R[4], R[5], 0, R[6], R[7], R[8], 0, 0, 0, 0, 1 };
             /* translation: p - p R + (0, down, 0) */
             mm[12] = px - (px * R[0] + py * R[3] + pz * R[6]);
-            mm[13] = py - (px * R[1] + py * R[4] + pz * R[7]) + down;
+            mm[13] = py - (px * R[1] + py * R[4] + pz * R[7]) - down * (float)d3d8_world_up_sign();
             mm[14] = pz - (px * R[2] + py * R[5] + pz * R[8]);
             pos[k][0] = px, pos[k][1] = py, pos[k][2] = pz, pos[k][3] = 0.0f;
             memcpy(m[k++], mm, sizeof mm);

@@ -3501,6 +3501,13 @@ static struct
 
 static int g_flying_fish; /* fish copies spread as birds do: through the air (a player's wish) */
 
+/* which way the drawn world's heights grow (+1: up is +y), as the scene's camera shows it */
+int d3d8_world_up_sign(void)
+{
+    const float* V = g_scene.s.view[15] != 0.0f ? g_scene.s.view : g_dev.cur.xf[2];
+    return V[5] >= 0.0f ? 1 : -1;
+}
+
 void d3d8_set_creatures(float birds, float fish, int flying_fish)
 {
     g_flying_fish = flying_fish;
@@ -3534,18 +3541,41 @@ static void creature_copies(GfxDraw* d)
     int which = match[0] ? 0 : 1;
     if (match[0] && match[1])
     {
-        /* the same code for both: above the camera a bird, below it a fish (the game's world counts
-         * heights downward: higher is less) */
+        /* the same code for both: above the camera a bird, below it a fish. Which way heights grow is
+         * the view's to say (the drawn world's y rises on the screen when V[5] > 0: up is +y; Kazham's
+         * butterflies were counted as fish when it was taken to be -y) */
         const float* V = g_dev.cur.xf[2];
         const float* W = g_dev.cur.xf[24];
-        float eye_y = -(V[12] * V[4] + V[13] * V[5] + V[14] * V[6]);
-        which = W[13] < eye_y ? 0 : 1;
+        int bare0 = fabsf(V[0] - 1.0f) + fabsf(V[5] - 1.0f) + fabsf(V[10] - 1.0f) + fabsf(V[1]) + fabsf(V[2]) + fabsf(V[4]) < 1e-4f;
+        if (bare0 && g_scene.s.view[15] != 0.0f)
+        {
+            /* its world holds where it is from the camera, turned with the camera: up from the camera
+             * is the scene's up, seen (the world's +y or -y, its row) */
+            const float* S = g_scene.s.view;
+            float sy = S[5] >= 0.0f ? 1.0f : -1.0f;
+            float above = (W[12] * S[4] + W[13] * S[5] + W[14] * S[6]) * sy;
+            which = above > 0.0f ? 0 : 1;
+        }
+        else
+        {
+            float eye_y = -(V[12] * V[4] + V[13] * V[5] + V[14] * V[6]);
+            float uy = V[5] >= 0.0f ? 1.0f : -1.0f;
+            which = (W[13] - eye_y) * uy > 0.0f ? 0 : 1;
+        }
     }
     if (g_creature[which].count < 1.5f)
         return;
     float keep[3][16];
     memcpy(keep[0], d->u.wvp, 64), memcpy(keep[1], d->u.wv, 64), memcpy(keep[2], d->u.wvit, 64);
     int copies = (int)g_creature[which].count - 1;
+    /* the creatures are drawn with no view of their own (the camera's place and turn are in their world
+     * matrices, Kazham's capture): an offset in the world goes through the camera's turn (the scene's
+     * view) first; with a view of their own, as it is */
+    static const float I[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    const float* DV = g_dev.cur.xf[2];
+    int bare = fabsf(DV[0] - 1.0f) + fabsf(DV[5] - 1.0f) + fabsf(DV[10] - 1.0f) + fabsf(DV[1]) + fabsf(DV[2]) + fabsf(DV[4]) < 1e-4f;
+    const float* C = bare && g_scene.s.view[15] != 0.0f ? g_scene.s.view : I;
+    int up_y = (bare ? C[5] : DV[5]) >= 0.0f ? 1 : -1;
     /* the more there are, the wider they spread (thousands fill the sky, not one spot); a frame draws
      * at most so many copies in all, so the game keeps its pace */
     float spread = sqrtf(g_creature[which].count / 10.0f);
@@ -3557,9 +3587,14 @@ static void creature_copies(GfxDraw* d)
     {
         float a = hash01(k * 3u + 1u) * 6.2831853f + g_wx.t * 0.03f * (hash01(k * 7u + 5u) - 0.5f);
         float r = reach * spread * (0.15f + 0.85f * sqrtf(hash01(k * 11u + 2u)));
+        float o[3] = { cosf(a) * r, 0.0f, sinf(a) * r };
+        o[1] = (hash01(k * 13u + 9u) - 0.5f) * rise * (1.0f + 0.5f * (spread - 1.0f)) +
+               (which && g_flying_fish ? rise * 0.6f * (float)up_y : 0.0f); /* up, into the air */
         float m[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
-        m[12] = cosf(a) * r, m[14] = sinf(a) * r;
-        m[13] = (hash01(k * 13u + 9u) - 0.5f) * rise * (1.0f + 0.5f * (spread - 1.0f)) - (which && g_flying_fish ? rise * 0.6f : 0.0f);
+        /* the offset is the world's: through the camera's turn when the draw carries it in its world */
+        m[12] = o[0] * C[0] + o[1] * C[4] + o[2] * C[8];
+        m[13] = o[0] * C[1] + o[1] * C[5] + o[2] * C[9];
+        m[14] = o[0] * C[2] + o[1] * C[6] + o[2] * C[10];
         world_changed(d, m);
         gfx_draw(d);
     }
