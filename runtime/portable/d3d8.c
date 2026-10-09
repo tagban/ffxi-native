@@ -1286,21 +1286,40 @@ static uint8_t mtag_of(const char* name)
     return MTAG_OTHER;
 }
 
-static void mtag_texture(Guest* g, uint32_t tex, uint32_t w, uint32_t h)
+static void mtag_texture(Guest* g, uint32_t tex, uint32_t w, uint32_t h, const char* when)
 {
     Obj* t = obj(tex);
-    if (!t)
+    if (!t || t->mtag)
         return;
     char name[17];
     int found = 0;
-    for (uint32_t a = g->esp; a < g->esp + 0x1000 && !found; a += 4)
+    uint32_t at = 0, ptr = 0;
+    int delta = 0;
+    /* a pointer on the stack near the image's header: the header's BITMAPINFOHEADER (40, width, height)
+     * within 64 bytes of where it points; the name the 16 bytes before it */
+    for (uint32_t a = g->esp; a < g->esp + 0x2000 && !found; a += 4)
     {
         if (!gwin_is_committed(a))
             break;
         uint32_t v = rd32(a);
-        if (v < 0x10000)
+        if (v < 0x10000 || !gwin_is_committed(v - 81) || !gwin_is_committed(v + 76))
             continue;
-        found = mtag_name_at(v, w, h, name) || mtag_name_at(v + 16, w, h, name);
+        for (int dd = -64; dd <= 64 && !found; dd += 1)
+        {
+            uint32_t x = v + (uint32_t)dd;
+            if (rd32(x) == 40 && rd32(x + 4) == w && rd32(x + 8) == h && mtag_name_at(x - 17, w, h, name))
+                found = 1, at = a - g->esp, ptr = v, delta = dd;
+        }
+    }
+    static int probes;
+    if (probes < 24 && w >= 32)
+    {
+        ++probes;
+        if (found)
+            rt_log("[recomp] textures: %s %ux%u: the image's header %d bytes from a pointer at the stack's +%03x (%08x)\n", when, w, h, delta,
+                at, ptr);
+        else
+            rt_log("[recomp] textures: %s %ux%u: no image header near the stack\n", when, w, h);
     }
     if (!found)
         return;
@@ -1328,7 +1347,7 @@ static void IDirect3DDevice8_CreateTexture(Guest* g)
     uint32_t tex = new_texture(O_TEXTURE, ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6));
     wr32(ARG(7), tex);
     if (tex)
-        mtag_texture(g, tex, ARG(1), ARG(2));
+        mtag_texture(g, tex, ARG(1), ARG(2), "made");
     RET(D3D_OK, 8);
 }
 
@@ -4760,6 +4779,12 @@ static void Texture_UnlockRect(Guest* g)
     if (!s)
         RET(D3DERR_INVALIDCALL, 2);
     unlock_rect(s);
+    if (ARG(1) == 0) /* its first level filled: the image it was filled from (material tags) */
+    {
+        Obj* t = obj(ARG(0));
+        if (t)
+            mtag_texture(g, ARG(0), t->width, t->height, "filled");
+    }
     RET(D3D_OK, 2);
 }
 static void Texture_AddDirtyRect(Guest* g) { RET(D3D_OK, 2); }
@@ -4872,6 +4897,12 @@ static void Surface_UnlockRect(Guest* g)
     if (!s)
         RET(D3DERR_INVALIDCALL, 1);
     unlock_rect(s);
+    if (s->container && s->level == 0) /* a texture's first level, through its surface (material tags) */
+    {
+        Obj* t = obj(s->container);
+        if (t && t->kind == O_TEXTURE)
+            mtag_texture(g, s->container, t->width, t->height, "filled");
+    }
     RET(D3D_OK, 1);
 }
 
