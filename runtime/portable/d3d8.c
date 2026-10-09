@@ -2440,6 +2440,7 @@ static struct
 static float g_sky_stars = 1.0f;
 static int g_sky_shooting = 1;
 static int g_sky_seen; /* the dome was drawn this frame (its aurora there, not on the clouds) */
+static int g_creature_budget = 40000; /* more birds and fish: copies left this frame */
 
 /* The look (d3d8_set_look: MogHouse's !skyfx, or the player's own): an aurora on the clouds, the world
  * in wireframe, a color filter on every draw but the interface's (its rows, gfx.h fxp[6..8]) */
@@ -3500,8 +3501,6 @@ int d3d8_creatures_known(int which)
 {
     return which >= 0 && which < 2 && g_creature[which].caller != 0;
 }
-
-static int g_creature_budget = 40000; /* copies left this frame */
 
 static float hash01(uint32_t x)
 {
