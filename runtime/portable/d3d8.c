@@ -3487,7 +3487,7 @@ static struct
 {
     uint32_t caller;
     float count, reach, rise;
-} g_creature[2] = { { 0x1003f839u, 1.0f, 36.0f, 8.0f }, { 0x1003f839u, 1.0f, 8.0f, 0.6f } };
+} g_creature[2] = { { 0x1003f839u, 1.0f, 36.0f, 8.0f }, { 0x1003f839u, 1.0f, 8.0f, 0.3f } };
 /* the game's code that draws a zone's creatures - birds, fish, butterflies - alike (Valkurm Dunes,
  * Kazham, 2026-10-09): one above the camera is a bird, one below a fish */
 
@@ -3523,20 +3523,12 @@ static void creature_copies(GfxDraw* d)
     int which = match[0] ? 0 : 1;
     if (match[0] && match[1])
     {
-        /* the same code for both: above the camera a bird, below it a fish (up: the view's own, the
-         * camera never upside down) */
+        /* the same code for both: above the camera a bird, below it a fish (the game's world counts
+         * heights downward: higher is less) */
         const float* V = g_dev.cur.xf[2];
         const float* W = g_dev.cur.xf[24];
-        float ux = -V[4], uy = -V[5], uz = -V[6];
-        if (uy < 0.0f)
-            ux = -ux, uy = -uy, uz = -uz;
-        /* up in the world, and the camera's place */
-        float uw[3] = { ux * V[0] + uy * V[1] + uz * V[2], ux * V[4] + uy * V[5] + uz * V[6], ux * V[8] + uy * V[9] + uz * V[10] };
-        float eye[3];
-        for (int c = 0; c < 3; ++c)
-            eye[c] = -(V[12] * V[c * 4 + 0] + V[13] * V[c * 4 + 1] + V[14] * V[c * 4 + 2]);
-        float above = (W[12] - eye[0]) * uw[0] + (W[13] - eye[1]) * uw[1] + (W[14] - eye[2]) * uw[2];
-        which = above > 0.0f ? 0 : 1;
+        float eye_y = -(V[12] * V[4] + V[13] * V[5] + V[14] * V[6]);
+        which = W[13] < eye_y ? 0 : 1;
     }
     if (g_creature[which].count < 1.5f)
         return;
@@ -3546,7 +3538,7 @@ static void creature_copies(GfxDraw* d)
     /* the more there are, the wider they spread (thousands fill the sky, not one spot); a frame draws
      * at most so many copies in all, so the game keeps its pace */
     float spread = sqrtf(g_creature[which].count / 10.0f);
-    spread = spread < 1.0f ? 1.0f : spread > 8.0f ? 8.0f : spread;
+    spread = spread < 1.0f ? 1.0f : spread > (which ? 1.25f : 8.0f) ? (which ? 1.25f : 8.0f) : spread; /* fish keep to their water */
     for (int k = 1; k <= copies && k <= 2000 && g_creature_budget > 0; ++k, --g_creature_budget)
     {
         float a = hash01(k * 3u + 1u) * 6.2831853f + g_wx.t * 0.03f * (hash01(k * 7u + 5u) - 0.5f);
