@@ -876,8 +876,8 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "fun_aurora=%d", &v) == 1) g_set.fun_aurora = v != 0;
     else if (sscanf(line, "fun_world=%d", &v) == 1 && v >= 0 && v <= 2) g_set.fun_world = v;
     else if (sscanf(line, "fun_filter=%d", &v) == 1 && v >= 0 && v <= 5) g_set.fun_filter = v;
-    else if (sscanf(line, "fun_birds=%f", &f) == 1 && f >= 1 && f <= 50) g_set.fun_birds = f;
-    else if (sscanf(line, "fun_fish=%f", &f) == 1 && f >= 1 && f <= 30) g_set.fun_fish = f;
+    else if (sscanf(line, "fun_birds=%f", &f) == 1 && f >= 1 && f <= 2000) g_set.fun_birds = f;
+    else if (sscanf(line, "fun_fish=%f", &f) == 1 && f >= 1 && f <= 2000) g_set.fun_fish = f;
     else if (sscanf(line, "fun_ships=%d", &v) == 1) g_set.fun_ships = v != 0;
     else if (sscanf(line, "cam_pace=%f", &f) == 1 && f >= 0.05f && f <= 4) g_set.cam_pace = f;
     else if (sscanf(line, "cam_smooth=%f", &f) == 1 && f >= 0 && f <= 5) g_set.cam_smooth = f;
@@ -1143,12 +1143,16 @@ static void entity_looks(void)
 static void graphics_window(void)
 {
     ImGui::SetNextWindowPos(ImVec2(320, 24), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(400, 0), ImGuiCond_FirstUseEver);
+    /* as tall as it needs, never wider than this: a long name or line wraps, the window stays put */
+    float em = ImGui::GetFontSize();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(em * 26.0f, 0), ImVec2(em * 30.0f, FLT_MAX));
     if (!ImGui::Begin("Graphics", &g_gfx_open, ImGuiWindowFlags_AlwaysAutoResize))
     {
         ImGui::End();
         return;
     }
+    ImGui::PushTextWrapPos(0.0f);
     bool dirty = false;
     if (ImGui::BeginTabBar("gfx"))
     {
@@ -1316,12 +1320,12 @@ static void graphics_window(void)
             ImGui::SetNextItemWidth(-1);
             dirty |= ImGui::SliderFloat("##shipk", &g_set.fun_ships_k, 0.2f, 3.0f, "%.1f");
             ImGui::SetNextItemWidth(-90);
-            dirty |= ImGui::SliderFloat("Birds", &g_set.fun_birds, 1.0f, 50.0f, g_set.fun_birds >= 40.0f ? "x%.0f (insanity)" : "x%.0f");
+            dirty |= ImGui::SliderFloat("Birds", &g_set.fun_birds, 1.0f, 2000.0f, g_set.fun_birds >= 300.0f ? "x%.0f (insanity)" : "x%.0f",
+                ImGuiSliderFlags_Logarithmic);
             ImGui::SetNextItemWidth(-90);
-            dirty |= ImGui::SliderFloat("Fish", &g_set.fun_fish, 1.0f, 30.0f, "x%.0f");
-            if (!d3d8_creatures_known(0) || !d3d8_creatures_known(1))
-                ImGui::TextDisabled("The zones' %s not found yet: a frame capture near them finds them.",
-                    !d3d8_creatures_known(0) && !d3d8_creatures_known(1) ? "birds and fish are" : !d3d8_creatures_known(0) ? "birds are" : "fish are");
+            dirty |= ImGui::SliderFloat("Fish", &g_set.fun_fish, 1.0f, 2000.0f, g_set.fun_fish >= 300.0f ? "x%.0f (insanity)" : "x%.0f",
+                ImGuiSliderFlags_Logarithmic);
+            ImGui::TextDisabled("The zone's own creatures (birds, butterflies, fish): those above the camera count as birds, those below as fish.");
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Camera"))
@@ -1372,6 +1376,7 @@ static void graphics_window(void)
     }
     if (dirty)
         ImGui::MarkIniSettingsDirty();
+    ImGui::PopTextWrapPos();
     ImGui::End();
 }
 

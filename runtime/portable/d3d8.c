@@ -3215,6 +3215,7 @@ static void scene_present(void)
     fx_weather_tick();
     cam_tick();
     g_sky_seen = 0;
+    g_creature_budget = 40000;
     GfxTex* world_before = g_scene.world;
     /* next frame's world: this frame's busiest target */
     uint32_t best = 0;
@@ -3485,7 +3486,9 @@ static struct
 {
     uint32_t caller;
     float count, reach, rise;
-} g_creature[2] = { { 0, 1.0f, 36.0f, 8.0f }, { 0, 1.0f, 8.0f, 0.6f } };
+} g_creature[2] = { { 0x1003f839u, 1.0f, 36.0f, 8.0f }, { 0x1003f839u, 1.0f, 8.0f, 0.6f } };
+/* the game's code that draws a zone's creatures - birds, fish, butterflies - alike (Valkurm Dunes,
+ * Kazham, 2026-10-09): one above the camera is a bird, one below a fish */
 
 void d3d8_set_creatures(float birds, float fish)
 {
@@ -3497,6 +3500,8 @@ int d3d8_creatures_known(int which)
 {
     return which >= 0 && which < 2 && g_creature[which].caller != 0;
 }
+
+static int g_creature_budget = 40000; /* copies left this frame */
 
 static float hash01(uint32_t x)
 {
@@ -3510,23 +3515,46 @@ static void creature_copies(GfxDraw* d)
         (!g_creature[0].caller && !g_creature[1].caller))
         return;
     uint32_t callers[4];
-    int n = fx_callers(callers), which = -1;
-    for (int k = 0; k < 2 && which < 0; ++k)
-        for (int c = 0; c < n && which < 0; ++c)
-            if (g_creature[k].caller && callers[c] == g_creature[k].caller && g_creature[k].count >= 1.5f)
-                which = k;
-    if (which < 0)
+    int n = fx_callers(callers), match[2] = { 0, 0 };
+    for (int k = 0; k < 2; ++k)
+        for (int c = 0; c < n; ++c)
+            match[k] |= g_creature[k].caller && callers[c] == g_creature[k].caller;
+    if (!match[0] && !match[1])
+        return;
+    int which = match[0] ? 0 : 1;
+    if (match[0] && match[1])
+    {
+        /* the same code for both: above the camera a bird, below it a fish (up: the view's own, the
+         * camera never upside down) */
+        const float* V = g_dev.cur.xf[2];
+        const float* W = g_dev.cur.xf[24];
+        float ux = -V[4], uy = -V[5], uz = -V[6];
+        if (uy < 0.0f)
+            ux = -ux, uy = -uy, uz = -uz;
+        /* up in the world, and the camera's place */
+        float uw[3] = { ux * V[0] + uy * V[1] + uz * V[2], ux * V[4] + uy * V[5] + uz * V[6], ux * V[8] + uy * V[9] + uz * V[10] };
+        float eye[3];
+        for (int c = 0; c < 3; ++c)
+            eye[c] = -(V[12] * V[c * 4 + 0] + V[13] * V[c * 4 + 1] + V[14] * V[c * 4 + 2]);
+        float above = (W[12] - eye[0]) * uw[0] + (W[13] - eye[1]) * uw[1] + (W[14] - eye[2]) * uw[2];
+        which = above > 0.0f ? 0 : 1;
+    }
+    if (g_creature[which].count < 1.5f)
         return;
     float keep[3][16];
     memcpy(keep[0], d->u.wvp, 64), memcpy(keep[1], d->u.wv, 64), memcpy(keep[2], d->u.wvit, 64);
     int copies = (int)g_creature[which].count - 1;
-    for (int k = 1; k <= copies && k < 200; ++k)
+    /* the more there are, the wider they spread (thousands fill the sky, not one spot); a frame draws
+     * at most so many copies in all, so the game keeps its pace */
+    float spread = sqrtf(g_creature[which].count / 10.0f);
+    spread = spread < 1.0f ? 1.0f : spread > 8.0f ? 8.0f : spread;
+    for (int k = 1; k <= copies && k <= 2000 && g_creature_budget > 0; ++k, --g_creature_budget)
     {
         float a = hash01(k * 3u + 1u) * 6.2831853f + g_wx.t * 0.03f * (hash01(k * 7u + 5u) - 0.5f);
-        float r = g_creature[which].reach * (0.2f + 0.8f * hash01(k * 11u + 2u));
+        float r = g_creature[which].reach * spread * (0.15f + 0.85f * sqrtf(hash01(k * 11u + 2u)));
         float m[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
         m[12] = cosf(a) * r, m[14] = sinf(a) * r;
-        m[13] = (hash01(k * 13u + 9u) - 0.5f) * g_creature[which].rise;
+        m[13] = (hash01(k * 13u + 9u) - 0.5f) * g_creature[which].rise * (1.0f + 0.5f * (spread - 1.0f));
         world_changed(d, m);
         gfx_draw(d);
     }
