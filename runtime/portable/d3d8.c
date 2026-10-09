@@ -2952,6 +2952,14 @@ static void cap_draw(GfxDraw* d, uint32_t prim, uint32_t count, uint32_t first, 
         const float* W = g_dev.cur.xf[24];
         fprintf(f, "\n  proj %.4f %.4f %.4f %.4f view t %.2f %.2f %.2f world t %.2f %.2f %.2f", P[0], P[5], P[8], P[9],
             V[12], V[13], V[14], W[12], W[13], W[14]);
+        /* the turns too, and our effect's values (gfx.h fxp): where the effects think up and east are */
+        fprintf(f, "\n  view %.3f %.3f %.3f | %.3f %.3f %.3f | %.3f %.3f %.3f  world %.3f %.3f %.3f | %.3f %.3f %.3f | %.3f %.3f %.3f",
+            V[0], V[1], V[2], V[4], V[5], V[6], V[8], V[9], V[10], W[0], W[1], W[2], W[4], W[5], W[6], W[8], W[9], W[10]);
+        if (d->fs.fx)
+            fprintf(f, "\n  fx %u  fxp0 %.4g %.4g %.3g %.3g  up %.3f %.3f %.3f t %.1f  mid %.0f %.0f  east5 %.3f %.3f %.3f  east9 %.3f %.3f %.3f %.1f  north %.3f %.3f %.3f %.1f",
+                d->fs.fx, d->u.fxp[0][0], d->u.fxp[0][1], d->u.fxp[0][2], d->u.fxp[0][3], d->u.fxp[1][0], d->u.fxp[1][1], d->u.fxp[1][2],
+                d->u.fxp[1][3], d->u.fxp[2][0], d->u.fxp[2][1], d->u.fxp[5][0], d->u.fxp[5][1], d->u.fxp[5][2], d->u.fxp[9][0],
+                d->u.fxp[9][1], d->u.fxp[9][2], d->u.fxp[9][3], d->u.fxp[10][0], d->u.fxp[10][1], d->u.fxp[10][2], d->u.fxp[10][3]);
     }
     fprintf(f, "\n  stack");
     for (uint32_t a = g_cap_esp, k = 0; a < g_cap_esp + 0x600 && k < 12; a += 4)
