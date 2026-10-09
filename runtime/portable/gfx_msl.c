@@ -20,7 +20,7 @@
 #include "gfx_msl.h"
 #include "gfx_fx.h"
 
-_Static_assert(sizeof(GfxU) == 3632, "GfxU must match the MSL struct U");
+_Static_assert(sizeof(GfxU) == 3680, "GfxU must match the MSL struct U");
 
 void sb_printf(Sb* b, const char* fmt, ...)
 {
@@ -55,7 +55,7 @@ static const char PRELUDE[] =
     "  int4 offset[5];\n"
     "  Light light[8];\n"
     "  float4 vsc[96];\n"
-    "  float4 psc[8];\n  float4 fxp[6];\n"
+    "  float4 psc[8];\n  float4 fxp[9];\n"
     "};\n"
     "static inline int reg_offset(constant U& u, int r) { return u.offset[r >> 2][r & 3]; }\n"
     "static inline float4 ld_color(device const uchar* p) { uchar4 c = *(device const uchar4*)p; return float4(c.z, c.y, c.x, c.w) / 255.0; }\n";
@@ -443,6 +443,7 @@ static void emit_fs_tail(Sb* b, const GfxFsKey* k, const char* col)
         gfx_fx_weather_fog(b, "in");
         sb_printf(b, "  %s.rgb = mix(u.fogcolor.rgb, %s.rgb, f);\n", col, col);
     }
+    gfx_fx_filter(b, col, GFX_FX_MSL);
     sb_printf(b, "  return %s;\n}\n", col);
 }
 

@@ -127,6 +127,11 @@ int gamestate_flying(void);
 /* The zone's weather as the server last said (LandSandBoat's xi::Weather: 6 rain, 7 squall, 12 snow,
  * 14 thunder, 15 thunderstorms ...) */
 int gamestate_weather(void);
+/* The zone's look from MogHouse's server (!skyfx, at the end of its weather packet): sky (0 none,
+ * 1 an aurora), world (0 as it is, 1 the zone in wireframe, 2 everything), filter (0 none, 1 grey,
+ * 2 sepia, 3 a color, 4 inverted, 5 night vision), 0, the sky's r g b strength, the filter's r g b
+ * amount (0-255). 1 when there is one. */
+int gamestate_look(uint8_t out[12]);
 /* Every packet the game sends (but its position reports) to the log for this long: learning them */
 void gamestate_log_out(double seconds);
 /* The game's table of entity pointers (meta/builds.json "entity_map"; 0 unknown): positions and

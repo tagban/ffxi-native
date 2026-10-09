@@ -2433,6 +2433,15 @@ static struct
     uint64_t at;
 } g_wx = { 0, -1, 1, 1, 1 };
 
+/* The look (d3d8_set_look: MogHouse's !skyfx, or the player's own): an aurora on the clouds, the world
+ * in wireframe, a color filter on every draw but the interface's (its rows, gfx.h fxp[6..8]) */
+static struct
+{
+    int sky, world, filter;
+    float aurora[4]; /* strength, r, g, b */
+    float rows[3][4];
+} g_look;
+
 /* The keys and uniforms for the current state; 0 when the state cannot be drawn. */
 static int build_draw(GfxDraw* d)
 {
@@ -2517,6 +2526,8 @@ static int build_draw(GfxDraw* d)
     d->u.fxp[0][2] = g_wx.heat, d->u.fxp[0][3] = g_wx.fog;
     d->u.fxp[1][3] = g_wx.t;
     d->u.fxp[2][2] = d->vp[3] ? (float)d->vp[3] / 720.0f : 1.0f;
+    if (g_look.filter && !d->vs.rhw)
+        memcpy(d->u.fxp[6], g_look.rows, sizeof g_look.rows);
 
     int ff_vertex = !d->vs.prog && !lay->rhw;
     if (ff_vertex && rs[137]) /* LIGHTING */
@@ -2626,7 +2637,7 @@ static int build_draw(GfxDraw* d)
     if (d->pipe.blend)
         d->pipe.src = (uint8_t)rs[19], d->pipe.dst = (uint8_t)rs[20], d->pipe.op = (uint8_t)rs[171];
     /* FFXI draws its text adding (ONE, ONE): its font's outline can only brighten what is behind it.
-     * A replacement drawn that way has its colour premultiplied by alpha (make_texpack --additive), so
+     * A replacement drawn that way has its color premultiplied by alpha (make_texpack --additive), so
      * over (ONE, INVSRCALPHA) draws the same fill and lets the outline darken, as the game's other
      * lettering does. */
     if (repl0 && d->pipe.blend && d->pipe.src == 2 && d->pipe.dst == 2 && d->pipe.op == 1)
@@ -3287,6 +3298,8 @@ void d3d8_set_weather_effects(int rain, int fog, int heat)
     g_wx.rain_on = rain, g_wx.fog_on = fog, g_wx.heat_on = heat;
 }
 
+static int fx_callers(uint32_t* out);
+
 /* still water's settings (the overlay's): on, then wave height, speed, size, direction (degrees),
  * blue to green (-1..1, 0 the game's), brightness, sky reflection, glint, glint size */
 static int g_water_on = 1;
@@ -3297,6 +3310,56 @@ void d3d8_set_water(int on, const float* v)
     g_water_on = on;
     if (v)
         memcpy(g_water, v, sizeof g_water);
+}
+
+void d3d8_set_look(int sky, const float* aurora, int world, int filter, const float* tint)
+{
+    g_look.sky = sky, g_look.world = world;
+    g_look.aurora[0] = sky == 1 && aurora ? aurora[3] : 0.0f;
+    for (int i = 0; i < 3; ++i)
+        g_look.aurora[1 + i] = aurora ? aurora[i] : 0.0f;
+    /* the filter as a color matrix and offset, less the color itself (so all 0 is none), by its amount */
+    static const float LUM[3] = { 0.299f, 0.587f, 0.114f };
+    static const float SEPIA[3][3] = { { 0.393f, 0.769f, 0.189f }, { 0.349f, 0.686f, 0.168f }, { 0.272f, 0.534f, 0.131f } };
+    static const float NIGHT[3] = { 0.3f, 1.5f, 0.4f };
+    float m[3][4] = { { 0 } }, amount = tint ? tint[3] : 1.0f;
+    for (int r = 0; r < 3; ++r)
+    {
+        for (int c = 0; c < 3; ++c)
+        {
+            float v = c == r ? 1.0f : 0.0f;
+            switch (filter)
+            {
+            case 1: v = LUM[c]; break;
+            case 2: v = SEPIA[r][c]; break;
+            case 3: v = LUM[c] * 1.3f * (tint ? tint[r] : 1.0f); break;
+            case 4: v = c == r ? -1.0f : 0.0f; break;
+            case 5: v = LUM[c] * NIGHT[r]; break;
+            default: break;
+            }
+            m[r][c] = (v - (c == r ? 1.0f : 0.0f)) * amount;
+        }
+        m[r][3] = (filter == 4 ? 1.0f : filter == 5 && r == 1 ? 0.04f : 0.0f) * amount;
+    }
+    g_look.filter = filter > 0 && filter <= 5 && amount > 0.0f ? filter : 0;
+    memcpy(g_look.rows, m, sizeof m);
+}
+
+/* the zone's own meshes in wireframe (or everything but the interface): after the effects are picked */
+static void look_wireframe(GfxDraw* d)
+{
+    if (!g_look.world || d->vs.rhw)
+        return;
+    if (g_look.world == 2)
+    {
+        d->fill = 2;
+        return;
+    }
+    uint32_t callers[4];
+    int n = fx_callers(callers);
+    for (int i = 0; i < n; ++i)
+        if (callers[i] == 0x1017dc92u) /* the zone's meshes (as the wet ground's rule) */
+            d->fill = 2;
 }
 
 static void fx_weather_tick(void)
@@ -3366,7 +3429,7 @@ static void fx_note_other(int rule, const uint32_t* callers, int n)
 static void fx_classify(GfxDraw* d)
 {
     d->fs.fx = GFX_FX_NONE;
-    /* the game's own pixel shaders too (a zone's bump-mapped ground): the effect goes on their colour */
+    /* the game's own pixel shaders too (a zone's bump-mapped ground): the effect goes on their color */
     if ((!g_fx_on && !g_fx_mark) || d->vs.rhw || (!d->fs.prog && !d->fs.nstages) || d->fs.st[0].tex != 1)
         return;
     uint32_t callers[4];
@@ -3402,6 +3465,14 @@ static void fx_classify(GfxDraw* d)
                 if (g_fx_wet <= 0.0f && rain <= 0.0f)
                     return; /* dry: the game's own shader */
                 d->u.params2[3] = g_fx_wet + 2.0f * floorf(rain * 2.0f + 0.5f);
+            }
+            if (r->fx == GFX_FX_CLOUDS && g_look.aurora[0] > 0.0f)
+            {
+                memcpy(d->u.fxp[4], g_look.aurora, sizeof g_look.aurora);
+                const float* V = g_dev.cur.xf[2]; /* east (the world's +x) in eye space */
+                float ex = V[0], ey = V[1], ez = V[2], el = sqrtf(ex * ex + ey * ey + ez * ez);
+                el = el > 0.0f ? 1.0f / el : 0.0f;
+                d->u.fxp[5][0] = ex * el, d->u.fxp[5][1] = ey * el, d->u.fxp[5][2] = ez * el;
             }
             if (r->fx == GFX_FX_POOL)
             {
@@ -3584,6 +3655,7 @@ static void draw_packet(uint32_t prim, uint32_t count, uint32_t start, uint32_t 
         return;
     scene_note(d);
     fx_classify(d);
+    look_wireframe(d);
     if (g_cap)
         cap_draw(d, prim, count, first, nverts, up_data, up_stride);
     if (d->vs.rhw && (g_dev.rt == g_dev.backbuffer || menu_target(obj(g_dev.rt))))

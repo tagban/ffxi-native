@@ -23,6 +23,7 @@
 extern "C" int dsound_in_world(void);
 extern "C" void d3d8_set_weather_effects(int rain, int fog, int heat);
 extern "C" void d3d8_set_water(int on, const float* v);
+extern "C" void d3d8_set_look(int sky, const float* aurora, int world, int filter, const float* tint);
 
 /* Fonts: Roboto is built in; the others are the player's own system's, loaded from where each
  * system keeps them if they are there (nothing of theirs is shipped). Kept in overlay.ini by name. */
@@ -174,6 +175,13 @@ static struct
      * sky reflection, glint, glint size */
     bool water = true;
     float water_v[9] = { 1.0f, 1.0f, 1.0f, 35.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+    /* fun (d3d8_set_look): the server's events (!skyfx) over the player's own look, or not; an aurora
+     * (r, g, b, strength), wireframe (0 off, 1 the zone, 2 everything), a filter (0 none, 1 grey, 2 sepia,
+     * 3 a color, 4 inverted, 5 night vision; r, g, b, amount) */
+    bool fun_server = true, fun_aurora = false;
+    float fun_aurora_c[4] = { 0.24f, 1.0f, 0.55f, 0.8f };
+    int fun_world = 0, fun_filter = 0;
+    float fun_filter_c[4] = { 1.0f, 0.78f, 0.31f, 0.6f };
     /* the windows' background and the chat's: a color and how solid (the player's) */
     float win_bg[4] = { 0.102f, 0.118f, 0.180f, 0.88f }, chat_bg[4] = { 0.094f, 0.118f, 0.188f, 0.80f }; /* the interface skin's slate */
     /* the chat, as the game's log: down to a few lines when nothing has come for a while */
@@ -837,6 +845,16 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "wx_fog=%d", &v) == 1) g_set.wx_fog = v != 0;
     else if (sscanf(line, "wx_heat=%d", &v) == 1) g_set.wx_heat = v != 0;
     else if (sscanf(line, "water=%d", &v) == 1) g_set.water = v != 0;
+    else if (sscanf(line, "fun_server=%d", &v) == 1) g_set.fun_server = v != 0;
+    else if (sscanf(line, "fun_aurora=%d", &v) == 1) g_set.fun_aurora = v != 0;
+    else if (sscanf(line, "fun_world=%d", &v) == 1 && v >= 0 && v <= 2) g_set.fun_world = v;
+    else if (sscanf(line, "fun_filter=%d", &v) == 1 && v >= 0 && v <= 5) g_set.fun_filter = v;
+    else if (!strncmp(line, "fun_aurora_c=", 13) || !strncmp(line, "fun_filter_c=", 13))
+    {
+        float c[4];
+        if (sscanf(line + 13, "%f,%f,%f,%f", &c[0], &c[1], &c[2], &c[3]) == 4)
+            memcpy(line[4] == 'a' ? g_set.fun_aurora_c : g_set.fun_filter_c, c, sizeof c);
+    }
     else if (!strncmp(line, "water_v=", 8))
     {
         float w[9];
@@ -862,6 +880,11 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("death_screen=%d\nspace_jumps=%d\n", g_set.death_screen, g_set.space_jumps);
     out->appendf("map_alpha=%.2f\nwx_rain=%d\nwx_fog=%d\nwx_heat=%d\nwater=%d\n", g_set.map_alpha, g_set.wx_rain, g_set.wx_fog,
         g_set.wx_heat, g_set.water);
+    out->appendf("fun_server=%d\nfun_aurora=%d\nfun_world=%d\nfun_filter=%d\n", g_set.fun_server, g_set.fun_aurora, g_set.fun_world,
+        g_set.fun_filter);
+    const float *fa = g_set.fun_aurora_c, *ff = g_set.fun_filter_c;
+    out->appendf("fun_aurora_c=%.3f,%.3f,%.3f,%.3f\nfun_filter_c=%.3f,%.3f,%.3f,%.3f\n", fa[0], fa[1], fa[2], fa[3], ff[0], ff[1], ff[2],
+        ff[3]);
     const float* w = g_set.water_v;
     out->appendf("water_v=%g,%g,%g,%g,%g,%g,%g,%g,%g\n", w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8]);
     out->appendf("win_bg=%.3f,%.3f,%.3f,%.3f\nchat_bg=%.3f,%.3f,%.3f,%.3f\n", g_set.win_bg[0], g_set.win_bg[1], g_set.win_bg[2],
@@ -965,6 +988,43 @@ static void graphics_window(void)
             dirty |= ImGui::Checkbox("Fog, storms, snow: a fog nearer than the game's", &g_set.wx_fog);
             dirty |= ImGui::Checkbox("Hot spells, heat waves: the air shimmers far off", &g_set.wx_heat);
             ImGui::TextDisabled("//xi fx weather <0-19> tries one out; -1 back to the server's.");
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Fun"))
+        {
+            uint8_t sl[12];
+            bool from_server = gamestate_look(sl) != 0;
+            dirty |= ImGui::Checkbox("Let the server's events change the picture (!skyfx)", &g_set.fun_server);
+            if (from_server)
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), g_set.fun_server ? "This zone has a look from the server: yours waits until it ends."
+                                                                                       : "This zone has a look from the server (not shown: yours instead).");
+            ImGui::Separator();
+            const ImGuiColorEditFlags cf = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoAlpha;
+            dirty |= ImGui::Checkbox("Aurora", &g_set.fun_aurora);
+            ImGui::SameLine(110);
+            dirty |= ImGui::ColorEdit3("##auroracol", g_set.fun_aurora_c, cf);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1);
+            dirty |= ImGui::SliderFloat("##aurorastr", &g_set.fun_aurora_c[3], 0.1f, 1.5f, "strength %.2f");
+            ImGui::TextDisabled("Curtains of light low around the sky (on the zone's clouds).");
+            const char* worlds[] = { "Off", "The zone (people and monsters as they are)", "Everything" };
+            ImGui::SetNextItemWidth(-90);
+            dirty |= ImGui::Combo("Wireframe", &g_set.fun_world, worlds, 3);
+            const char* filters[] = { "None", "Gray", "Sepia", "A color", "Inverted", "Night vision" };
+            ImGui::SetNextItemWidth(-90);
+            dirty |= ImGui::Combo("Filter", &g_set.fun_filter, filters, 6);
+            if (g_set.fun_filter)
+            {
+                if (g_set.fun_filter == 3)
+                {
+                    dirty |= ImGui::ColorEdit3("##filtercol", g_set.fun_filter_c, cf);
+                    ImGui::SameLine();
+                }
+                ImGui::SetNextItemWidth(-90);
+                dirty |= ImGui::SliderFloat("Amount", &g_set.fun_filter_c[3], 0.05f, 1.0f, "%.2f");
+            }
+            ImGui::Separator();
+            ImGui::TextDisabled("To come: more birds in the sky; a monster made bigger or smaller.");
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -1301,7 +1361,7 @@ static void chat_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const cha
     unsigned rgb, kinds;
     char key[32];
     if (sscanf(line, "color.%31[a-z0-9]=%x", key, &rgb) == 2 ||
-        sscanf(line, "colour.%31[a-z0-9]=%x", key, &rgb) == 2) /* the first test builds wrote colour. */
+        sscanf(line, "color.%31[a-z0-9]=%x", key, &rgb) == 2) /* the first test builds wrote color. */
     {
         for (int k = 0; k < KINDS; ++k)
             if (!strcmp(key, KIND_KEY[k]))
@@ -3196,5 +3256,21 @@ extern "C" void overlay_build_frame(void)
         ImGui::MarkIniSettingsDirty(); /* a window closed with its x */
     d3d8_set_weather_effects(g_set.wx_rain, g_set.wx_fog, g_set.wx_heat);
     d3d8_set_water(g_set.water, g_set.water_v);
+    {
+        /* the look: the server's event, if there is one and the player lets it; else the player's own */
+        uint8_t sl[12];
+        if (gamestate_look(sl) && g_set.fun_server)
+        {
+            const float aurora[4] = { sl[4] / 255.0f, sl[5] / 255.0f, sl[6] / 255.0f, sl[7] / 255.0f };
+            const float tint[4] = { sl[8] / 255.0f, sl[9] / 255.0f, sl[10] / 255.0f, sl[11] / 255.0f };
+            d3d8_set_look(sl[0], aurora, sl[1], sl[2], tint);
+        }
+        else
+        {
+            const float* a = g_set.fun_aurora_c;
+            const float aurora[4] = { a[0], a[1], a[2], a[3] };
+            d3d8_set_look(g_set.fun_aurora ? 1 : 0, aurora, g_set.fun_world, g_set.fun_filter, g_set.fun_filter_c);
+        }
+    }
     ImGui::Render();
 }

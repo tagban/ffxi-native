@@ -173,9 +173,13 @@ typedef struct GfxU
      *   [1] xyz which way is up, in eye space; w seconds (wrapping)
      *   [2] xy the viewport's middle, in the target's pixels; z its height / 720
      *   [3] xyz toward the sun (or moon), in eye space; w how bright (0: no such light)
-     *   [4] still water: wave height, speed, size, direction (radians)
-     *   [5] still water: blue (-1) to green (1) (0 the game's), brightness, sky reflection, glint */
-    float fxp[6][4];
+     *   [4] still water: wave height, speed, size, direction (radians); the clouds: the aurora's
+     *       strength, r, g, b
+     *   [5] still water: blue (-1) to green (1) (0 the game's), brightness, sky reflection, glint; the
+     *       clouds: east (the world's +x) in eye space
+     *   [6..8] a color filter on every draw but the interface's: each row the change to r, g, b
+     *       (row . color + w), all 0 none */
+    float fxp[9][4];
 } GfxU;
 
 typedef struct GfxSampler

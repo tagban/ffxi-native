@@ -46,6 +46,17 @@ static void chat(const uint8_t* p, uint32_t size)
 
 static void zone_in(const uint8_t* p, uint32_t size);
 static int g_weather; /* the zone's weather (0x00A at 0x68, 0x057 at 0x08): LandSandBoat's xi::Weather */
+/* the zone's look from MogHouse's server (!skyfx): the tail of its weather packet, from 0x10 ("MOGX" at
+ * 0x0C, then the version), or none; a weather packet without it, or a new zone, is none */
+static uint8_t g_look[12];
+static void weather_in(const uint8_t* p, uint32_t size)
+{
+    g_weather = p[0x08] | p[0x09] << 8;
+    if (size >= 0x1C && !memcmp(p + 0x0C, "MOGX", 4) && p[0x10] == 1)
+        memcpy(g_look, p + 0x11, 3), memcpy(g_look + 4, p + 0x14, 8), g_look[3] = 0;
+    else
+        memset(g_look, 0, sizeof g_look);
+}
 static void group_attr(const uint8_t* p, uint32_t size);
 static void group_list(const uint8_t* p, uint32_t size);
 static void group_table(const uint8_t* p, uint32_t size);
@@ -89,7 +100,7 @@ void gamestate_feed(const uint8_t* buf, uint32_t len)
         switch (id)
         {
         case 0x00A: zone_in(buf + at, size); break;
-        case 0x057: g_weather = size >= 0x0A ? (int)(buf[at + 0x08] | buf[at + 0x09] << 8) : g_weather; break;
+        case 0x057: if (size >= 0x0C) weather_in(buf + at, size); break;
         case 0x0DF: group_attr(buf + at, size); break;
         case 0x0DD: group_list(buf + at, size); break;
         case 0x0C8: group_table(buf + at, size); break;
@@ -402,6 +413,12 @@ int gamestate_flying(void)
 int gamestate_weather(void)
 {
     return g_weather;
+}
+
+int gamestate_look(uint8_t out[12])
+{
+    memcpy(out, g_look, sizeof g_look);
+    return g_look[0] || g_look[1] || g_look[2];
 }
 
 static void self_status(const uint8_t* p, uint32_t size)
@@ -747,6 +764,7 @@ static void zone_in(const uint8_t* p, uint32_t size)
     g_self = u32(p + 0x04);
     g_zone = u16(p + 0x30);
     g_weather = u16(p + 0x68);
+    memset(g_look, 0, sizeof g_look);
     self_death(p[0x1F], NULL);
     zone_entities(p);
     want_map(g_zone, g_me.x, g_me.y, g_me.z);

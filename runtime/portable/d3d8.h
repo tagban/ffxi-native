@@ -43,3 +43,7 @@ void d3d8_set_weather(int weather);
 void d3d8_set_weather_effects(int rain, int fog, int heat);
 /* Still water (the overlay's settings): on, and 9 values (d3d8.c g_water) */
 void d3d8_set_water(int on, const float* v);
+/* The look (MogHouse's !skyfx, or the player's): sky 1 an aurora (aurora: r, g, b, strength, 0-1);
+ * world 1 the zone's meshes in wireframe, 2 everything; filter 1 grey, 2 sepia, 3 a color, 4 inverted,
+ * 5 night vision (tint: r, g, b, amount, 0-1) */
+void d3d8_set_look(int sky, const float* aurora, int world, int filter, const float* tint);

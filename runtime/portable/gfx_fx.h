@@ -9,11 +9,14 @@
  *                  (Fresnel) - and the sun's or moon's glint; the game's water seen through them, tinted
  *                  as the player likes (GfxU.fxp[4], [5])
  *   GFX_FX_FALLS   falling water: streaks running down it
- *   GFX_FX_WET     a zone's ground and walls in the rain: darker and deeper in colour as they soak,
+ *   GFX_FX_WET     a zone's ground and walls in the rain: darker and deeper in color as they soak,
  *                  shiny (the sky mirrored, most at a glancing look and on the ground: the surface's
  *                  tilt from its eye depth's change across the pixel, GfxU.fxp), and drops striking the
  *                  ground - a small dark dot that fades over a second or so. GfxU.params2.w carries the
  *                  wetness (0-1) plus 2 x the rain (0 none, 1 rain, 2 a downpour)
+ *
+ * GFX_FX_CLOUDS also carries an aurora when one is asked for (GfxU.fxp[4], [5]: MogHouse's !skyfx or the
+ * player's): curtains of light low over the horizon all around, waving, their lower edges brightest.
  *
  * And the weather on every fogged draw (gfx_fx_weather_*): its fog, nearer (GfxU.fxp[0].w), and the
  * heat's shimmer, the textures read a pixel or two aside in rising bands, the more the farther (.z).
@@ -39,7 +42,7 @@ static void gfx_fx_functions(Sb* b, int fx, int lang)
     /* fx_dy: down the screen is +1 (Metal's and Direct3D's pixel rows run down; OpenGL's run up) */
     if (lang == GFX_FX_GLSL)
         sb_printf(b, "#define float2 vec2\n#define float3 vec3\n#define float4 vec4\n#define dfdx dFdx\n#define dfdy dFdy\n"
-                     "#define fx_dy (-1.0)\n");
+                     "#define fx_dy (-1.0)\n#define atan2 atan\n");
     else if (lang == GFX_FX_HLSL)
         sb_printf(b, "#define fract frac\n#define mix lerp\n#define dfdx ddx\n#define dfdy ddy\n#define fx_dy 1.0\n");
     else
@@ -158,6 +161,15 @@ static const char* gfx_fx_weather_uv(char* out, size_t n, int fog, const char* c
     return out;
 }
 
+/* A color filter (MogHouse's !skyfx, or the player's), on everything but the interface: the color
+ * plus each row's change (GfxU.fxp[6..8]: all 0 none), on the color the draw would leave. */
+static void gfx_fx_filter(Sb* b, const char* col, int lang)
+{
+    sb_printf(b, "  %s.rgb = clamp(%s.rgb + %s(dot(%s.rgb, u.fxp[6].xyz) + u.fxp[6].w, dot(%s.rgb, u.fxp[7].xyz) + u.fxp[7].w,\n"
+                 "      dot(%s.rgb, u.fxp[8].xyz) + u.fxp[8].w), 0.0, 1.0);\n",
+        col, col, lang == GFX_FX_GLSL ? "vec3" : "float3", col, col, col);
+}
+
 /* The fog factor f (1 clear) thinned by the weather's fog, by the eye depth: after the game's own. */
 static void gfx_fx_weather_fog(Sb* b, const char* in)
 {
@@ -181,8 +193,28 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "    cur.rgb = saturate(cur.rgb * mix(1.0, 0.78 + 0.34 * smoothstep(0.35, 0.8, c), fx_k));\n"
             /* in a fog (the weather's), the clouds all but lost in it */
             "    cur.rgb = mix(cur.rgb, u.fogcolor.rgb, saturate(u.fxp[0].w * 15.0));\n"
+            "  }\n"
+            /* an aurora: where this point of the dome is, seen from the camera - how high (from up) and
+             * which way round (from east and up, so it stays put as the camera turns) */
+            "  if (u.fxp[4].x > 0.0) {\n"
+            "    float ez = %s.ez;\n"
+            "    float3 p = float3((%s.pos.x - u.fxp[2].x) * u.fxp[0].x * ez, -(%s.pos.y - u.fxp[2].y) * fx_dy * u.fxp[0].y * ez, ez);\n"
+            "    float3 d = normalize(p + float3(0.0, 0.0, 1e-4)), up = u.fxp[1].xyz, east = u.fxp[5].xyz;\n"
+            "    float3 north = cross(up, east);\n"
+            "    float e = dot(d, up);\n"
+            "    float az = atan2(dot(d, north), dot(d, east)) * 0.15915494 + 0.5;\n"
+            "    float sway = fx_fbm(float2(az * 5.0, fx_t * 0.03), float2(5.0, 4096.0));\n"
+            "    float mid = 0.22 + 0.16 * sway;\n"
+            "    float h = (e - mid) / 0.11;\n"
+            "    float band = exp(-h * h) * smoothstep(0.0, 0.08, e);\n"
+            "    float rays = fx_fbm(float2(az * 64.0 + sway * 6.0, fx_t * 0.12), float2(64.0, 4096.0));\n"
+            "    float a = saturate(smoothstep(0.3, 0.75, rays) * band * (1.2 - 0.6 * saturate(h)) * u.fxp[4].x);\n"
+            "    float3 c = u.fxp[4].yzw;\n"
+            "    c = mix(c, float3(c.z, c.x * 0.4, c.y) * 0.8 + float3(0.2, 0.0, 0.25), saturate(h * 0.6));\n"
+            "    cur.rgb = saturate(mix(cur.rgb, c, a) + c * (a * 0.35));\n"
+            "    cur.a = max(cur.a, a);\n"
             "  }\n",
-            in);
+            in, in, in, in);
         break;
     case GFX_FX_POOL:
         sb_printf(b,
@@ -191,7 +223,7 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "    float nv = saturate(-dot(v, n));\n"
             "    float fres = 0.02 + 0.98 * pow(saturate(1.0 - nv), 5.0);\n"
             "    float3 r = v - 2.0 * dot(v, n) * n;\n"
-            /* the sky it mirrors: the horizon is the game's fog colour, deeper and bluer overhead */
+            /* the sky it mirrors: the horizon is the game's fog color, deeper and bluer overhead */
             "    float e = saturate(dot(r, up));\n"
             "    float3 hor = u.fogcolor.rgb;\n"
             "    float3 sky = mix(hor, hor * float3(0.62, 0.76, 0.98) + float3(0.02, 0.05, 0.12), sqrt(e));\n"
@@ -231,10 +263,10 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "    float ground = smoothstep(0.55, 0.85, upward);\n"
             "    float3 c = cur.rgb;\n"
             "    float l = dot(c, float3(0.299, 0.587, 0.114));\n"
-            /* soaked: deeper colour, less light given back */
+            /* soaked: deeper color, less light given back */
             "    c = mix(c, saturate(float3(l, l, l) + (c - float3(l, l, l)) * 1.25), wet * 0.6);\n"
             "    c = c * (1.0 - 0.32 * wet);\n"
-            /* wet and shiny: the sky (the game's fog colour is its horizon) mirrored, far more at a glancing
+            /* wet and shiny: the sky (the game's fog color is its horizon) mirrored, far more at a glancing
              * look across the surface (Fresnel); the ground most, walls and things standing a little */
             "    float glance = 1.0 - saturate(-n.z);\n"
             "    float fres = 0.04 + 0.96 * glance * glance * glance * glance * glance;\n"

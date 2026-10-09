@@ -21,7 +21,7 @@
 #include "gfx_hlsl.h"
 #include "gfx_fx.h"
 
-_Static_assert(sizeof(GfxU) == 3632, "GfxU must match the HLSL struct U");
+_Static_assert(sizeof(GfxU) == 3680, "GfxU must match the HLSL struct U");
 
 void sb_printf(Sb* b, const char* fmt, ...)
 {
@@ -55,7 +55,7 @@ static const char PRELUDE[] =
     "  int4 offset[5];\n"
     "  Light light[8];\n"
     "  float4 vsc[96];\n"
-    "  float4 psc[8];\n  float4 fxp[6];\n"
+    "  float4 psc[8];\n  float4 fxp[9];\n"
     "};\n"
     "cbuffer CU : register(b0) { U u; };\n"
     "cbuffer Bind : register(b1) { uint4 ti[2]; uint4 si[2]; };\n"
@@ -360,6 +360,7 @@ static void emit_fs_tail(Sb* b, const GfxFsKey* k, const char* col)
         gfx_fx_weather_fog(b, "vin");
         sb_printf(b, "  %s.rgb = lerp(u.fogcolor.rgb, %s.rgb, f);\n", col, col);
     }
+    gfx_fx_filter(b, col, GFX_FX_HLSL);
     sb_printf(b, "  return %s;\n}\n", col);
 }
 

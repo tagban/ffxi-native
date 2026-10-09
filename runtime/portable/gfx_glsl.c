@@ -24,7 +24,7 @@
 #include "gfx_glsl.h"
 #include "gfx_fx.h"
 
-_Static_assert(sizeof(GfxU) == 3632, "GfxU must match the GLSL block CU");
+_Static_assert(sizeof(GfxU) == 3680, "GfxU must match the GLSL block CU");
 
 void sb_printf(Sb* b, const char* fmt, ...)
 {
@@ -62,7 +62,7 @@ static const char PRELUDE[] =
     "  ivec4 offset[5];\n"
     "  Light light[8];\n"
     "  vec4 vsc[96];\n"
-    "  vec4 psc[8];\n  vec4 fxp[6];\n"
+    "  vec4 psc[8];\n  vec4 fxp[9];\n"
     "} u;\n"
     "#ifdef VERTEX\n"
     "uniform usamplerBuffer s0, s1, s2, s3;\n"
@@ -396,6 +396,7 @@ static void emit_fs_tail(Sb* b, const GfxFsKey* k, const char* col)
         gfx_fx_weather_fog(b, "vin");
         sb_printf(b, "  %s.rgb = mix(u.fogcolor.rgb, %s.rgb, f);\n", col, col);
     }
+    gfx_fx_filter(b, col, GFX_FX_GLSL);
     sb_printf(b, "  return %s;\n}\n", col);
 }
 
