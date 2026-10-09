@@ -2439,6 +2439,7 @@ static struct
 /* the night sky (d3d8_set_sky): how many stars more (0 none, 1, 2 many), shooting stars on */
 static float g_sky_stars = 1.0f;
 static int g_sky_shooting = 1;
+static int g_sky_seen; /* the dome was drawn this frame (its aurora there, not on the clouds) */
 
 /* The look (d3d8_set_look: MogHouse's !skyfx, or the player's own): an aurora on the clouds, the world
  * in wireframe, a color filter on every draw but the interface's (its rows, gfx.h fxp[6..8]) */
@@ -3213,6 +3214,7 @@ static void scene_present(void)
     scene_finish("present");
     fx_weather_tick();
     cam_tick();
+    g_sky_seen = 0;
     GfxTex* world_before = g_scene.world;
     /* next frame's world: this frame's busiest target */
     uint32_t best = 0;
@@ -3309,6 +3311,16 @@ void d3d8_set_weather(int weather)
 void d3d8_set_weather_effects(int rain, int fog, int heat, int lightning, int snow)
 {
     g_wx.rain_on = rain, g_wx.fog_on = fog, g_wx.heat_on = heat, g_wx.lightning_on = lightning, g_wx.snow_on = snow;
+}
+
+/* what is falling now (our weather: the server's, or //xi fx's pretending): rain 0, 0.5 rain, 1 a
+ * downpour; snow 0, 0.5 snow, 1 a blizzard */
+void d3d8_falling(float* rain, float* snow)
+{
+    int w = g_wx.forced >= 0 ? g_wx.forced : g_wx.weather;
+    float r = g_fx_rain_forced >= 0.0f ? g_fx_rain_forced : g_fx_rain;
+    *rain = g_fx_on ? r : 0.0f;
+    *snow = g_fx_on && g_wx.snow_on ? (w == 13 ? 1.0f : w == 12 ? 0.5f : 0.0f) : 0.0f;
 }
 
 void d3d8_set_sky(float stars, int shooting)
@@ -3650,15 +3662,17 @@ static void fx_classify(GfxDraw* d)
             }
             if (r->fx == GFX_FX_SKY)
             {
-                if (g_sky_stars <= 0.0f && !g_sky_shooting)
+                g_sky_seen = 1;
+                if (g_sky_stars <= 0.0f && !g_sky_shooting && g_look.aurora[0] <= 0.0f)
                     return;
                 d->u.fxp[4][0] = g_sky_stars, d->u.fxp[4][1] = g_sky_shooting ? 1.0f : 0.0f;
+                memcpy(d->u.fxp[3], g_look.aurora, sizeof g_look.aurora); /* the aurora, on the whole sky */
                 const float* V = g_dev.cur.xf[2];
                 float ex = V[0], ey = V[1], ez = V[2], el = sqrtf(ex * ex + ey * ey + ez * ez);
                 el = el > 0.0f ? 1.0f / el : 0.0f;
                 d->u.fxp[5][0] = ex * el, d->u.fxp[5][1] = ey * el, d->u.fxp[5][2] = ez * el;
             }
-            if (r->fx == GFX_FX_CLOUDS && g_look.aurora[0] > 0.0f)
+            if (r->fx == GFX_FX_CLOUDS && g_look.aurora[0] > 0.0f && !g_sky_seen)
             {
                 memcpy(d->u.fxp[4], g_look.aurora, sizeof g_look.aurora);
                 const float* V = g_dev.cur.xf[2]; /* east (the world's +x) in eye space */

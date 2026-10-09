@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <float.h>
+#include <stdlib.h>
 #include <string>
 #include <unordered_map>
 #include <math.h>
@@ -24,6 +25,7 @@
 extern "C" int dsound_in_world(void);
 extern "C" void d3d8_set_weather_effects(int rain, int fog, int heat, int lightning, int snow);
 extern "C" void d3d8_set_sky(float stars, int shooting);
+extern "C" void d3d8_falling(float* rain, float* snow);
 extern "C" void d3d8_set_water(int on, const float* v);
 extern "C" void d3d8_set_look(int sky, const float* aurora, int world, int filter, const float* tint);
 extern "C" void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float (*m)[16]);
@@ -180,6 +182,7 @@ static struct
     float map_alpha = 1.0f; /* the map's opacity (its right-click menu) */
     /* the weather's effects (d3d8.c): rain on the ground, its fog, the heat's shimmer */
     bool wx_rain = true, wx_fog = true, wx_heat = true, wx_lightning = true, wx_snow = true;
+    bool wx_falling = true; /* rain and snow falling over the picture (ours: some zones' have none) */
     float sky_stars = 1.0f; /* the night sky: stars more (0 none) */
     bool sky_shooting = true;
     /* still water (d3d8.c g_water): wave height, speed, size, direction (degrees), blue to green, brightness,
@@ -864,6 +867,7 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "wx_heat=%d", &v) == 1) g_set.wx_heat = v != 0;
     else if (sscanf(line, "wx_lightning=%d", &v) == 1) g_set.wx_lightning = v != 0;
     else if (sscanf(line, "wx_snow=%d", &v) == 1) g_set.wx_snow = v != 0;
+    else if (sscanf(line, "wx_falling=%d", &v) == 1) g_set.wx_falling = v != 0;
     else if (sscanf(line, "sky_stars=%f", &f) == 1 && f >= 0 && f <= 3) g_set.sky_stars = f;
     else if (sscanf(line, "sky_shooting=%d", &v) == 1) g_set.sky_shooting = v != 0;
     else if (sscanf(line, "water=%d", &v) == 1) g_set.water = v != 0;
@@ -908,6 +912,7 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("chat_shrink=%d\nchat_quiet_lines=%d\nchat_quiet_secs=%g\n", g_set.chat_shrink, g_set.chat_quiet_lines,
         g_set.chat_quiet_secs);
     out->appendf("death_screen=%d\nspace_jumps=%d\n", g_set.death_screen, g_set.space_jumps);
+    out->appendf("wx_falling=%d\n", g_set.wx_falling);
     out->appendf("wx_lightning=%d\nwx_snow=%d\nsky_stars=%g\nsky_shooting=%d\n", g_set.wx_lightning, g_set.wx_snow, g_set.sky_stars,
         g_set.sky_shooting);
     out->appendf("map_alpha=%.2f\nwx_rain=%d\nwx_fog=%d\nwx_heat=%d\nwater=%d\n", g_set.map_alpha, g_set.wx_rain, g_set.wx_fog,
@@ -974,6 +979,69 @@ static void edit_banner(void)
             g_edit = false, ImGui::MarkIniSettingsDirty();
     }
     ImGui::End();
+}
+
+/* --- rain and snow falling ------------------------------------------------------------------------------
+ * Over the game's picture, under the windows, by our weather (d3d8_falling): rain as slanted streaks,
+ * thick in a downpour; snow as flakes drifting down, swaying. Sized to the screen. */
+static void precipitation(void)
+{
+    enum { MOST = 900 };
+    static struct
+    {
+        float x, y, v, len, phase;
+    } p[MOST];
+    static bool made;
+    static float shown_rain, shown_snow;
+    float rain = 0.0f, snow = 0.0f;
+    if (g_set.wx_falling && dsound_in_world())
+        d3d8_falling(&rain, &snow);
+    float dt = ImMin(ImGui::GetIO().DeltaTime, 0.1f);
+    /* in and out over a few seconds, not all at once */
+    shown_rain += (rain - shown_rain) * ImMin(1.0f, dt * 0.5f);
+    shown_snow += (snow - shown_snow) * ImMin(1.0f, dt * 0.5f);
+    if (shown_rain < 0.01f && shown_snow < 0.01f)
+        return;
+    ImVec2 d = ImGui::GetIO().DisplaySize;
+    float k = d.y / 1080.0f;
+    if (!made)
+    {
+        for (int i = 0; i < MOST; ++i)
+            p[i].x = (float)rand() / RAND_MAX, p[i].y = (float)rand() / RAND_MAX, p[i].v = 0.7f + 0.6f * (float)rand() / RAND_MAX,
+            p[i].len = 0.6f + 0.8f * (float)rand() / RAND_MAX, p[i].phase = 6.28f * (float)rand() / RAND_MAX;
+        made = true;
+    }
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    float t = (float)ImGui::GetTime();
+    bool snowing = shown_snow > shown_rain;
+    int n = (int)((snowing ? shown_snow * 600.0f : shown_rain * 800.0f));
+    n = n > MOST ? MOST : n;
+    for (int i = 0; i < n; ++i)
+    {
+        if (snowing)
+        {
+            /* flakes: slow, swaying, a little wind */
+            p[i].y += dt * p[i].v * (0.06f + 0.05f * shown_snow);
+            p[i].x += dt * (0.01f + 0.03f * shown_snow) + dt * 0.02f * sinf(t * 1.3f + p[i].phase);
+        }
+        else
+        {
+            p[i].y += dt * p[i].v * 1.6f;
+            p[i].x += dt * p[i].v * 0.25f;
+        }
+        if (p[i].y > 1.05f)
+            p[i].y -= 1.1f, p[i].x = (float)rand() / RAND_MAX;
+        if (p[i].x > 1.02f)
+            p[i].x -= 1.04f;
+        ImVec2 a(p[i].x * d.x, p[i].y * d.y);
+        if (snowing)
+            dl->AddCircleFilled(a, (1.2f + 1.8f * p[i].len) * k, IM_COL32(245, 248, 255, (int)(150 + 70 * p[i].len)), 8);
+        else
+        {
+            float len = (18.0f + 26.0f * p[i].len) * k * (0.8f + 0.4f * shown_rain);
+            dl->AddLine(a, ImVec2(a.x - len * 0.16f, a.y - len), IM_COL32(205, 215, 235, (int)(40 + 50 * p[i].len)), 1.2f * k);
+        }
+    }
 }
 
 /* --- Graphics: our own effects on the game's picture ---------------------------------------------------- */
@@ -1100,6 +1168,7 @@ static void graphics_window(void)
             dirty |= ImGui::Checkbox("Hot spells, heat waves: the air shimmers far off", &g_set.wx_heat);
             dirty |= ImGui::Checkbox("Thunder: lightning lights up the world", &g_set.wx_lightning);
             dirty |= ImGui::Checkbox("Snow, blizzards: snow lies on the ground, and melts after", &g_set.wx_snow);
+            dirty |= ImGui::Checkbox("Rain and snow falling (ours: some zones have none of their own)", &g_set.wx_falling);
             ImGui::Separator();
             ImGui::TextDisabled("The night sky");
             ImGui::SetNextItemWidth(-90);
@@ -3513,6 +3582,7 @@ extern "C" void overlay_build_frame(void)
     d3d8_set_sky(g_set.sky_stars, g_set.sky_shooting);
     d3d8_set_water(g_set.water, g_set.water_v);
     entity_looks();
+    precipitation();
     {
         float pace = g_set.cam_pace, smooth = g_set.cam_smooth;
         int hide = g_set.cam_hide;

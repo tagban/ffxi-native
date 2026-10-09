@@ -188,6 +188,34 @@ static void gfx_fx_weather_fog(Sb* b, const char* in)
     sb_printf(b, "  f = f * exp(-abs(%s.ez) * u.fxp[0].w);\n", in);
 }
 
+/* An aurora on the sky (the dome's draws, or the clouds' when the dome was not found): where this point
+ * is, seen from the camera - how high (from up) and which way round (from east and up, so it stays put
+ * as the camera turns) - curtains in a band low over the horizon all round, waving, their lower edges
+ * brightest, fringed above. `row`: strength, r, g, b; east in u.fxp[5]. */
+static void gfx_fx_aurora(Sb* b, const char* in, const char* row)
+{
+    sb_printf(b,
+        "  if (%s.x > 0.0) {\n"
+        "    float ez = %s.ez;\n"
+        "    float3 p = float3((%s.pos.x - u.fxp[2].x) * u.fxp[0].x * ez, -(%s.pos.y - u.fxp[2].y) * fx_dy * u.fxp[0].y * ez, ez);\n"
+        "    float3 d = normalize(p + float3(0.0, 0.0, 1e-4)), up = u.fxp[1].xyz, east = u.fxp[5].xyz;\n"
+        "    float3 north = cross(up, east);\n"
+        "    float e = dot(d, up);\n"
+        "    float az = atan2(dot(d, north), dot(d, east)) * 0.15915494 + 0.5;\n"
+        "    float sway = fx_fbm(float2(az * 5.0, fx_t * 0.03), float2(5.0, 4096.0));\n"
+        "    float mid = 0.2 + 0.14 * sway;\n"
+        "    float h = (e - mid) / 0.14;\n"
+        "    float band = exp(-h * h) * smoothstep(0.0, 0.06, e);\n"
+        "    float rays = fx_fbm(float2(az * 64.0 + sway * 6.0, fx_t * 0.12), float2(64.0, 4096.0));\n"
+        "    float a = saturate(smoothstep(0.3, 0.75, rays) * band * (1.2 - 0.6 * saturate(h)) * %s.x);\n"
+        "    float3 c = %s.yzw;\n"
+        "    c = mix(c, float3(c.z, c.x * 0.4, c.y) * 0.8 + float3(0.2, 0.0, 0.25), saturate(h * 0.6));\n"
+        "    cur.rgb = saturate(mix(cur.rgb, c, a) + c * (a * 0.35));\n"
+        "    cur.a = max(cur.a, a);\n"
+        "  }\n",
+        row, in, in, in, row, row);
+}
+
 /* After the texture stages, on `cur` (the color the game's stages made). */
 static void gfx_fx_end(Sb* b, int fx, const char* in)
 {
@@ -205,28 +233,9 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "    cur.rgb = saturate(cur.rgb * mix(1.0, 0.78 + 0.34 * smoothstep(0.35, 0.8, c), fx_k));\n"
             /* in a fog (the weather's), the clouds all but lost in it */
             "    cur.rgb = mix(cur.rgb, u.fogcolor.rgb, saturate(u.fxp[0].w * 15.0));\n"
-            "  }\n"
-            /* an aurora: where this point of the dome is, seen from the camera - how high (from up) and
-             * which way round (from east and up, so it stays put as the camera turns) */
-            "  if (u.fxp[4].x > 0.0) {\n"
-            "    float ez = %s.ez;\n"
-            "    float3 p = float3((%s.pos.x - u.fxp[2].x) * u.fxp[0].x * ez, -(%s.pos.y - u.fxp[2].y) * fx_dy * u.fxp[0].y * ez, ez);\n"
-            "    float3 d = normalize(p + float3(0.0, 0.0, 1e-4)), up = u.fxp[1].xyz, east = u.fxp[5].xyz;\n"
-            "    float3 north = cross(up, east);\n"
-            "    float e = dot(d, up);\n"
-            "    float az = atan2(dot(d, north), dot(d, east)) * 0.15915494 + 0.5;\n"
-            "    float sway = fx_fbm(float2(az * 5.0, fx_t * 0.03), float2(5.0, 4096.0));\n"
-            "    float mid = 0.22 + 0.16 * sway;\n"
-            "    float h = (e - mid) / 0.11;\n"
-            "    float band = exp(-h * h) * smoothstep(0.0, 0.08, e);\n"
-            "    float rays = fx_fbm(float2(az * 64.0 + sway * 6.0, fx_t * 0.12), float2(64.0, 4096.0));\n"
-            "    float a = saturate(smoothstep(0.3, 0.75, rays) * band * (1.2 - 0.6 * saturate(h)) * u.fxp[4].x);\n"
-            "    float3 c = u.fxp[4].yzw;\n"
-            "    c = mix(c, float3(c.z, c.x * 0.4, c.y) * 0.8 + float3(0.2, 0.0, 0.25), saturate(h * 0.6));\n"
-            "    cur.rgb = saturate(mix(cur.rgb, c, a) + c * (a * 0.35));\n"
-            "    cur.a = max(cur.a, a);\n"
             "  }\n",
-            in, in, in, in);
+            in);
+        gfx_fx_aurora(b, in, "u.fxp[4]");
         break;
     case GFX_FX_POOL:
         sb_printf(b,
@@ -361,6 +370,7 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "    cur.rgb = saturate(cur.rgb + add * night * saturate(fx_k));\n"
             "  }\n",
             in, in, in);
+        gfx_fx_aurora(b, in, "u.fxp[3]");
         break;
     default: break;
     }

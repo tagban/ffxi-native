@@ -43,6 +43,8 @@ void d3d8_set_weather(int weather);
 void d3d8_set_weather_effects(int rain, int fog, int heat, int lightning, int snow);
 /* The night sky: how many stars more (0 none .. 3), shooting stars on */
 void d3d8_set_sky(float stars, int shooting);
+/* What is falling now, by our weather (0 none, 0.5, 1 the most): rain, snow */
+void d3d8_falling(float* rain, float* snow);
 /* Still water (the overlay's settings): on, and 9 values (d3d8.c g_water) */
 void d3d8_set_water(int on, const float* v);
 /* The look (MogHouse's !skyfx, or the player's): sky 1 an aurora (aurora: r, g, b, strength, 0-1);
