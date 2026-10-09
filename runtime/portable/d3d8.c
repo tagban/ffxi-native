@@ -2441,6 +2441,7 @@ static float g_sky_stars = 1.0f, g_sky_bright = 1.0f;
 static int g_sky_shooting = 1;
 static int g_sky_seen; /* the dome was drawn this frame (its aurora there, not on the clouds) */
 static int g_creature_budget = 40000; /* more birds and fish: copies left this frame */
+static int g_world_seen;                /* the last frame drew a zone */
 
 /* The look (d3d8_set_look: MogHouse's !skyfx, or the player's own): an aurora on the clouds, the world
  * in wireframe, a color filter on every draw but the interface's (its rows, gfx.h fxp[6..8]) */
@@ -3246,6 +3247,7 @@ static void scene_present(void)
         g_scene.st_frames = g_scene.st_late = g_scene.st_over = g_scene.st_over_rhw = 0;
     }
     g_scene.done = 0;
+    g_world_seen = g_scene.cam_rank == 2; /* a zone was drawn (its fogged world): not a loading or title screen */
     g_scene.cam_draw = g_scene.sun_draw = g_scene.cam_rank = 0;
 }
 
@@ -3529,9 +3531,9 @@ static float hash01(uint32_t x)
 
 static void creature_copies(GfxDraw* d)
 {
-    if (d->vs.rhw || d->vs.prog || (g_creature[0].count < 1.5f && g_creature[1].count < 1.5f) ||
+    if (d->vs.rhw || d->vs.prog || !g_world_seen || (g_creature[0].count < 1.5f && g_creature[1].count < 1.5f) ||
         (!g_creature[0].caller && !g_creature[1].caller))
-        return;
+        return; /* none but in a zone: not over the loading screen or the character list */
     uint32_t callers[4];
     int n = fx_callers(callers), match[2] = { 0, 0 };
     for (int k = 0; k < 2; ++k)

@@ -1143,7 +1143,10 @@ static void entity_looks(void)
         }
         d3d8_set_entity_others(no, others);
     }
-    d3d8_set_creatures(g_set.fun_birds, g_set.fun_fish, g_set.fun_flying_fish);
+    if (dsound_in_world())
+        d3d8_set_creatures(g_set.fun_birds, g_set.fun_fish, g_set.fun_flying_fish);
+    else
+        d3d8_set_creatures(1.0f, 1.0f, 0); /* the title, the login and the character list: as the game has them */
 }
 
 static void graphics_window(void)
