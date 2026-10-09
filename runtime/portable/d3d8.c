@@ -174,6 +174,7 @@ typedef struct Obj
     uint8_t dirty;       /* surfaces of a texture: guest memory is newer than the GPU's copy */
     uint8_t gpu_locked;  /* a GPU-owned surface is locked: written back at unlock */
     GfxTex* repl;        /* textures: a texture pack's replacement, drawn with instead of gpu */
+    uint8_t mtag;        /* textures: what its image is, by the DAT's name for it (MTAG_*), 0 unknown */
     uint32_t repl_pad;   /* ... whose glyph quads are drawn this many texels wider each side */
     uint32_t repl_pad_min; /* ... when they are at least this many texels tall */
     const struct PackEntry* repl_entry; /* ... and its glyph table, if it has one */
@@ -1237,12 +1238,97 @@ static uint32_t new_texture(int kind, uint32_t w, uint32_t h, uint32_t levels, u
 }
 
 /* CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture) */
+/* Material tags: what a texture is, from the name the game's DAT gives its image. The game makes the
+ * texture while it reads the image's chunk (type 0x20: a flag byte, a 16-character name - 8 of kind,
+ * 8 of its own - and a BITMAPINFOHEADER), so a pointer to it is on the stack then: the one whose
+ * header has the new texture's size. Water by kind (sea, water) or name (umi, mizu, suimen, riv,
+ * taki, funsui ...): drawn as water whatever code draws it (Kazham's sea is the zone's own mesh). Each
+ * name new this session goes to the log once (to find more). */
+enum { MTAG_NONE, MTAG_WATER, MTAG_BIRD, MTAG_OTHER };
+
+static int mtag_name_at(uint32_t base, uint32_t w, uint32_t h, char name[17])
+{
+    if (!gwin_is_committed(base) || !gwin_is_committed(base + 32))
+        return 0;
+    if (rd32(base + 17) != 40 || rd32(base + 21) != w || rd32(base + 25) != h)
+        return 0;
+    for (int i = 0; i < 16; ++i)
+    {
+        uint8_t c = rd8(base + 1 + (uint32_t)i);
+        name[i] = c >= 0x20 && c < 0x7F ? (char)c : ' ';
+    }
+    name[16] = 0;
+    return 1;
+}
+
+static int mtag_starts(const char* s, const char* p)
+{
+    while (*s == ' ')
+        ++s;
+    return !strncmp(s, p, strlen(p));
+}
+
+static uint8_t mtag_of(const char* name)
+{
+    char kind[9], own[9];
+    memcpy(kind, name, 8), kind[8] = 0;
+    memcpy(own, name + 8, 8), own[8] = 0;
+    static const char* const WATER_KIND[] = { "sea", "water", "mizu", "suimen", "umi", "taki", "river" };
+    static const char* const WATER_NAME[] = { "sea", "umi", "mz", "mizu", "miizu", "muz", "suimen", "riv", "kawa", "taki", "funsui", "ike" };
+    for (size_t i = 0; i < sizeof WATER_KIND / sizeof *WATER_KIND; ++i)
+        if (mtag_starts(kind, WATER_KIND[i]))
+            return MTAG_WATER;
+    for (size_t i = 0; i < sizeof WATER_NAME / sizeof *WATER_NAME; ++i)
+        if (mtag_starts(own, WATER_NAME[i]))
+            return MTAG_WATER;
+    if (mtag_starts(kind, "tori") || mtag_starts(own, "kamome") || mtag_starts(own, "tori"))
+        return MTAG_BIRD;
+    return MTAG_OTHER;
+}
+
+static void mtag_texture(Guest* g, uint32_t tex, uint32_t w, uint32_t h)
+{
+    Obj* t = obj(tex);
+    if (!t)
+        return;
+    char name[17];
+    int found = 0;
+    for (uint32_t a = g->esp; a < g->esp + 0x1000 && !found; a += 4)
+    {
+        if (!gwin_is_committed(a))
+            break;
+        uint32_t v = rd32(a);
+        if (v < 0x10000)
+            continue;
+        found = mtag_name_at(v, w, h, name) || mtag_name_at(v + 16, w, h, name);
+    }
+    if (!found)
+        return;
+    t->mtag = mtag_of(name);
+    /* each name once, to the log */
+    static uint32_t seen[4096];
+    static int nseen;
+    uint32_t hsh = 2166136261u;
+    for (int i = 0; i < 16; ++i)
+        hsh = (hsh ^ (uint8_t)name[i]) * 16777619u;
+    for (int i = 0; i < nseen; ++i)
+        if (seen[i] == hsh)
+            return;
+    if (nseen < 4096)
+        seen[nseen++] = hsh;
+    rt_log("[recomp] textures: %ux%u '%s'%s\n", w, h, name,
+        t->mtag == MTAG_WATER ? " - water" : t->mtag == MTAG_BIRD ? " - a bird" : "");
+}
+
 static void IDirect3DDevice8_CreateTexture(Guest* g)
 {
     wr32(ARG(7), 0);
     if (!ARG(1) || !ARG(2) || !format_ok(ARG(4), RT_TEXTURE, ARG(5)))
         RET(D3DERR_INVALIDCALL, 8);
-    wr32(ARG(7), new_texture(O_TEXTURE, ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6)));
+    uint32_t tex = new_texture(O_TEXTURE, ARG(1), ARG(2), ARG(3), ARG(4), ARG(5), ARG(6));
+    wr32(ARG(7), tex);
+    if (tex)
+        mtag_texture(g, tex, ARG(1), ARG(2));
     RET(D3D_OK, 8);
 }
 
@@ -3758,28 +3844,32 @@ static void fx_classify(GfxDraw* d)
     if ((!g_fx_on && !g_fx_mark) || d->vs.rhw || (!d->fs.prog && !d->fs.nstages))
         return;
     int textured = d->fs.st[0].tex == 1;
+    /* water by its texture's name (material tags), whatever code draws it */
+    static const FxRule WATER_BY_NAME = { 0, -1, 0, 0, GFX_FX_POOL, 1, "water (by its texture's name)" };
+    const Obj* t0 = textured ? obj(g_dev.cur.tex[0]) : NULL;
+    const FxRule* tagged = t0 && t0->mtag == MTAG_WATER ? &WATER_BY_NAME : NULL;
     uint32_t callers[4];
     int ncallers = -1; /* walked once, for the first rule the draw's state matches */
-    for (size_t i = 0; i < sizeof g_fx_rules / sizeof *g_fx_rules; ++i)
+    for (size_t i = 0; i < (tagged ? 1 : sizeof g_fx_rules / sizeof *g_fx_rules); ++i)
     {
-        const FxRule* r = &g_fx_rules[i];
-        if ((r->fog >= 0 && !d->fs.fog != !r->fog) || (r->dst && d->pipe.dst != r->dst) || (r->aop && d->fs.st[0].aop != r->aop) ||
-            (!textured && !r->notex) || (textured && r->notex == 2))
+        const FxRule* r = tagged ? tagged : &g_fx_rules[i];
+        if (!tagged && ((r->fog >= 0 && !d->fs.fog != !r->fog) || (r->dst && d->pipe.dst != r->dst) ||
+                           (r->aop && d->fs.st[0].aop != r->aop) || (!textured && !r->notex) || (textured && r->notex == 2)))
             continue;
-        if (ncallers < 0)
+        if (ncallers < 0 && !tagged)
             ncallers = fx_callers(callers);
-        int from = 0;
+        int from = tagged != NULL;
         for (int c = 0; c < ncallers && !from; ++c)
             from = callers[c] == r->caller;
-        if (i < 8)
+        if (i < 8 && !tagged)
             ++g_fx_state[i];
         if (!from)
         {
-            if (i < 8)
+            if (i < 8 && !tagged)
                 fx_note_other((int)i, callers, ncallers);
             continue;
         }
-        if (i < 8)
+        if (i < 8 && !tagged)
             ++g_fx_hit[i];
         if (g_fx_mark == r->fx)
             d->fs.fx = GFX_FX_MARK;
