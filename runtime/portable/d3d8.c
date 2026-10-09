@@ -3859,9 +3859,14 @@ static void fx_note_other(int rule, const uint32_t* callers, int n)
  * not at all: their directions were the screen's, and the stars went round with the camera) */
 static const float* fx_view(int fx)
 {
-    if ((fx == GFX_FX_SKY || fx == GFX_FX_CLOUDS) && g_scene.s.view[15] != 0.0f)
+    const float* V = g_dev.cur.xf[2];
+    /* and any draw with no view of its own (an identity: the camera in its world matrix - the water's
+     * sheets, Kazham's capture), whose up would be the screen's */
+    int bare = fabsf(V[0] - 1.0f) + fabsf(V[5] - 1.0f) + fabsf(V[10] - 1.0f) + fabsf(V[1]) + fabsf(V[2]) + fabsf(V[4]) + fabsf(V[6]) +
+                   fabsf(V[8]) + fabsf(V[9]) < 1e-4f;
+    if ((bare || fx == GFX_FX_SKY || fx == GFX_FX_CLOUDS) && g_scene.s.view[15] != 0.0f)
         return g_scene.s.view;
-    return g_dev.cur.xf[2];
+    return V;
 }
 
 static void fx_classify(GfxDraw* d)
@@ -3970,7 +3975,7 @@ static void fx_classify(GfxDraw* d)
                 d->u.fxp[3][3] = sc->sun_dir[3] != 0.0f ? (sl < 0.0f ? 0.0f : sl > 1.5f ? 1.5f : sl) : 0.0f;
                 /* the world's east and north in eye space, and the camera's place along them: the waves
                  * are the world's (gfx.h fxp[9], [10]) */
-                const float* V = g_dev.cur.xf[2];
+                const float* V = fx_view(r->fx);
                 const float* R0 = &V[0];
                 const float* R1 = &V[4];
                 const float* R2 = &V[8];
