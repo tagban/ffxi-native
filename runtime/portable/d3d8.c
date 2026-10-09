@@ -1274,7 +1274,13 @@ static uint8_t mtag_of(const char* name)
     memcpy(kind, name, 8), kind[8] = 0;
     memcpy(own, name + 8, 8), own[8] = 0;
     static const char* const WATER_KIND[] = { "sea", "water", "mizu", "suimen", "umi", "taki", "river" };
-    static const char* const WATER_NAME[] = { "sea", "umi", "mz", "mizu", "miizu", "muz", "suimen", "riv", "kawa", "taki", "funsui", "ike" };
+    static const char* const WATER_NAME[] = { "sea", "umi", "mz", "mizu", "miizu", "muz", "suimen", "riv", "kawa", "taki", "funsui", "ike",
+                                              "nami" };
+    /* the interface's images are never water, whatever their names (font elwater, black water) */
+    static const char* const NOT_WORLD[] = { "font", "menu", "black", "anc", "other", "icon", "sts_" };
+    for (size_t i = 0; i < sizeof NOT_WORLD / sizeof *NOT_WORLD; ++i)
+        if (mtag_starts(kind, NOT_WORLD[i]))
+            return MTAG_OTHER;
     for (size_t i = 0; i < sizeof WATER_KIND / sizeof *WATER_KIND; ++i)
         if (mtag_starts(kind, WATER_KIND[i]))
             return MTAG_WATER;
@@ -1312,6 +1318,8 @@ static void mtag_texture(Guest* g, uint32_t tex, uint32_t w, uint32_t h, const c
         }
     }
     static int probes;
+    if (!found && w >= 128 && w <= 1024 && !strcmp(when, "filled"))
+        rt_log("[recomp] textures: %ux%u texture %08x: no name found\n", w, h, tex);
     if (probes < 24 && w >= 32)
     {
         ++probes;
@@ -1335,7 +1343,7 @@ static void mtag_texture(Guest* g, uint32_t tex, uint32_t w, uint32_t h, const c
             return;
     if (nseen < 4096)
         seen[nseen++] = hsh;
-    rt_log("[recomp] textures: %ux%u '%s'%s\n", w, h, name,
+    rt_log("[recomp] textures: %ux%u texture %08x '%s'%s\n", w, h, tex, name,
         t->mtag == MTAG_WATER ? " - water" : t->mtag == MTAG_BIRD ? " - a bird" : "");
 }
 
