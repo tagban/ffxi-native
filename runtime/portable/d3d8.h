@@ -41,8 +41,8 @@ int d3d8_fx_command(const char* text);
 void d3d8_set_weather(int weather);
 /* Which of the weather's effects the player wants (the overlay's settings) */
 void d3d8_set_weather_effects(int rain, int fog, int heat, int lightning, int snow);
-/* The night sky: how many stars more (0 none .. 3), shooting stars on */
-void d3d8_set_sky(float stars, int shooting);
+/* The night sky: how many stars more (0 none .. 3), shooting stars on, how bright they are (1 as made) */
+void d3d8_set_sky(float stars, int shooting, float bright);
 /* What is falling now, by our weather (0 none, 0.5, 1 the most): rain, snow */
 void d3d8_falling(float* rain, float* snow);
 /* Still water (the overlay's settings): on, and 9 values (d3d8.c g_water) */

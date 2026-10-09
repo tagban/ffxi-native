@@ -24,7 +24,7 @@
 
 extern "C" int dsound_in_world(void);
 extern "C" void d3d8_set_weather_effects(int rain, int fog, int heat, int lightning, int snow);
-extern "C" void d3d8_set_sky(float stars, int shooting);
+extern "C" void d3d8_set_sky(float stars, int shooting, float bright);
 extern "C" void d3d8_falling(float* rain, float* snow);
 extern "C" void d3d8_set_water(int on, const float* v);
 extern "C" void d3d8_set_look(int sky, const float* aurora, int world, int filter, const float* tint);
@@ -186,6 +186,7 @@ static struct
     bool wx_rain = true, wx_fog = true, wx_heat = true, wx_lightning = true, wx_snow = true;
     bool wx_falling = true; /* rain and snow falling over the picture (ours: some zones' have none) */
     float sky_stars = 1.0f; /* the night sky: stars more (0 none) */
+    float sky_bright = 1.0f; /* and how bright they are */
     bool sky_shooting = true;
     /* still water (d3d8.c g_water): wave height, speed, size, direction (degrees), blue to green, brightness,
      * sky reflection, glint, glint size */
@@ -872,6 +873,7 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "wx_snow=%d", &v) == 1) g_set.wx_snow = v != 0;
     else if (sscanf(line, "wx_falling=%d", &v) == 1) g_set.wx_falling = v != 0;
     else if (sscanf(line, "sky_stars=%f", &f) == 1 && f >= 0 && f <= 3) g_set.sky_stars = f;
+    else if (sscanf(line, "sky_bright=%f", &f) == 1 && f >= 0 && f <= 4) g_set.sky_bright = f;
     else if (sscanf(line, "sky_shooting=%d", &v) == 1) g_set.sky_shooting = v != 0;
     else if (sscanf(line, "water=%d", &v) == 1) g_set.water = v != 0;
     else if (sscanf(line, "fun_server=%d", &v) == 1) g_set.fun_server = v != 0;
@@ -916,7 +918,7 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("chat_shrink=%d\nchat_quiet_lines=%d\nchat_quiet_secs=%g\n", g_set.chat_shrink, g_set.chat_quiet_lines,
         g_set.chat_quiet_secs);
     out->appendf("death_screen=%d\nspace_jumps=%d\n", g_set.death_screen, g_set.space_jumps);
-    out->appendf("wx_falling=%d\n", g_set.wx_falling);
+    out->appendf("wx_falling=%d\nsky_bright=%g\n", g_set.wx_falling, g_set.sky_bright);
     out->appendf("wx_lightning=%d\nwx_snow=%d\nsky_stars=%g\nsky_shooting=%d\n", g_set.wx_lightning, g_set.wx_snow, g_set.sky_stars,
         g_set.sky_shooting);
     out->appendf("map_alpha=%.2f\nwx_rain=%d\nwx_fog=%d\nwx_heat=%d\nwater=%d\n", g_set.map_alpha, g_set.wx_rain, g_set.wx_fog,
@@ -1198,6 +1200,9 @@ static void graphics_window(void)
             ImGui::TextDisabled("The night sky");
             ImGui::SetNextItemWidth(-90);
             dirty |= ImGui::SliderFloat("Stars", &g_set.sky_stars, 0.0f, 3.0f, g_set.sky_stars <= 0.0f ? "the game's" : "x%.1f");
+            ImGui::SetNextItemWidth(-90);
+            dirty |= ImGui::SliderFloat("Star brightness", &g_set.sky_bright, 0.2f, 4.0f, "%.1f");
+            ImGui::TextDisabled("Stars and the aurora come out as the sky darkens, at night.");
             dirty |= ImGui::Checkbox("Shooting stars", &g_set.sky_shooting);
             ImGui::TextDisabled("//xi fx weather <0-19> tries one out; -1 back to the server's.");
             ImGui::EndTabItem();
@@ -1217,8 +1222,8 @@ static void graphics_window(void)
             dirty |= ImGui::ColorEdit3("##auroracol", g_set.fun_aurora_c, cf);
             ImGui::SameLine();
             ImGui::SetNextItemWidth(-1);
-            dirty |= ImGui::SliderFloat("##aurorastr", &g_set.fun_aurora_c[3], 0.1f, 1.5f, "strength %.2f");
-            ImGui::TextDisabled("Curtains of light low around the sky (on the zone's clouds).");
+            dirty |= ImGui::SliderFloat("##aurorastr", &g_set.fun_aurora_c[3], 0.1f, 2.5f, "brightness %.2f");
+            ImGui::TextDisabled("Curtains of light in the northern sky, at night.");
             const char* worlds[] = { "Off", "The zone (people and monsters as they are)", "Everything" };
             ImGui::SetNextItemWidth(-90);
             dirty |= ImGui::Combo("Wireframe", &g_set.fun_world, worlds, 3);
@@ -3606,7 +3611,7 @@ extern "C" void overlay_build_frame(void)
         was[5] != g_set.equip || was[6] != g_set.items)
         ImGui::MarkIniSettingsDirty(); /* a window closed with its x */
     d3d8_set_weather_effects(g_set.wx_rain, g_set.wx_fog, g_set.wx_heat, g_set.wx_lightning, g_set.wx_snow);
-    d3d8_set_sky(g_set.sky_stars, g_set.sky_shooting);
+    d3d8_set_sky(g_set.sky_stars, g_set.sky_shooting, g_set.sky_bright);
     d3d8_set_water(g_set.water, g_set.water_v);
     entity_looks();
     precipitation();

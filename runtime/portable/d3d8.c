@@ -2437,7 +2437,7 @@ static struct
 } g_wx = { 0, -1, 1, 1, 1, 1, 1 };
 
 /* the night sky (d3d8_set_sky): how many stars more (0 none, 1, 2 many), shooting stars on */
-static float g_sky_stars = 1.0f;
+static float g_sky_stars = 1.0f, g_sky_bright = 1.0f;
 static int g_sky_shooting = 1;
 static int g_sky_seen; /* the dome was drawn this frame (its aurora there, not on the clouds) */
 static int g_creature_budget = 40000; /* more birds and fish: copies left this frame */
@@ -3336,8 +3336,9 @@ void d3d8_falling(float* rain, float* snow)
     *snow = g_fx_on && g_wx.snow_on ? (w == 13 ? 1.0f : w == 12 ? 0.5f : 0.0f) : 0.0f;
 }
 
-void d3d8_set_sky(float stars, int shooting)
+void d3d8_set_sky(float stars, int shooting, float bright)
 {
+    g_sky_bright = bright < 0.0f ? 0.0f : bright > 4.0f ? 4.0f : bright;
     g_sky_stars = stars < 0.0f ? 0.0f : stars > 3.0f ? 3.0f : stars;
     g_sky_shooting = shooting;
 }
@@ -3768,7 +3769,7 @@ static void fx_classify(GfxDraw* d)
                 g_sky_seen = 1;
                 if (g_sky_stars <= 0.0f && !g_sky_shooting && g_look.aurora[0] <= 0.0f)
                     return;
-                d->u.fxp[4][0] = g_sky_stars, d->u.fxp[4][1] = g_sky_shooting ? 1.0f : 0.0f;
+                d->u.fxp[4][0] = g_sky_stars, d->u.fxp[4][1] = g_sky_shooting ? 1.0f : 0.0f, d->u.fxp[4][2] = g_sky_bright;
                 memcpy(d->u.fxp[3], g_look.aurora, sizeof g_look.aurora); /* the aurora, on the whole sky */
                 const float* V = fx_view(r->fx);
                 float ex = V[0], ey = V[1], ez = V[2], el = sqrtf(ex * ex + ey * ey + ez * ez);

@@ -209,7 +209,9 @@ static void gfx_fx_aurora(Sb* b, const char* in, const char* row)
         "    float c0 = 0.25 + 0.06 * sin(fx_t * 0.004);\n"
         "    float da = abs(az - c0); da = min(da, 1.0 - da);\n"
         "    float sector = 1.0 - smoothstep(0.08, 0.16, da);\n"
-        "    float a = saturate(smoothstep(0.3, 0.75, rays) * band * sector * (1.2 - 0.6 * saturate(h)) * %s.x);\n"
+        /* at night only: as the sky behind it darkens (the stars' measure) */
+        "    float dark = 1.0 - smoothstep(0.08, 0.3, dot(cur.rgb, float3(0.299, 0.587, 0.114)));\n"
+        "    float a = saturate(smoothstep(0.3, 0.75, rays) * band * sector * dark * (1.2 - 0.6 * saturate(h)) * %s.x);\n"
         "    float3 c = %s.yzw;\n"
         "    c = mix(c, float3(c.z, c.x * 0.4, c.y) * 0.8 + float3(0.2, 0.0, 0.25), saturate(h * 0.6));\n"
         "    cur.rgb = saturate(mix(cur.rgb, c, a) + c * (a * 0.35));\n"
@@ -401,7 +403,7 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "      float tail = (1.0 - smoothstep(0.0, 0.07, along)) * step(0.0, along) * (1.0 - smoothstep(0.0, 0.0015, across));\n"
             "      add = add + float3(1.0, 0.95, 0.85) * tail * (1.0 - smoothstep(0.75, 1.1, ago)) * 1.5;\n"
             "    }\n"
-            "    cur.rgb = saturate(cur.rgb + add * night * saturate(fx_k));\n"
+            "    cur.rgb = saturate(cur.rgb + add * night * saturate(fx_k) * u.fxp[4].z);\n"
             "  }\n",
             in, in, in);
         gfx_fx_aurora(b, in, "u.fxp[3]");
