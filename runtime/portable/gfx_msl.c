@@ -20,7 +20,7 @@
 #include "gfx_msl.h"
 #include "gfx_fx.h"
 
-_Static_assert(sizeof(GfxU) == 3680, "GfxU must match the MSL struct U");
+_Static_assert(sizeof(GfxU) == 3712, "GfxU must match the MSL struct U");
 
 void sb_printf(Sb* b, const char* fmt, ...)
 {
@@ -55,7 +55,7 @@ static const char PRELUDE[] =
     "  int4 offset[5];\n"
     "  Light light[8];\n"
     "  float4 vsc[96];\n"
-    "  float4 psc[8];\n  float4 fxp[9];\n"
+    "  float4 psc[8];\n  float4 fxp[11];\n"
     "};\n"
     "static inline int reg_offset(constant U& u, int r) { return u.offset[r >> 2][r & 3]; }\n"
     "static inline float4 ld_color(device const uchar* p) { uchar4 c = *(device const uchar4*)p; return float4(c.z, c.y, c.x, c.w) / 255.0; }\n";

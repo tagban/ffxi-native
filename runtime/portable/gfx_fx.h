@@ -82,51 +82,48 @@ static void gfx_fx_begin(Sb* b, int fx, const char* in)
         sb_printf(b,
             "  float3 fxw_n, fxw_v;\n"
             "  float fxw_flat, fxw_steep;\n"
-            "  float2 fx_rip;\n"
+            "  float2 fx_rip, fxw_fall;\n"
             "  {\n"
-            "    float2 uv = %s.t0.xy;\n"
             "    float ez = %s.ez;\n"
-            /* the point in eye space, from its pixel and depth */
+            /* the point in eye space, from its pixel and depth; and on the world's ground (east and north
+             * of the world, from the camera's place: GfxU.fxp[9], [10]), so the waves are the world's,
+             * whether the water has a texture or not (the sea's tiles have none) */
             "    float3 p = float3((%s.pos.x - u.fxp[2].x) * u.fxp[0].x * ez, -(%s.pos.y - u.fxp[2].y) * fx_dy * u.fxp[0].y * ez, ez);\n"
-            "    float3 up = u.fxp[1].xyz;\n"
-            /* which ways the texture runs across the water (its cotangent frame) */
-            "    float3 dp1 = dfdx(p), dp2 = dfdy(p);\n"
-            "    float2 du1 = dfdx(uv), du2 = dfdy(uv);\n"
-            "    float3 c2 = cross(dp2, up), c1 = cross(up, dp1);\n"
-            "    float3 T = c2 * du1.x + c1 * du2.x, B = c2 * du1.y + c1 * du2.y;\n"
-            "    float im = 1.0 / sqrt(max(max(dot(T, T), dot(B, B)), 1e-20));\n"
-            "    T = T * im; B = B * im;\n"
+            "    float3 up = u.fxp[1].xyz, east = u.fxp[9].xyz, north = u.fxp[10].xyz;\n"
+            "    float2 w = float2(u.fxp[9].w + dot(p, east), u.fxp[10].w + dot(p, north));\n"
             "    float spd = u.fxp[4].y, sz = max(u.fxp[4].z, 0.05), dir = u.fxp[4].w;\n"
-            /* five long waves, near the direction the player picked: whole waves to the texture's repeat */
+            /* five long waves, near the direction the player picked (yalms: some ten long at size 1) */
             "    float2 g = float2(0.0, 0.0);\n"
             "    for (int i = 0; i < 5; ++i) {\n"
             "      float fi = float(i);\n"
             "      float a = dir + (fract(fi * 0.618) - 0.5) * 1.4;\n"
-            "      float2 K = floor(float2(cos(a), sin(a)) * ((3.0 / sz) * (1.0 + fi * 0.9)) + 0.5);\n"
-            "      float kl = max(length(K), 1e-3);\n"
-            "      float ph = dot(K, uv) * 6.2831853 - fx_t * spd * (1.0 + sqrt(kl) * 0.6);\n"
-            "      g = g + (K / kl) * (cos(ph) * step(0.5, kl) / (1.0 + fi * 0.5));\n"
+            "      float kl = 6.2831853 / (10.0 * sz / (1.0 + fi * 0.9));\n"
+            "      float2 kd = float2(cos(a), sin(a));\n"
+            "      float ph = dot(kd, w) * kl - fx_t * spd * (1.0 + sqrt(kl * 4.0) * 0.6);\n"
+            "      g = g + kd * (cos(ph) / (1.0 + fi * 0.5));\n"
             "    }\n"
             /* and fine ripples drifting over them */
-            "    float per = max(floor(12.0 / sz + 0.5), 1.0);\n"
-            "    float2 q = uv * per + float2(fx_t * 0.06, -fx_t * 0.045) * spd;\n"
-            "    float n0 = fx_fbm(q, float2(per, per)), nx = fx_fbm(q + float2(0.12, 0.0), float2(per, per)),\n"
-            "          ny = fx_fbm(q + float2(0.0, 0.12), float2(per, per));\n"
+            "    float2 q = w * (0.6 / sz) + float2(fx_t * 0.06, -fx_t * 0.045) * spd;\n"
+            "    float n0 = fx_fbm(q, float2(4096.0, 4096.0)), nx = fx_fbm(q + float2(0.12, 0.0), float2(4096.0, 4096.0)),\n"
+            "          ny = fx_fbm(q + float2(0.0, 0.12), float2(4096.0, 4096.0));\n"
             "    g = g * 0.5 + float2(nx - n0, ny - n0) * (1.0 / 0.12) * 0.4;\n"
             "    float2 s = g * u.fxp[4].x * 0.25;\n"
             /* the surface's own slope (its triangle, facing the camera): flat water gets the waves, steep
              * water the falls' streaks; seen from below (a sheet over the camera), neither */
+            "    float3 dp1 = dfdx(p), dp2 = dfdy(p);\n"
             "    float3 ng = normalize(cross(dp1, dp2) + float3(0.0, 0.0, 1e-9));\n"
             "    ng = dot(ng, p) > 0.0 ? -ng : ng;\n"
             "    float upw = dot(ng, up);\n"
             "    fxw_flat = smoothstep(0.6, 0.85, upw);\n"
             "    fxw_steep = 1.0 - smoothstep(0.35, 0.6, abs(upw));\n"
             "    s = s * fxw_flat;\n"
-            "    fxw_n = normalize(up - T * s.x - B * s.y);\n"
+            "    fxw_n = normalize(up - east * s.x - north * s.y);\n"
             "    fxw_v = normalize(p + float3(0.0, 0.0, 1e-4));\n"
             "    fx_rip = s * (0.012 * fx_k);\n"
+            /* where a fall is: along it (across the world) and its height, for the streaks */
+            "    fxw_fall = float2((w.x + w.y) * 1.4, dot(p, up) * 0.3);\n"
             "  }\n",
-            in, in, in, in);
+            in, in, in);
 }
 
 /* The first stage's texture coordinate, rippled for still water. */
@@ -262,13 +259,11 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "    cur.rgb = mix(cur.rgb, saturate(c), kw);\n"
             "    cur.a = mix(cur.a, max(cur.a, saturate(k * 1.2 + sp)), kw);\n"
             /* steep: the falls' streaks running down it */
-            "    float2 q = %s.t0.xy;\n"
-            "    float st = fx_fbm(float2(q.x * 24.0, q.y * 3.0 - fx_t * 1.2), float2(24.0, 3.0));\n"
+            "    float st = fx_fbm(float2(fxw_fall.x, fxw_fall.y + fx_t * 1.2), float2(4096.0, 4096.0));\n"
             "    float kf = fx_k * fxw_steep;\n"
             "    cur.rgb = saturate(cur.rgb * mix(1.0, 0.8 + 0.45 * st, kf));\n"
             "    cur.a = cur.a * mix(1.0, 0.75 + 0.5 * st, kf);\n"
-            "  }\n",
-            in);
+            "  }\n");
         break;
     case GFX_FX_FALLS:
         sb_printf(b,

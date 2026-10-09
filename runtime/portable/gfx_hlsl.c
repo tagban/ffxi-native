@@ -21,7 +21,7 @@
 #include "gfx_hlsl.h"
 #include "gfx_fx.h"
 
-_Static_assert(sizeof(GfxU) == 3680, "GfxU must match the HLSL struct U");
+_Static_assert(sizeof(GfxU) == 3712, "GfxU must match the HLSL struct U");
 
 void sb_printf(Sb* b, const char* fmt, ...)
 {
@@ -55,7 +55,7 @@ static const char PRELUDE[] =
     "  int4 offset[5];\n"
     "  Light light[8];\n"
     "  float4 vsc[96];\n"
-    "  float4 psc[8];\n  float4 fxp[9];\n"
+    "  float4 psc[8];\n  float4 fxp[11];\n"
     "};\n"
     "cbuffer CU : register(b0) { U u; };\n"
     "cbuffer Bind : register(b1) { uint4 ti[2]; uint4 si[2]; };\n"

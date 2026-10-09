@@ -178,8 +178,10 @@ typedef struct GfxU
      *   [5] still water: blue (-1) to green (1) (0 the game's), brightness, sky reflection, glint; the
      *       clouds: east (the world's +x) in eye space
      *   [6..8] a color filter on every draw but the interface's: each row the change to r, g, b
-     *       (row . color + w), all 0 none */
-    float fxp[9][4];
+     *       (row . color + w), all 0 none
+     *   [9] water: the world's east in eye space, the camera's place along it
+     *   [10] water: the world's north in eye space, the camera's place along it */
+    float fxp[11][4];
 } GfxU;
 
 typedef struct GfxSampler

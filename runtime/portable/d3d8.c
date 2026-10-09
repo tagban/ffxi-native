@@ -3252,16 +3252,19 @@ typedef struct FxRule
     uint8_t dst;     /* D3DBLEND destination, 0 any */
     uint8_t aop;     /* the first stage's alpha operation, 0 any */
     uint8_t fx;
+    uint8_t notex;   /* untextured draws too (the effect reads no texture coordinates) */
     const char* name;
 } FxRule;
 
 static const FxRule g_fx_rules[] = {
-    { 0x10183c31u, 0, 6, 5, GFX_FX_CLOUDS, "clouds" }, /* the sky's two cloud domes */
+    { 0x10183c31u, 0, 6, 5, GFX_FX_CLOUDS, 0, "clouds" }, /* the sky's two cloud domes */
     /* water, still and falling (its slope, in the shader): ponds, the sea, falls, the ripples' sheets -
      * the effects' code draws them all fogged (North Gustaberg, Valkurm Dunes, 2026-10-09) */
-    { 0x10183c31u, 1, 0, 0, GFX_FX_POOL, "water (still and falling)" },
-    { 0x1003d8f2u, 0, 0, 0, GFX_FX_SKY, "the sky's dome (stars at night)" },
-    { 0x1017dc92u, -1, 0, 0, GFX_FX_WET, "wet ground and walls (in the rain)" }, /* the zone's own meshes */
+    { 0x10183c31u, 1, 0, 0, GFX_FX_POOL, 1, "water (still and falling)" },
+    /* the sea off a coast: the zone's own flat tiles, 40 yalms a side, untextured (Selbina, 2026-10-09) */
+    { 0x1017dd9bu, -1, 0, 0, GFX_FX_POOL, 1, "the sea's tiles" },
+    { 0x1003d8f2u, 0, 0, 0, GFX_FX_SKY, 0, "the sky's dome (stars at night)" },
+    { 0x1017dc92u, -1, 0, 0, GFX_FX_WET, 0, "wet ground and walls (in the rain)" }, /* the zone's own meshes */
 };
 /* the rain (d3d8_set_weather, from the server's) and how soaked the world is: it soaks in over a
  * minute and dries over three; //xi fx rain <0-2> pretends */
@@ -3623,14 +3626,16 @@ static void fx_classify(GfxDraw* d)
 {
     d->fs.fx = GFX_FX_NONE;
     /* the game's own pixel shaders too (a zone's bump-mapped ground): the effect goes on their color */
-    if ((!g_fx_on && !g_fx_mark) || d->vs.rhw || (!d->fs.prog && !d->fs.nstages) || d->fs.st[0].tex != 1)
+    if ((!g_fx_on && !g_fx_mark) || d->vs.rhw || (!d->fs.prog && !d->fs.nstages))
         return;
+    int textured = d->fs.st[0].tex == 1;
     uint32_t callers[4];
     int ncallers = -1; /* walked once, for the first rule the draw's state matches */
     for (size_t i = 0; i < sizeof g_fx_rules / sizeof *g_fx_rules; ++i)
     {
         const FxRule* r = &g_fx_rules[i];
-        if ((r->fog >= 0 && !d->fs.fog != !r->fog) || (r->dst && d->pipe.dst != r->dst) || (r->aop && d->fs.st[0].aop != r->aop))
+        if ((r->fog >= 0 && !d->fs.fog != !r->fog) || (r->dst && d->pipe.dst != r->dst) || (r->aop && d->fs.st[0].aop != r->aop) ||
+            (!textured && !r->notex))
             continue;
         if (ncallers < 0)
             ncallers = fx_callers(callers);
@@ -3713,6 +3718,29 @@ static void fx_classify(GfxDraw* d)
              * game's view counts its heights) */
             ul = uy < 0.0f ? -ul : ul;
             d->u.fxp[1][0] = ux * ul, d->u.fxp[1][1] = uy * ul, d->u.fxp[1][2] = uz * ul;
+            if (r->fx == GFX_FX_POOL)
+            {
+                /* the world's east and north in eye space, and the camera's place along them: the waves
+                 * are the world's (gfx.h fxp[9], [10]) */
+                const float* V = g_dev.cur.xf[2];
+                const float* R0 = &V[0];
+                const float* R1 = &V[4];
+                const float* R2 = &V[8];
+                float upe[3] = { d->u.fxp[1][0], d->u.fxp[1][1], d->u.fxp[1][2] };
+                /* up's own world direction (the view's rows are the world's axes, seen) */
+                float upw[3] = { upe[0] * R0[0] + upe[1] * R0[1] + upe[2] * R0[2], upe[0] * R1[0] + upe[1] * R1[1] + upe[2] * R1[2],
+                                 upe[0] * R2[0] + upe[1] * R2[1] + upe[2] * R2[2] };
+                float nw[3] = { 0.0f, upw[2], -upw[1] }; /* up x east */
+                float cam[3];
+                for (int c = 0; c < 3; ++c)
+                    cam[c] = -(V[12] * V[c * 4 + 0] + V[13] * V[c * 4 + 1] + V[14] * V[c * 4 + 2]);
+                float el = sqrtf(R0[0] * R0[0] + R0[1] * R0[1] + R0[2] * R0[2]);
+                el = el > 0.0f ? 1.0f / el : 0.0f;
+                d->u.fxp[9][0] = R0[0] * el, d->u.fxp[9][1] = R0[1] * el, d->u.fxp[9][2] = R0[2] * el, d->u.fxp[9][3] = cam[0];
+                for (int c = 0; c < 3; ++c)
+                    d->u.fxp[10][c] = nw[0] * R0[c] + nw[1] * R1[c] + nw[2] * R2[c];
+                d->u.fxp[10][3] = cam[0] * nw[0] + cam[1] * nw[1] + cam[2] * nw[2];
+            }
         }
         return;
     }
