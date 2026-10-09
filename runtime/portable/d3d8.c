@@ -3522,6 +3522,15 @@ static struct
 } g_ent_xf[ENT_XFORMS];
 static int g_ent_nxf;
 static uint32_t g_ent_caller[ENT_XFORMS]; /* a ship's hull's code (the frame before), for its parts */
+/* each ship's hull measured once (its vertices, in its own turn): who stands inside it is aboard and
+ * rocks with it (d3d8_on_ship) */
+static struct
+{
+    float at[3];       /* the ship's place when measured */
+    float lo[3], hi[3]; /* its box, in its own frame */
+    float w[16];       /* the game's world matrix it was drawn with */
+    int valid;
+} g_ship_box[8];
 static float g_ent_caller_at[ENT_XFORMS][3];
 /* everyone else around (the player first): a body drawn in world space is the nearest one's */
 enum { ENT_OTHERS = 128 };
@@ -3553,7 +3562,99 @@ static void world_changed(GfxDraw* d, const float* m)
     normal_matrix(d->u.wvit, wv);
 }
 
-static void look_entities(GfxDraw* d, uint32_t first, uint32_t up_data, uint32_t up_stride)
+/* a ship's part drawn at its place: its vertices into the ship's box (once per part, the first frames) */
+static void ship_measure(GfxDraw* d, const float* p, uint32_t first, uint32_t nverts, uint32_t up_data, uint32_t up_stride)
+{
+    int slot = -1;
+    for (int k = 0; k < 8 && slot < 0; ++k)
+        if (g_ship_box[k].valid && fabsf(g_ship_box[k].at[0] - p[0]) + fabsf(g_ship_box[k].at[2] - p[2]) < 5.0f)
+            slot = k;
+    const float* W = g_dev.cur.xf[24];
+    if (slot >= 0)
+    {
+        /* a part with the hull's turn adds to its box, until the box has seen enough of them */
+        if (g_ship_box[slot].valid >= 64 || fabsf(W[0] - g_ship_box[slot].w[0]) + fabsf(W[2] - g_ship_box[slot].w[2]) > 1e-3f)
+            return;
+    }
+    else
+    {
+        for (int k = 0; k < 8 && slot < 0; ++k)
+            if (!g_ship_box[k].valid)
+                slot = k;
+        if (slot < 0)
+            slot = 0;
+        memcpy(g_ship_box[slot].at, p, 12);
+        memcpy(g_ship_box[slot].w, W, 64);
+        for (int c = 0; c < 3; ++c)
+            g_ship_box[slot].lo[c] = 1e30f, g_ship_box[slot].hi[c] = -1e30f;
+        g_ship_box[slot].valid = 0;
+    }
+    uint32_t base, stride, size, st = d->vs.el[GFX_R_POSITION].stream;
+    if (up_data)
+        base = up_data, stride = up_stride, size = 0xFFFFFFFFu;
+    else
+    {
+        Obj* b = obj(g_dev.cur.stream[st]);
+        if (!b || !b->mem)
+            return;
+        base = b->mem, stride = g_dev.cur.stride[st], size = b->size;
+    }
+    uint32_t step = nverts > 4000 ? nverts / 4000 : 1;
+    for (uint32_t v = 0; v < nverts; v += step)
+    {
+        uint32_t at = (first + v) * stride + (uint32_t)d->u.offset[GFX_R_POSITION];
+        if (at + 12 > size)
+            break;
+        for (int c = 0; c < 3; ++c)
+        {
+            float x = u2f(rd32(base + at + 4u * (uint32_t)c));
+            g_ship_box[slot].lo[c] = x < g_ship_box[slot].lo[c] ? x : g_ship_box[slot].lo[c];
+            g_ship_box[slot].hi[c] = x > g_ship_box[slot].hi[c] ? x : g_ship_box[slot].hi[c];
+        }
+    }
+    g_ship_box[slot].valid++;
+}
+
+/* Whether a place (the game's world) is aboard a rocking ship - inside its hull's box, on its deck -
+ * and that ship's change (to rock whoever stands there with it) */
+int d3d8_on_ship(const float* pos, float* m)
+{
+    for (int k = 0; k < 8; ++k)
+    {
+        if (!g_ship_box[k].valid)
+            continue;
+        /* the ship's change, from this frame's list (by its place) */
+        int i = -1;
+        for (int j = 0; j < g_ent_nxf && i < 0; ++j)
+            if (g_ent_xf[j].pos[3] < 0.0f && fabsf(g_ent_xf[j].pos[0] - g_ship_box[k].at[0]) + fabsf(g_ent_xf[j].pos[2] - g_ship_box[k].at[2]) < 5.0f)
+                i = j;
+        if (i < 0)
+            continue;
+        /* the place in the ship's own frame: (pos - t) times the inverse of its turn */
+        const float* w = g_ship_box[k].w;
+        float a[9] = { w[0], w[1], w[2], w[4], w[5], w[6], w[8], w[9], w[10] };
+        float det = a[0] * (a[4] * a[8] - a[5] * a[7]) - a[1] * (a[3] * a[8] - a[5] * a[6]) + a[2] * (a[3] * a[7] - a[4] * a[6]);
+        if (fabsf(det) < 1e-9f)
+            continue;
+        float inv[9] = { (a[4] * a[8] - a[5] * a[7]) / det, (a[2] * a[7] - a[1] * a[8]) / det, (a[1] * a[5] - a[2] * a[4]) / det,
+                         (a[5] * a[6] - a[3] * a[8]) / det, (a[0] * a[8] - a[2] * a[6]) / det, (a[2] * a[3] - a[0] * a[5]) / det,
+                         (a[3] * a[7] - a[4] * a[6]) / det, (a[1] * a[6] - a[0] * a[7]) / det, (a[0] * a[4] - a[1] * a[3]) / det };
+        float q[3] = { pos[0] - w[12], pos[1] - w[13], pos[2] - w[14] }, l[3];
+        for (int c = 0; c < 3; ++c)
+            l[c] = q[0] * inv[0 * 3 + c] + q[1] * inv[1 * 3 + c] + q[2] * inv[2 * 3 + c];
+        const float *lo = g_ship_box[k].lo, *hi = g_ship_box[k].hi;
+        float pad = 1.0f / sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2] + 1e-12f); /* a yalm, in its frame */
+        if (l[0] > lo[0] - pad && l[0] < hi[0] + pad && l[1] > lo[1] - 2 * pad && l[1] < hi[1] + 2 * pad && l[2] > lo[2] - pad &&
+            l[2] < hi[2] + pad)
+        {
+            memcpy(m, g_ent_xf[i].m, 64);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void look_entities(GfxDraw* d, uint32_t first, uint32_t nverts, uint32_t up_data, uint32_t up_stride)
 {
     if (!g_ent_nxf || d->vs.rhw || d->vs.prog)
         return;
@@ -3581,7 +3682,10 @@ static void look_entities(GfxDraw* d, uint32_t first, uint32_t up_data, uint32_t
                     int n = fx_callers(callers);
                     uint32_t c = n > 1 ? callers[1] : n ? callers[0] : 0;
                     if (d2 < r * r)
+                    {
                         g_ent_caller[i] = c;
+                        ship_measure(d, p, first, nverts, up_data, up_stride);
+                    }
                     else if (c != g_ent_caller[i])
                         continue;
                     world_changed(d, g_ent_xf[i].m);
@@ -4579,7 +4683,7 @@ static void draw_packet_inner(uint32_t prim, uint32_t count, uint32_t start, uin
     }
     if (!set_streams(d, first, nverts, up_data, up_stride))
         return;
-    look_entities(d, first, up_data, up_stride);
+    look_entities(d, first, nverts, up_data, up_stride);
     scene_note(d);
     fx_classify(d);
     look_wireframe(d);

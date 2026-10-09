@@ -34,6 +34,7 @@ extern "C" void d3d8_set_creatures(float birds, float fish, int flying_fish);
 extern "C" int d3d8_creatures_known(int which);
 extern "C" int d3d8_world_up_sign(void);
 extern "C" void d3d8_set_world_rock(int on, const float* m);
+extern "C" int d3d8_on_ship(const float* pos, float* m);
 extern "C" int d3d8_cam_command(const char* text);
 extern "C" int d3d8_cam_playing(void);
 extern "C" int d3d8_cam_hides_ui(void);
@@ -1151,18 +1152,40 @@ static void entity_looks(void)
         else
             d3d8_set_world_rock(0, NULL);
     }
+    /* aboard a rocking ship at the dock (on its deck): rocked with it, the player too */
+    static uint32_t riding[64];
+    int nriding = 0;
+    if (g_set.fun_ships && g_set.fun_ships_k > 0.0f)
+        for (int i = 0; i < n && k < 16; ++i)
+        {
+            const GameEntity& e = ents[i];
+            float* sc = size_of(e.id, false);
+            float at[3] = { e.x, e.y, e.z };
+            if (e.ship || (sc && *sc != 1.0f) || !d3d8_on_ship(at, m[k]))
+                continue;
+            pos[k][0] = e.x, pos[k][1] = e.y, pos[k][2] = e.z, pos[k][3] = 3.0f;
+            ++k;
+            if (nriding < 64)
+                riding[nriding++] = e.id;
+        }
+    auto rides = [&](uint32_t id) {
+        for (int r = 0; r < nriding; ++r)
+            if (riding[r] == id)
+                return true;
+        return false;
+    };
     d3d8_set_entity_xforms(k, pos, m);
     /* everyone not sized, the player first: a body drawn in world space is the nearest one's, so the
      * player's armor beside a sized prop stays the player's */
     {
         static float others[128][3];
         int no = 0;
-        if (n && ents[n - 1].id == gamestate_self_id())
+        if (n && ents[n - 1].id == gamestate_self_id() && !rides(ents[n - 1].id))
             others[no][0] = ents[n - 1].x, others[no][1] = ents[n - 1].y, others[no][2] = ents[n - 1].z, ++no;
         for (int i = 0; i < n && no < 128; ++i)
         {
             float* sc = size_of(ents[i].id, false);
-            if ((sc && *sc != 1.0f) || ents[i].id == gamestate_self_id())
+            if ((sc && *sc != 1.0f) || ents[i].id == gamestate_self_id() || rides(ents[i].id))
                 continue;
             others[no][0] = ents[i].x, others[no][1] = ents[i].y, others[no][2] = ents[i].z, ++no;
         }
