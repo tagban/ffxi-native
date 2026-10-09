@@ -2428,10 +2428,17 @@ static GfxDraw g_draw; /* one device, one draw at a time */
  * frame); the player can turn each off (d3d8_set_weather_effects). //xi fx weather <n> pretends. */
 static struct
 {
-    int weather, forced, rain_on, fog_on, heat_on;
+    int weather, forced, rain_on, fog_on, heat_on, lightning_on, snow_on;
     float fog, heat, t;
+    float snow;       /* snow lying, 0-1: builds while it snows, melts after */
+    float flash;      /* lightning, 0-1 now */
+    float next_flash; /* when the next one comes (g_wx.t) */
     uint64_t at;
-} g_wx = { 0, -1, 1, 1, 1 };
+} g_wx = { 0, -1, 1, 1, 1, 1, 1 };
+
+/* the night sky (d3d8_set_sky): how many stars more (0 none, 1, 2 many), shooting stars on */
+static float g_sky_stars = 1.0f;
+static int g_sky_shooting = 1;
 
 /* The look (d3d8_set_look: MogHouse's !skyfx, or the player's own): an aurora on the clouds, the world
  * in wireframe, a color filter on every draw but the interface's (its rows, gfx.h fxp[6..8]) */
@@ -2528,6 +2535,8 @@ static int build_draw(GfxDraw* d)
     d->u.fxp[2][2] = d->vp[3] ? (float)d->vp[3] / 720.0f : 1.0f;
     if (g_look.filter && !d->vs.rhw)
         memcpy(d->u.fxp[6], g_look.rows, sizeof g_look.rows);
+    if (g_wx.flash > 0.0f && !d->vs.rhw) /* lightning: the world lit up a moment, a little blue */
+        d->u.fxp[6][3] += 0.42f * g_wx.flash, d->u.fxp[7][3] += 0.46f * g_wx.flash, d->u.fxp[8][3] += 0.55f * g_wx.flash;
 
     int ff_vertex = !d->vs.prog && !lay->rhw;
     if (ff_vertex && rs[137]) /* LIGHTING */
@@ -3246,8 +3255,10 @@ typedef struct FxRule
 
 static const FxRule g_fx_rules[] = {
     { 0x10183c31u, 0, 6, 5, GFX_FX_CLOUDS, "clouds" }, /* the sky's two cloud domes */
-    { 0x10183c31u, 1, 6, 6, GFX_FX_POOL, "still water" },
-    { 0x10183c31u, 1, 0, 5, GFX_FX_FALLS, "falling water" },
+    /* water, still and falling (its slope, in the shader): ponds, the sea, falls, the ripples' sheets -
+     * the effects' code draws them all fogged (North Gustaberg, Valkurm Dunes, 2026-10-09) */
+    { 0x10183c31u, 1, 0, 0, GFX_FX_POOL, "water (still and falling)" },
+    { 0x1003d8f2u, 0, 0, 0, GFX_FX_SKY, "the sky's dome (stars at night)" },
     { 0x1017dc92u, -1, 0, 0, GFX_FX_WET, "wet ground and walls (in the rain)" }, /* the zone's own meshes */
 };
 /* the rain (d3d8_set_weather, from the server's) and how soaked the world is: it soaks in over a
@@ -3295,9 +3306,15 @@ void d3d8_set_weather(int weather)
     g_wx.weather = weather;
 }
 
-void d3d8_set_weather_effects(int rain, int fog, int heat)
+void d3d8_set_weather_effects(int rain, int fog, int heat, int lightning, int snow)
 {
-    g_wx.rain_on = rain, g_wx.fog_on = fog, g_wx.heat_on = heat;
+    g_wx.rain_on = rain, g_wx.fog_on = fog, g_wx.heat_on = heat, g_wx.lightning_on = lightning, g_wx.snow_on = snow;
+}
+
+void d3d8_set_sky(float stars, int shooting)
+{
+    g_sky_stars = stars < 0.0f ? 0.0f : stars > 3.0f ? 3.0f : stars;
+    g_sky_shooting = shooting;
 }
 
 static int fx_callers(uint32_t* out);
@@ -3517,6 +3534,34 @@ static void fx_weather_tick(void)
         g_wx.fog = fog;
     if (fabsf(g_wx.heat - heat) < 1e-4f)
         g_wx.heat = heat;
+    /* snow lying: builds over three minutes of snow (a minute and a half in a blizzard), melts over five */
+    int w = g_wx.forced >= 0 ? g_wx.forced : g_wx.weather;
+    int snowing = g_fx_on && g_wx.snow_on && (w == 12 || w == 13);
+    g_wx.snow += snowing ? dt / (w == 13 ? 90.0f : 180.0f) : -dt / 300.0f;
+    g_wx.snow = g_wx.snow < 0.0f ? 0.0f : g_wx.snow > 1.0f ? 1.0f : g_wx.snow;
+    /* lightning in thunder (now and then) and thunderstorms (often): a flicker, a second flash, gone */
+    int thunder = g_fx_on && g_wx.lightning_on && (w == 14 || w == 15);
+    if (!thunder)
+        g_wx.flash = 0.0f, g_wx.next_flash = 0.0f;
+    else
+    {
+        float t = g_wx.t;
+        if (g_wx.next_flash <= 0.0f || g_wx.next_flash - t > 60.0f)
+            g_wx.next_flash = t + 3.0f;
+        float since = t - g_wx.next_flash;
+        if (since >= 0.0f)
+        {
+            /* two flickers in 0.4 s, then dark */
+            float a = since < 0.08f ? 1.0f : since < 0.16f ? 0.25f : since < 0.26f ? 0.8f : since < 0.45f ? 0.8f * (1.0f - (since - 0.26f) / 0.19f) : 0.0f;
+            g_wx.flash = a;
+            if (since > 0.45f)
+            {
+                uint32_t r = (uint32_t)(t * 1000.0f) * 2654435761u;
+                float gap = w == 15 ? 4.0f + (float)(r >> 20 & 1023) / 1023.0f * 10.0f : 10.0f + (float)(r >> 20 & 1023) / 1023.0f * 25.0f;
+                g_wx.next_flash = t + gap, g_wx.flash = 0.0f;
+            }
+        }
+    }
 }
 
 static void fx_soak(void)
@@ -3598,9 +3643,20 @@ static void fx_classify(GfxDraw* d)
             if (r->fx == GFX_FX_WET)
             {
                 fx_soak();
-                if (g_fx_wet <= 0.0f && rain <= 0.0f)
+                if (g_fx_wet <= 0.0f && rain <= 0.0f && g_wx.snow <= 0.0f)
                     return; /* dry: the game's own shader */
                 d->u.params2[3] = g_fx_wet + 2.0f * floorf(rain * 2.0f + 0.5f);
+                d->u.fxp[4][0] = g_wx.snow;
+            }
+            if (r->fx == GFX_FX_SKY)
+            {
+                if (g_sky_stars <= 0.0f && !g_sky_shooting)
+                    return;
+                d->u.fxp[4][0] = g_sky_stars, d->u.fxp[4][1] = g_sky_shooting ? 1.0f : 0.0f;
+                const float* V = g_dev.cur.xf[2];
+                float ex = V[0], ey = V[1], ez = V[2], el = sqrtf(ex * ex + ey * ey + ez * ez);
+                el = el > 0.0f ? 1.0f / el : 0.0f;
+                d->u.fxp[5][0] = ex * el, d->u.fxp[5][1] = ey * el, d->u.fxp[5][2] = ez * el;
             }
             if (r->fx == GFX_FX_CLOUDS && g_look.aurora[0] > 0.0f)
             {
@@ -3627,6 +3683,8 @@ static void fx_classify(GfxDraw* d)
             d->fs.fx = r->fx;
             d->u.params2[1] = (float)fmod((double)rt_monotonic_ns() / 1e9, 4096.0);
             d->u.params2[2] = g_fx_k;
+            if (r->fx == GFX_FX_POOL && d->pipe.blend && d->pipe.dst == 2)
+                d->u.params2[2] = g_fx_k * 0.35f; /* an added sheet (light on the water): touched lightly */
             /* a surface's tilt from its eye depth (gfx.h fxp): the projection's scale and the viewport's
              * size, and up (the game's world has heights more negative higher: up is -y) in eye space */
             const float* P = g_dev.cur.xf[3];
@@ -3652,9 +3710,9 @@ int d3d8_fx_command(const char* t)
     int m;
     if (!strcmp(t, "fx"))
     {
-        rt_log("[recomp] fx: %s, strength %.2f, marking %d, weather %d%s, rain %.1f, wet %.2f, fog %.3f, heat %.2f, water %s\n",
+        rt_log("[recomp] fx: %s, strength %.2f, marking %d, weather %d%s, rain %.1f, wet %.2f, fog %.3f, heat %.2f, snow %.2f, water %s\n",
             g_fx_on ? "on" : "off", g_fx_k, g_fx_mark, g_wx.forced >= 0 ? g_wx.forced : g_wx.weather, g_wx.forced >= 0 ? " (pretended)" : "",
-            g_fx_rain_forced >= 0.0f ? g_fx_rain_forced : g_fx_rain, g_fx_wet, g_wx.fog, g_wx.heat, g_water_on ? "on" : "off");
+            g_fx_rain_forced >= 0.0f ? g_fx_rain_forced : g_fx_rain, g_fx_wet, g_wx.fog, g_wx.heat, g_wx.snow, g_water_on ? "on" : "off");
         for (size_t i = 0; i < sizeof g_fx_rules / sizeof *g_fx_rules; ++i)
         {
             rt_log("[recomp] fx %d: %s (the game's code at %08x, fog %d, blend to %u, alpha op %u): %u draws of its kind, %u "

@@ -8,12 +8,15 @@
  *                  pieces do, and fine ripples), the sky mirrored by them - far more at a glancing look
  *                  (Fresnel) - and the sun's or moon's glint; the game's water seen through them, tinted
  *                  as the player likes (GfxU.fxp[4], [5])
- *   GFX_FX_FALLS   falling water: streaks running down it
+ *   GFX_FX_FALLS   falling water: streaks running down it (GFX_FX_POOL does it too, where water is steep)
+ *   GFX_FX_SKY     the sky's dome: at night more stars, twinkling, and now and then a shooting star
+ *                  (GfxU.fxp[4]: how many stars, shooting stars on; [5] east)
  *   GFX_FX_WET     a zone's ground and walls in the rain: darker and deeper in color as they soak,
  *                  shiny (the sky mirrored, most at a glancing look and on the ground: the surface's
  *                  tilt from its eye depth's change across the pixel, GfxU.fxp), and drops striking the
  *                  ground - a small dark dot that fades over a second or so. GfxU.params2.w carries the
- *                  wetness (0-1) plus 2 x the rain (0 none, 1 rain, 2 a downpour)
+ *                  wetness (0-1) plus 2 x the rain (0 none, 1 rain, 2 a downpour). And snow lying on
+ *                  the ground in patches that fill in (GfxU.fxp[4].x, 0-1), glinting
  *
  * GFX_FX_CLOUDS also carries an aurora when one is asked for (GfxU.fxp[4], [5]: MogHouse's !skyfx or the
  * player's): curtains of light low over the horizon all around, waving, their lower edges brightest.
@@ -78,6 +81,7 @@ static void gfx_fx_begin(Sb* b, int fx, const char* in)
     if (fx == GFX_FX_POOL)
         sb_printf(b,
             "  float3 fxw_n, fxw_v;\n"
+            "  float fxw_flat, fxw_steep;\n"
             "  float2 fx_rip;\n"
             "  {\n"
             "    float2 uv = %s.t0.xy;\n"
@@ -110,6 +114,14 @@ static void gfx_fx_begin(Sb* b, int fx, const char* in)
             "          ny = fx_fbm(q + float2(0.0, 0.12), float2(per, per));\n"
             "    g = g * 0.5 + float2(nx - n0, ny - n0) * (1.0 / 0.12) * 0.4;\n"
             "    float2 s = g * u.fxp[4].x * 0.25;\n"
+            /* the surface's own slope (its triangle, facing the camera): flat water gets the waves, steep
+             * water the falls' streaks; seen from below (a sheet over the camera), neither */
+            "    float3 ng = normalize(cross(dp1, dp2) + float3(0.0, 0.0, 1e-9));\n"
+            "    ng = dot(ng, p) > 0.0 ? -ng : ng;\n"
+            "    float upw = dot(ng, up);\n"
+            "    fxw_flat = smoothstep(0.6, 0.85, upw);\n"
+            "    fxw_steep = 1.0 - smoothstep(0.35, 0.6, abs(upw));\n"
+            "    s = s * fxw_flat;\n"
             "    fxw_n = normalize(up - T * s.x - B * s.y);\n"
             "    fxw_v = normalize(p + float3(0.0, 0.0, 1e-4));\n"
             "    fx_rip = s * (0.012 * fx_k);\n"
@@ -237,9 +249,17 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             /* the sun's (or moon's) glint off the waves */
             "    float sp = pow(saturate(dot(r, u.fxp[3].xyz)), 500.0 / max(u.fxp[2].w, 0.1)) * u.fxp[5].w * u.fxp[3].w;\n"
             "    c = c + float3(1.0, 0.95, 0.85) * (sp * 4.0);\n"
-            "    cur.rgb = mix(cur.rgb, saturate(c), saturate(fx_k));\n"
-            "    cur.a = mix(cur.a, max(cur.a, saturate(k * 1.2 + sp)), saturate(fx_k));\n"
-            "  }\n");
+            "    float kw = saturate(fx_k) * fxw_flat;\n"
+            "    cur.rgb = mix(cur.rgb, saturate(c), kw);\n"
+            "    cur.a = mix(cur.a, max(cur.a, saturate(k * 1.2 + sp)), kw);\n"
+            /* steep: the falls' streaks running down it */
+            "    float2 q = %s.t0.xy;\n"
+            "    float st = fx_fbm(float2(q.x * 24.0, q.y * 3.0 - fx_t * 1.2), float2(24.0, 3.0));\n"
+            "    float kf = fx_k * fxw_steep;\n"
+            "    cur.rgb = saturate(cur.rgb * mix(1.0, 0.8 + 0.45 * st, kf));\n"
+            "    cur.a = cur.a * mix(1.0, 0.75 + 0.5 * st, kf);\n"
+            "  }\n",
+            in);
         break;
     case GFX_FX_FALLS:
         sb_printf(b,
@@ -283,9 +303,64 @@ static void gfx_fx_end(Sb* b, int fx, const char* in)
             "    float hit = step(fx_hash(cell + float2(k * 0.37, k * 1.3)), rain);\n"
             "    float drop = (1.0 - smoothstep(0.05, 0.1, length(f - at))) * exp(-age * 2.2) * hit * (0.25 + 0.75 * ground);\n"
             "    c = c * (1.0 - 0.38 * drop);\n"
+            /* snow lying: on the ground, in patches that grow until it is all white, lit as the ground
+             * was (its brightness), glinting here and there */
+            "    float snow = u.fxp[4].x;\n"
+            "    if (snow > 0.0) {\n"
+            "      float2 sq = %s.t0.xy;\n"
+            "      float lie = fx_fbm(sq * 3.0, float2(3.0, 3.0));\n"
+            "      float cover = smoothstep(1.0 - snow * 1.2, 1.15 - snow * 1.2, lie) * smoothstep(0.35, 0.75, upward);\n"
+            "      float3 white = float3(0.9, 0.93, 1.0) * saturate(0.35 + 1.5 * l);\n"
+            "      float2 gq = sq * 64.0;\n"
+            "      float gh = fx_hash(floor(gq));\n"
+            "      float glint = step(0.985, gh) * (1.0 - smoothstep(0.1, 0.3, length(fract(gq) - 0.5))) * (0.5 + 0.5 * sin(fx_t * 3.0 + gh * 40.0));\n"
+            "      c = mix(c, white + glint * 0.6, cover);\n"
+            "    }\n"
             "    cur.rgb = mix(cur.rgb, c, saturate(fx_k));\n"
             "  }\n",
-            in, in);
+            in, in, in);
+        break;
+    case GFX_FX_SKY:
+        sb_printf(b,
+            "  {\n"
+            /* where on the sky: how high, which way round (east and up, so it stays as the camera turns) */
+            "    float ez = %s.ez;\n"
+            "    float3 p = float3((%s.pos.x - u.fxp[2].x) * u.fxp[0].x * ez, -(%s.pos.y - u.fxp[2].y) * fx_dy * u.fxp[0].y * ez, ez);\n"
+            "    float3 d = normalize(p + float3(0.0, 0.0, 1e-4)), up = u.fxp[1].xyz, east = u.fxp[5].xyz;\n"
+            "    float3 north = cross(up, east);\n"
+            "    float e = dot(d, up);\n"
+            "    float az = atan2(dot(d, north), dot(d, east)) * 0.15915494 + 0.5;\n"
+            "    float l = dot(cur.rgb, float3(0.299, 0.587, 0.114));\n"
+            "    float night = (1.0 - smoothstep(0.06, 0.22, l)) * smoothstep(0.02, 0.12, e);\n"
+            /* stars: a grid over the sky, finer toward the top (so the cells keep their size), one star in
+             * some cells, twinkling */
+            "    float rows = 180.0, ring = floor(max(cos(asin(saturate(e))) * 360.0, 6.0));\n"
+            "    float2 g = float2(az * ring, e * rows);\n"
+            "    float2 cell = floor(g), f = fract(g);\n"
+            "    float h = fx_hash(cell + float2(ring, 0.0));\n"
+            "    float2 at = float2(fx_hash(cell + 1.7), fx_hash(cell + 3.1)) * 0.6 + 0.2;\n"
+            "    float star = step(1.0 - 0.08 * u.fxp[4].x, h) * (1.0 - smoothstep(0.02, 0.12, length(f - at)));\n"
+            "    star = star * (0.55 + 0.45 * sin(fx_t * (1.5 + h * 4.0) + h * 60.0)) * (0.4 + 0.6 * fx_hash(cell + 7.7));\n"
+            "    float3 tint = mix(float3(1.0, 0.85, 0.7), float3(0.75, 0.85, 1.0), fx_hash(cell + 5.3));\n"
+            "    float3 add = tint * star;\n"
+            /* a shooting star: every few seconds, maybe, a streak across part of the sky with its tail */
+            "    float slot = floor(fx_t / 7.0), ago = fx_t - slot * 7.0;\n"
+            "    float sh = fx_hash(float2(slot, 9.1));\n"
+            "    if (u.fxp[4].y > 0.0 && sh > 0.45 && ago < 1.1) {\n"
+            "      float2 a0 = float2(fx_hash(float2(slot, 1.3)), 0.35 + 0.45 * fx_hash(float2(slot, 2.9)));\n"
+            "      float ang = fx_hash(float2(slot, 4.4)) * 6.2831853;\n"
+            "      float2 dir = float2(cos(ang) * 0.06, -abs(sin(ang)) * 0.12 - 0.03);\n"
+            "      float u0 = saturate(ago / 0.8);\n"
+            "      float2 head = a0 + dir * u0;\n"
+            "      float2 sp = float2(az, e);\n"
+            "      float2 dd = sp - head; dd.x = dd.x - floor(dd.x + 0.5);\n"
+            "      float along = dot(dd, -normalize(dir)), across = length(dd + normalize(dir) * along);\n"
+            "      float tail = (1.0 - smoothstep(0.0, 0.07, along)) * step(0.0, along) * (1.0 - smoothstep(0.0, 0.0015, across));\n"
+            "      add = add + float3(1.0, 0.95, 0.85) * tail * (1.0 - smoothstep(0.75, 1.1, ago)) * 1.5;\n"
+            "    }\n"
+            "    cur.rgb = saturate(cur.rgb + add * night * saturate(fx_k));\n"
+            "  }\n",
+            in, in, in);
         break;
     default: break;
     }

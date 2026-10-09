@@ -5,6 +5,7 @@
 #include "zonemap.h"
 #include "itemdat.h"
 
+#include <algorithm>
 #include <float.h>
 #include <string>
 #include <unordered_map>
@@ -21,7 +22,8 @@
 #include "fonts/roboto_medium.h"
 
 extern "C" int dsound_in_world(void);
-extern "C" void d3d8_set_weather_effects(int rain, int fog, int heat);
+extern "C" void d3d8_set_weather_effects(int rain, int fog, int heat, int lightning, int snow);
+extern "C" void d3d8_set_sky(float stars, int shooting);
 extern "C" void d3d8_set_water(int on, const float* v);
 extern "C" void d3d8_set_look(int sky, const float* aurora, int world, int filter, const float* tint);
 extern "C" void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float (*m)[16]);
@@ -177,7 +179,9 @@ static struct
     bool equip = false, items = false; /* the equipment and item windows */
     float map_alpha = 1.0f; /* the map's opacity (its right-click menu) */
     /* the weather's effects (d3d8.c): rain on the ground, its fog, the heat's shimmer */
-    bool wx_rain = true, wx_fog = true, wx_heat = true;
+    bool wx_rain = true, wx_fog = true, wx_heat = true, wx_lightning = true, wx_snow = true;
+    float sky_stars = 1.0f; /* the night sky: stars more (0 none) */
+    bool sky_shooting = true;
     /* still water (d3d8.c g_water): wave height, speed, size, direction (degrees), blue to green, brightness,
      * sky reflection, glint, glint size */
     bool water = true;
@@ -858,6 +862,10 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "wx_rain=%d", &v) == 1) g_set.wx_rain = v != 0;
     else if (sscanf(line, "wx_fog=%d", &v) == 1) g_set.wx_fog = v != 0;
     else if (sscanf(line, "wx_heat=%d", &v) == 1) g_set.wx_heat = v != 0;
+    else if (sscanf(line, "wx_lightning=%d", &v) == 1) g_set.wx_lightning = v != 0;
+    else if (sscanf(line, "wx_snow=%d", &v) == 1) g_set.wx_snow = v != 0;
+    else if (sscanf(line, "sky_stars=%f", &f) == 1 && f >= 0 && f <= 3) g_set.sky_stars = f;
+    else if (sscanf(line, "sky_shooting=%d", &v) == 1) g_set.sky_shooting = v != 0;
     else if (sscanf(line, "water=%d", &v) == 1) g_set.water = v != 0;
     else if (sscanf(line, "fun_server=%d", &v) == 1) g_set.fun_server = v != 0;
     else if (sscanf(line, "fun_aurora=%d", &v) == 1) g_set.fun_aurora = v != 0;
@@ -900,6 +908,8 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
     out->appendf("chat_shrink=%d\nchat_quiet_lines=%d\nchat_quiet_secs=%g\n", g_set.chat_shrink, g_set.chat_quiet_lines,
         g_set.chat_quiet_secs);
     out->appendf("death_screen=%d\nspace_jumps=%d\n", g_set.death_screen, g_set.space_jumps);
+    out->appendf("wx_lightning=%d\nwx_snow=%d\nsky_stars=%g\nsky_shooting=%d\n", g_set.wx_lightning, g_set.wx_snow, g_set.sky_stars,
+        g_set.sky_shooting);
     out->appendf("map_alpha=%.2f\nwx_rain=%d\nwx_fog=%d\nwx_heat=%d\nwater=%d\n", g_set.map_alpha, g_set.wx_rain, g_set.wx_fog,
         g_set.wx_heat, g_set.water);
     out->appendf("fun_server=%d\nfun_aurora=%d\nfun_world=%d\nfun_filter=%d\n", g_set.fun_server, g_set.fun_aurora, g_set.fun_world,
@@ -1088,6 +1098,13 @@ static void graphics_window(void)
             dirty |= ImGui::Checkbox("Rain: the ground soaks, shines and takes the drops", &g_set.wx_rain);
             dirty |= ImGui::Checkbox("Fog, storms, snow: a fog nearer than the game's", &g_set.wx_fog);
             dirty |= ImGui::Checkbox("Hot spells, heat waves: the air shimmers far off", &g_set.wx_heat);
+            dirty |= ImGui::Checkbox("Thunder: lightning lights up the world", &g_set.wx_lightning);
+            dirty |= ImGui::Checkbox("Snow, blizzards: snow lies on the ground, and melts after", &g_set.wx_snow);
+            ImGui::Separator();
+            ImGui::TextDisabled("The night sky");
+            ImGui::SetNextItemWidth(-90);
+            dirty |= ImGui::SliderFloat("Stars", &g_set.sky_stars, 0.0f, 3.0f, g_set.sky_stars <= 0.0f ? "the game's" : "x%.1f");
+            dirty |= ImGui::Checkbox("Shooting stars", &g_set.sky_shooting);
             ImGui::TextDisabled("//xi fx weather <0-19> tries one out; -1 back to the server's.");
             ImGui::EndTabItem();
         }
@@ -1144,7 +1161,58 @@ static void graphics_window(void)
                         ImGui::TextDisabled("Eight are sized already: reset one first.");
                 }
                 else
-                    ImGui::TextDisabled("Target something to size it.");
+                    ImGui::TextDisabled("Target something to size it, or pick from who is around:");
+                /* who is around, nearest first: the untargetable too (NPCs of the scenery, ships, props) */
+                static GameEntity near[256];
+                static uint32_t picked;
+                int nn = gamestate_entities(near, 256);
+                float mx, my, mz, mf;
+                if (gamestate_self(&mx, &my, &mz, &mf))
+                {
+                    std::sort(near, near + nn, [&](const GameEntity& a, const GameEntity& b) {
+                        float da = (a.x - mx) * (a.x - mx) + (a.z - mz) * (a.z - mz), db = (b.x - mx) * (b.x - mx) + (b.z - mz) * (b.z - mz);
+                        return da < db;
+                    });
+                    const GameEntity* sel = NULL;
+                    char label[64] = "Pick someone or something nearby";
+                    for (int i = 0; i < nn; ++i)
+                        if (near[i].id == picked)
+                            sel = &near[i];
+                    if (sel)
+                        snprintf(label, sizeof label, "%s", sel->name[0] ? sel->name : "(no name)");
+                    ImGui::SetNextItemWidth(-90);
+                    if (ImGui::BeginCombo("Nearby", label))
+                    {
+                        for (int i = 0; i < nn && i < 80; ++i)
+                        {
+                            const GameEntity& e = near[i];
+                            float dist = sqrtf((e.x - mx) * (e.x - mx) + (e.z - mz) * (e.z - mz));
+                            if (dist > 60.0f)
+                                break;
+                            char who[40], row[96];
+                            if (e.name[0])
+                                snprintf(who, sizeof who, "%s", e.name);
+                            else
+                                snprintf(who, sizeof who, "(no name) #%u", e.index);
+                            snprintf(row, sizeof row, "%s  %.0f yalms%s##%u", who, dist, e.ship ? "  (ship)" : e.hidden ? "  (not targetable)" : "", e.id);
+                            if (ImGui::Selectable(row, e.id == picked))
+                                picked = e.id;
+                        }
+                        ImGui::EndCombo();
+                    }
+                    if (sel)
+                    {
+                        float* sc = size_of(sel->id, true);
+                        if (sc)
+                        {
+                            for (auto& z : g_sizes)
+                                if (z.id == sel->id)
+                                    snprintf(z.name, sizeof z.name, "%s", sel->name[0] ? sel->name : "(no name)");
+                            ImGui::SetNextItemWidth(-90);
+                            ImGui::SliderFloat("Its size", sc, 0.25f, 5.0f, "x%.2f", ImGuiSliderFlags_Logarithmic);
+                        }
+                    }
+                }
                 for (auto& z : g_sizes)
                     if (z.id && z.scale != 1.0f)
                     {
@@ -3441,7 +3509,8 @@ extern "C" void overlay_build_frame(void)
     if (was[0] != g_set.chat || was[1] != g_set.party || was[2] != g_set.map || was[3] != g_set.status || was[4] != g_set.target ||
         was[5] != g_set.equip || was[6] != g_set.items)
         ImGui::MarkIniSettingsDirty(); /* a window closed with its x */
-    d3d8_set_weather_effects(g_set.wx_rain, g_set.wx_fog, g_set.wx_heat);
+    d3d8_set_weather_effects(g_set.wx_rain, g_set.wx_fog, g_set.wx_heat, g_set.wx_lightning, g_set.wx_snow);
+    d3d8_set_sky(g_set.sky_stars, g_set.sky_shooting);
     d3d8_set_water(g_set.water, g_set.water_v);
     entity_looks();
     {
