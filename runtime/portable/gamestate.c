@@ -411,6 +411,13 @@ int gamestate_flying(void)
     return g_flying;
 }
 
+/* riding a chocobo: the player's animation in 0x037 (at 0x30, LandSandBoat's xi::Animation: 5 a chocobo) */
+static int g_self_anim;
+int gamestate_riding_chocobo(void)
+{
+    return g_self_anim == 5;
+}
+
 int gamestate_weather(void)
 {
     return g_weather;
@@ -427,6 +434,7 @@ static void self_status(const uint8_t* p, uint32_t size)
     if (size < 0x3C)
         return;
     g_flying = (int)(u32(p + 0x2C) >> 12 & 1);
+    g_self_anim = p[0x30];
     self_death(p[0x30], size >= 0x40 ? p + 0x3C : NULL);
     uint32_t f0 = u32(p + 0x28), f1 = u32(p + 0x2C), f3 = u32(p + 0x38);
     g_self_marks.gm = (uint8_t)(f0 >> 29 & 7);

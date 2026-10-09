@@ -126,6 +126,8 @@ uint32_t gamestate_self_entity(void);
 uint32_t gamestate_self_id(void);
 /* Whether the server has the player flying (its wallhack flag): the client keeps their height */
 int gamestate_flying(void);
+/* Riding a chocobo (the player's animation, from 0x037) */
+int gamestate_riding_chocobo(void);
 /* The zone's weather as the server last said (LandSandBoat's xi::Weather: 6 rain, 7 squall, 12 snow,
  * 14 thunder, 15 thunderstorms ...) */
 int gamestate_weather(void);

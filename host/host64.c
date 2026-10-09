@@ -1056,9 +1056,198 @@ static void fly_tick(void)
     px = pos[0], pz = pos[2], have = 1;
 }
 
+/* --- a flying chocobo (!flymount) ----------------------------------------------------------------------
+ * While the player flies riding a chocobo, the chocobo's motions in the game's memory - its idle, walk
+ * and run (animation chunks 0x2B of the 58-bone 'choc' skeleton, as the DATs have them) - beat its
+ * wings and hold its legs folded; the motions as they were go back on landing. They are found by a scan
+ * of the game's memory, a few MB a frame, from when the player mounts; each motion is changed on the
+ * game's own data, in place (no file of the game's is changed or shipped).
+ * The turns: about the world's forward axis for the wings (one each way, so both rise together), its
+ * side axis for the thighs and knees - in each bone's own rest frame, from the chocobo's skeleton
+ * (the preview script that drew them: ffxi-scratch, choco/preview.py). */
+enum { CHOCO_BONES = 58, CHOCO_MAX = 24 };
+static const struct
+{
+    int bone;
+    float axis[3]; /* the world's turn axis in the bone's rest frame */
+    int kind;      /* 0 wing, 1 elbow, 2 thigh, 3 knee */
+    float sign;
+} CHOCO_TURN[] = {
+    { 44, { 0.00000f, -0.57287f, -0.81965f }, 0, -1.0f }, { 48, { 0.00000f, -0.57287f, -0.81965f }, 0, 1.0f },
+    { 45, { 0.00000f, -0.57287f, -0.81965f }, 1, -1.0f }, { 49, { 0.00000f, -0.57287f, -0.81965f }, 1, 1.0f },
+    { 21, { -0.04105f, 0.0f, -0.99916f }, 2, 1.0f },        { 33, { 0.04105f, 0.0f, -0.99916f }, 2, 1.0f },
+    { 22, { -0.03076f, 0.03857f, -0.99878f }, 3, 1.0f },    { 34, { 0.03076f, -0.03857f, -0.99878f }, 3, 1.0f },
+};
+static struct
+{
+    uint32_t at, size;       /* the chunk (its 16-byte header) in the game's memory */
+    uint8_t *orig, *flying;  /* its body, as it was and flying */
+} g_choco[CHOCO_MAX];
+static int g_nchoco, g_choco_flying, g_choco_scanned;
+static uint32_t g_choco_page;
+
+static void qmul4(const float* a, const float* b, float* o)
+{
+    o[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
+    o[1] = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0];
+    o[2] = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3];
+    o[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
+}
+
+/* a motion's body, flying: wings beating (a beat per dozen frames), legs held folded */
+static void choco_make_flying(uint8_t* b, uint32_t size)
+{
+    uint16_t nb, nf;
+    memcpy(&nb, b + 2, 2), memcpy(&nf, b + 4, 2);
+    if (nb != CHOCO_BONES || nf < 2 || 10u + 84u * nb > size)
+        return;
+    int beats = (nf - 1 + 6) / 12;
+    beats = beats < 1 ? 1 : beats;
+    for (int k = 0; k < nb; ++k)
+    {
+        uint8_t* e = b + 10 + 84 * k;
+        uint16_t idx;
+        uint32_t roff[4], toff[3];
+        memcpy(&idx, e, 2), memcpy(roff, e + 4, 16), memcpy(toff, e + 36, 12);
+        float* key = (float*)(b + 10);
+        /* the legs held still: thigh to toe, each keyed channel at its first frame's value */
+        if (idx >= 20 && idx <= 43)
+        {
+            for (int c = 0; c < 7; ++c)
+            {
+                uint32_t o = c < 4 ? roff[c] : toff[c - 4];
+                if (!o || (o & 0x80000000u) || 10u + 4u * (o + nf) > size)
+                    continue;
+                for (int f = 1; f < nf; ++f)
+                    key[o + (uint32_t)f] = key[o];
+            }
+        }
+        for (size_t r = 0; r < sizeof CHOCO_TURN / sizeof *CHOCO_TURN; ++r)
+        {
+            if (CHOCO_TURN[r].bone != idx)
+                continue;
+            int keyed = 1;
+            for (int c = 0; c < 4; ++c)
+                keyed &= roff[c] && !(roff[c] & 0x80000000u) && 10u + 4u * (roff[c] + nf) <= size;
+            if (!keyed)
+                break;
+            for (int f = 0; f < nf; ++f)
+            {
+                float ph = 6.2831853f * (float)beats * (float)f / (float)(nf - 1), ang;
+                switch (CHOCO_TURN[r].kind)
+                {
+                case 0: ang = CHOCO_TURN[r].sign * -(1.3f * sinf(ph) + 0.15f); break;   /* the beat, a little raised */
+                case 1: ang = CHOCO_TURN[r].sign * (-0.45f * fmaxf(0.0f, cosf(ph))); break; /* folded on the upstroke */
+                case 2: ang = 0.85f; break;                                              /* thighs back */
+                default: ang = -1.0f; break;                                             /* knees folded */
+                }
+                float s = sinf(ang * 0.5f), d[4] = { CHOCO_TURN[r].axis[0] * s, CHOCO_TURN[r].axis[1] * s, CHOCO_TURN[r].axis[2] * s, cosf(ang * 0.5f) };
+                float q[4], o[4];
+                for (int c = 0; c < 4; ++c)
+                    q[c] = key[roff[c] + (uint32_t)f];
+                qmul4(d, q, o);
+                float l = sqrtf(o[0] * o[0] + o[1] * o[1] + o[2] * o[2] + o[3] * o[3]);
+                for (int c = 0; c < 4; ++c)
+                    key[roff[c] + (uint32_t)f] = l > 0.0f ? o[c] / l : q[c];
+            }
+            break;
+        }
+    }
+}
+
+/* the chocobo's motions in the game's memory: a part of it a frame */
+static void choco_scan_some(void)
+{
+    static const char* const NAMES[] = { "idl0", "wlk0", "run0" };
+    for (int pages = 0; pages < 2048 && !g_choco_scanned; ++pages, g_choco_page += 0x1000u)
+    {
+        if (g_choco_page < 0x10000u)
+            g_choco_page = 0x10000u;
+        if (g_choco_page >= 0xFFFF0000u)
+        {
+            g_choco_scanned = 1;
+            rt_log("[recomp] flymount: %d of the chocobo's motions found\n", g_nchoco);
+            break;
+        }
+        if (!gwin_is_committed(g_choco_page))
+            continue;
+        for (uint32_t a = g_choco_page; a + 16 < g_choco_page + 0x1000u && g_nchoco < CHOCO_MAX; a += 4)
+        {
+            int named = 0;
+            for (int n = 0; n < 3 && !named; ++n)
+                named = !memcmp(GUEST_PTR(a), NAMES[n], 4);
+            if (!named)
+                continue;
+            uint32_t w = rd32(a + 4), size = ((w >> 7) & 0x7FFFFu) * 16u;
+            if ((w & 0x7F) != 0x2B || size < 16u + 10u + 84u * CHOCO_BONES || size > 0x20000u || !gwin_is_committed(a + size - 1))
+                continue;
+            if (rd16(a + 16 + 2) != CHOCO_BONES)
+                continue;
+            int known = 0;
+            for (int i = 0; i < g_nchoco; ++i)
+                known |= g_choco[i].at == a;
+            if (known)
+                continue;
+            uint32_t body = size - 16u;
+            g_choco[g_nchoco].at = a, g_choco[g_nchoco].size = body;
+            g_choco[g_nchoco].orig = (uint8_t*)malloc(body), g_choco[g_nchoco].flying = (uint8_t*)malloc(body);
+            memcpy(g_choco[g_nchoco].orig, GUEST_PTR(a + 16), body);
+            memcpy(g_choco[g_nchoco].flying, GUEST_PTR(a + 16), body);
+            choco_make_flying(g_choco[g_nchoco].flying, body);
+            ++g_nchoco;
+        }
+    }
+}
+
+/* the motions put flying or back, each where it still is (unchanged since: the same header) */
+static void choco_put(int flying)
+{
+    for (int i = 0; i < g_nchoco; ++i)
+    {
+        uint32_t a = g_choco[i].at;
+        if (!gwin_is_committed(a) || !gwin_is_committed(a + 16 + g_choco[i].size - 1) || rd16(a + 16 + 2) != CHOCO_BONES)
+            continue;
+        const uint8_t* now = flying ? g_choco[i].orig : g_choco[i].flying;
+        /* still the motion we left, all of it (not another file loaded over it) */
+        if (memcmp(GUEST_PTR(a + 16), now, g_choco[i].size) != 0)
+            continue;
+        memcpy(GUEST_PTR(a + 16), flying ? g_choco[i].flying : g_choco[i].orig, g_choco[i].size);
+    }
+}
+
+static void choco_forget(void)
+{
+    for (int i = 0; i < g_nchoco; ++i)
+        free(g_choco[i].orig), free(g_choco[i].flying);
+    g_nchoco = 0, g_choco_scanned = 0, g_choco_page = 0;
+}
+
+static void choco_tick(void)
+{
+    int riding = gamestate_riding_chocobo();
+    if (!riding)
+    {
+        if (g_choco_flying)
+            choco_put(0), g_choco_flying = 0;
+        if (g_nchoco || g_choco_page)
+            choco_forget(); /* found again at the next mount (the motions may have moved) */
+        return;
+    }
+    if (!g_choco_scanned)
+        choco_scan_some();
+    int fly = gamestate_flying();
+    if (fly != g_choco_flying && g_nchoco)
+    {
+        choco_put(fly);
+        g_choco_flying = fly;
+        rt_log("[recomp] flymount: the chocobo's wings %s\n", fly ? "beating, its legs folded" : "folded again, its legs down");
+    }
+}
+
 static void scene_tick(void)
 {
     fly_tick();
+    choco_tick();
     d3d8_set_weather(gamestate_weather());
     static float last[3], from[3], to[3];
     static int have_last, active, frames;
