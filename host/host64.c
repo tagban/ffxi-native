@@ -1323,6 +1323,8 @@ static int xi_line(const char* t)
     }
     if (!strncmp(t, "fx", 2) && d3d8_fx_command(t))
         return 1;
+    if (!strncmp(t, "cam", 3) && d3d8_cam_command(t))
+        return 1;
     if (!strcmp(t, "findall"))
     {
         /* the player's height everywhere in the game's memory, not only its entity: the same float, with

@@ -3197,11 +3197,13 @@ static void scene_trace(GfxTex* world_before)
 }
 
 static void fx_weather_tick(void);
+static void cam_tick(void);
 
 static void scene_present(void)
 {
     scene_finish("present");
     fx_weather_tick();
+    cam_tick();
     GfxTex* world_before = g_scene.world;
     /* next frame's world: this frame's busiest target */
     uint32_t best = 0;
@@ -3773,7 +3775,407 @@ static int menu_target(const Obj* o)
     return t && t->kind == O_TEXTURE && (t->usage & USAGE_RENDERTARGET) && ui_box_shape(t->width, t->height);
 }
 
+/* --- the cinematic camera ---------------------------------------------------------------------------
+ * A flight through the zone in place of the game's camera: a path recorded from the game's own camera
+ * as the player moves (walking, or flying with !fly), points added one by one, or a tour round the
+ * zone; played back smoothly (Catmull-Rom through the places, the turns blended), the game's view
+ * swapped for it in each draw (d3d8_cam_draw_begin/end) - the sky, drawn from the camera's place,
+ * keeps the turn alone. The interfaces can go while it plays. //xi cam ..., and the overlay's Camera tab.
+ * A key: the eye (the game's world) and the view's turn as a quaternion; a mirrored view (the game's
+ * world counts heights downward) is kept mirrored. */
+enum { CAM_KEYS = 4096 };
+typedef struct
+{
+    float t;      /* seconds from the path's start */
+    float e[3];   /* the eye */
+    float q[4];   /* the view's turn */
+} CamKey;
+static struct
+{
+    CamKey k[CAM_KEYS];
+    int n, recording, playing, loop, hide_ui, mirror;
+    float pace, smooth, time;
+    uint64_t at, rec_at;
+    float view[16], game_view[16];
+    int swapped;
+} g_cam = { .pace = 0.5f, .smooth = 1.0f, .hide_ui = 1 };
+
+static void quat_from_m3(const float* m, float* q) /* m: rows of 3 (orthonormal) */
+{
+    float tr = m[0] + m[4] + m[8];
+    if (tr > 0.0f)
+    {
+        float s2 = sqrtf(tr + 1.0f) * 2.0f;
+        q[3] = 0.25f * s2, q[0] = (m[5] - m[7]) / s2, q[1] = (m[6] - m[2]) / s2, q[2] = (m[1] - m[3]) / s2;
+    }
+    else if (m[0] > m[4] && m[0] > m[8])
+    {
+        float s2 = sqrtf(1.0f + m[0] - m[4] - m[8]) * 2.0f;
+        q[3] = (m[5] - m[7]) / s2, q[0] = 0.25f * s2, q[1] = (m[3] + m[1]) / s2, q[2] = (m[6] + m[2]) / s2;
+    }
+    else if (m[4] > m[8])
+    {
+        float s2 = sqrtf(1.0f + m[4] - m[0] - m[8]) * 2.0f;
+        q[3] = (m[6] - m[2]) / s2, q[0] = (m[3] + m[1]) / s2, q[1] = 0.25f * s2, q[2] = (m[7] + m[5]) / s2;
+    }
+    else
+    {
+        float s2 = sqrtf(1.0f + m[8] - m[0] - m[4]) * 2.0f;
+        q[3] = (m[1] - m[3]) / s2, q[0] = (m[6] + m[2]) / s2, q[1] = (m[7] + m[5]) / s2, q[2] = 0.25f * s2;
+    }
+}
+
+static void m3_from_quat(const float* q, float* m)
+{
+    float x = q[0], y = q[1], z = q[2], w = q[3];
+    m[0] = 1 - 2 * (y * y + z * z), m[1] = 2 * (x * y + z * w), m[2] = 2 * (x * z - y * w);
+    m[3] = 2 * (x * y - z * w), m[4] = 1 - 2 * (x * x + z * z), m[5] = 2 * (y * z + x * w);
+    m[6] = 2 * (x * z + y * w), m[7] = 2 * (y * z - x * w), m[8] = 1 - 2 * (x * x + y * y);
+}
+
+/* a view (world to view, row vectors) to a key, and back */
+static void cam_key_of(const float* V, CamKey* k)
+{
+    float m[9] = { V[0], V[1], V[2], V[4], V[5], V[6], V[8], V[9], V[10] };
+    float det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
+    g_cam.mirror = det < 0.0f;
+    if (g_cam.mirror) /* the first row (the world's x) turned back: a rotation */
+        m[0] = -m[0], m[1] = -m[1], m[2] = -m[2];
+    quat_from_m3(m, k->q);
+    float l = sqrtf(k->q[0] * k->q[0] + k->q[1] * k->q[1] + k->q[2] * k->q[2] + k->q[3] * k->q[3]);
+    for (int i = 0; i < 4; ++i)
+        k->q[i] /= l > 0.0f ? l : 1.0f;
+    /* the eye: -t M^T (t the view's translation; M's rows the world's axes, as seen) */
+    const float t[3] = { V[12], V[13], V[14] };
+    for (int i = 0; i < 3; ++i)
+        k->e[i] = -(t[0] * V[i * 4 + 0] + t[1] * V[i * 4 + 1] + t[2] * V[i * 4 + 2]);
+}
+
+static void cam_view_of(const float* e, const float* q, float* V)
+{
+    float m[9];
+    m3_from_quat(q, m);
+    if (g_cam.mirror)
+        m[0] = -m[0], m[1] = -m[1], m[2] = -m[2];
+    memset(V, 0, 64);
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            V[i * 4 + j] = m[i * 3 + j];
+    for (int j = 0; j < 3; ++j)
+        V[12 + j] = -(e[0] * m[0 * 3 + j] + e[1] * m[1 * 3 + j] + e[2] * m[2 * 3 + j]);
+    V[15] = 1.0f;
+}
+
+static float cam_now(void)
+{
+    return (float)((double)rt_monotonic_ns() / 1e9);
+}
+
+static void cam_add(const float* V, float t)
+{
+    if (g_cam.n >= CAM_KEYS)
+        return;
+    CamKey* k = &g_cam.k[g_cam.n];
+    cam_key_of(V, k);
+    if (g_cam.n)
+    {
+        const float* pq = g_cam.k[g_cam.n - 1].q; /* the nearer of q and -q, so blends take the short way */
+        if (pq[0] * k->q[0] + pq[1] * k->q[1] + pq[2] * k->q[2] + pq[3] * k->q[3] < 0.0f)
+            for (int i = 0; i < 4; ++i)
+                k->q[i] = -k->q[i];
+    }
+    k->t = t;
+    g_cam.n++;
+}
+
+/* the path smoothed: each key the average of those within `smooth` seconds of it */
+static void cam_smooth(void)
+{
+    if (g_cam.smooth <= 0.0f || g_cam.n < 3)
+        return;
+    static CamKey out[CAM_KEYS];
+    for (int i = 0; i < g_cam.n; ++i)
+    {
+        float e[3] = { 0 }, q[4] = { 0 }, w = 0.0f;
+        for (int j = i; j >= 0 && g_cam.k[i].t - g_cam.k[j].t <= g_cam.smooth; --j)
+        {
+            float a = 1.0f - (g_cam.k[i].t - g_cam.k[j].t) / (g_cam.smooth + 1e-3f);
+            for (int c = 0; c < 3; ++c) e[c] += g_cam.k[j].e[c] * a;
+            for (int c = 0; c < 4; ++c) q[c] += g_cam.k[j].q[c] * a;
+            w += a;
+        }
+        for (int j = i + 1; j < g_cam.n && g_cam.k[j].t - g_cam.k[i].t <= g_cam.smooth; ++j)
+        {
+            float a = 1.0f - (g_cam.k[j].t - g_cam.k[i].t) / (g_cam.smooth + 1e-3f);
+            for (int c = 0; c < 3; ++c) e[c] += g_cam.k[j].e[c] * a;
+            for (int c = 0; c < 4; ++c) q[c] += g_cam.k[j].q[c] * a;
+            w += a;
+        }
+        out[i].t = g_cam.k[i].t;
+        float l = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+        for (int c = 0; c < 3; ++c) out[i].e[c] = e[c] / w;
+        for (int c = 0; c < 4; ++c) out[i].q[c] = q[c] / (l > 0.0f ? l : 1.0f);
+    }
+    memcpy(g_cam.k, out, sizeof(CamKey) * (size_t)g_cam.n);
+}
+
+static void catmull(const float* p0, const float* p1, const float* p2, const float* p3, float u, int n, float* out)
+{
+    float u2 = u * u, u3 = u2 * u;
+    for (int i = 0; i < n; ++i)
+        out[i] = 0.5f * (2 * p1[i] + (-p0[i] + p2[i]) * u + (2 * p0[i] - 5 * p1[i] + 4 * p2[i] - p3[i]) * u2 +
+                         (-p0[i] + 3 * p1[i] - 3 * p2[i] + p3[i]) * u3);
+}
+
+/* the view at time t of the path */
+static void cam_at(float t, float* V)
+{
+    int n = g_cam.n, i = 0;
+    while (i + 1 < n && g_cam.k[i + 1].t <= t)
+        ++i;
+    const CamKey *k0 = &g_cam.k[i > 0 ? i - 1 : 0], *k1 = &g_cam.k[i], *k2 = &g_cam.k[i + 1 < n ? i + 1 : n - 1],
+                 *k3 = &g_cam.k[i + 2 < n ? i + 2 : n - 1];
+    float span = k2->t - k1->t, u = span > 0.0f ? (t - k1->t) / span : 0.0f;
+    u = u < 0.0f ? 0.0f : u > 1.0f ? 1.0f : u;
+    float e[3], q[4];
+    catmull(k0->e, k1->e, k2->e, k3->e, u, 3, e);
+    catmull(k0->q, k1->q, k2->q, k3->q, u, 4, q);
+    float l = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    for (int c = 0; c < 4; ++c)
+        q[c] /= l > 0.0f ? l : 1.0f;
+    cam_view_of(e, q, V);
+}
+
+/* once a frame (scene_present): recording keeps the game's camera; playing moves along */
+static void cam_tick(void)
+{
+    float now = cam_now();
+    if (g_cam.recording && now - (float)g_cam.rec_at / 1000.0f >= 0.2f)
+    {
+        float t = g_cam.n ? g_cam.k[g_cam.n - 1].t + (now - (float)g_cam.rec_at / 1000.0f) : 0.0f;
+        if (!g_cam.n)
+            t = 0.0f;
+        g_cam.rec_at = (uint64_t)(now * 1000.0f);
+        cam_add(g_cam.swapped ? g_cam.game_view : g_dev.cur.xf[2], t);
+    }
+    if (g_cam.playing)
+    {
+        float dt = g_cam.at ? now - (float)g_cam.at / 1000.0f : 0.0f;
+        g_cam.at = (uint64_t)(now * 1000.0f);
+        g_cam.time += (dt > 0.25f ? 0.25f : dt) * g_cam.pace;
+        float end = g_cam.n ? g_cam.k[g_cam.n - 1].t : 0.0f;
+        if (g_cam.time >= end)
+        {
+            if (g_cam.loop && end > 0.0f)
+                g_cam.time = fmodf(g_cam.time, end);
+            else
+                g_cam.playing = 0, rt_log("[recomp] cam: the flight is over\n");
+        }
+        if (g_cam.playing)
+            cam_at(g_cam.time, g_cam.view);
+    }
+}
+
+int d3d8_cam_playing(void)
+{
+    return g_cam.playing;
+}
+
+int d3d8_cam_hides_ui(void)
+{
+    return g_cam.playing && g_cam.hide_ui;
+}
+
+/* each draw: the game's view swapped for the flight's (the sky's, at the camera's place, its turn alone) */
+static void cam_draw_begin(void)
+{
+    if (!g_cam.playing)
+        return;
+    float* V = g_dev.cur.xf[2];
+    memcpy(g_cam.game_view, V, 64);
+    int at_eye = fabsf(V[12]) + fabsf(V[13]) + fabsf(V[14]) < 1e-3f;
+    memcpy(V, g_cam.view, 64);
+    if (at_eye)
+        V[12] = V[13] = V[14] = 0.0f;
+    g_cam.swapped = 1;
+}
+
+static void cam_draw_end(void)
+{
+    if (g_cam.swapped)
+        memcpy(g_dev.cur.xf[2], g_cam.game_view, 64), g_cam.swapped = 0;
+}
+
+/* a tour: round the point (x, y, z: the game's world) at radius r, h above it (heights count down:
+ * above is -), looking at it, once round in `secs` */
+static void cam_tour(float x, float y, float z, float r, float h, float secs)
+{
+    const float* G = g_dev.cur.xf[2];
+    /* the game's own up, in the world (the view's second column), its sign kept */
+    float gu = G[5] >= 0.0f ? 1.0f : -1.0f;
+    g_cam.n = 0;
+    for (int i = 0; i <= 48; ++i)
+    {
+        float a = (float)i / 48.0f * 6.2831853f, t = (float)i / 48.0f * secs;
+        float e[3] = { x + cosf(a) * r, y + h * (1.0f - 0.35f * (float)i / 48.0f), z + sinf(a) * r };
+        float f[3] = { x - e[0], y - e[1], z - e[2] }, fl = sqrtf(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+        for (int c = 0; c < 3; ++c)
+            f[c] /= fl;
+        /* right = up x forward, up' = forward x right, in the game's handedness (checked below) */
+        float up[3] = { 0.0f, gu, 0.0f };
+        float rx = up[1] * f[2] - up[2] * f[1], ry = up[2] * f[0] - up[0] * f[2], rz = up[0] * f[1] - up[1] * f[0];
+        float rl = sqrtf(rx * rx + ry * ry + rz * rz);
+        rx /= rl, ry /= rl, rz /= rl;
+        float ux = f[1] * rz - f[2] * ry, uy = f[2] * rx - f[0] * rz, uz = f[0] * ry - f[1] * rx;
+        /* the game's right is its view's first column: the same side of up x forward as ours, else flipped */
+        float gr[3] = { G[0], G[4], G[8] }, gf[3] = { G[2], G[6], G[10] }, gup[3] = { G[1], G[5], G[9] };
+        float gcross = (gup[1] * gf[2] - gup[2] * gf[1]) * gr[0] + (gup[2] * gf[0] - gup[0] * gf[2]) * gr[1] + (gup[0] * gf[1] - gup[1] * gf[0]) * gr[2];
+        if (gcross < 0.0f)
+            rx = -rx, ry = -ry, rz = -rz;
+        float V[16] = { rx, ux, f[0], 0, ry, uy, f[1], 0, rz, uz, f[2], 0, 0, 0, 0, 1 };
+        V[12] = -(e[0] * rx + e[1] * ry + e[2] * rz), V[13] = -(e[0] * ux + e[1] * uy + e[2] * uz), V[14] = -(e[0] * f[0] + e[1] * f[1] + e[2] * f[2]);
+        cam_add(V, t);
+    }
+}
+
+void d3d8_cam_tour(float x, float y, float z, float r, float h, float secs);
+
+static int cam_file(const char* name, char* out, size_t n)
+{
+    const char* home = getenv("HOME");
+    if (!home || !name || !*name)
+        return 0;
+    char dir[900];
+    snprintf(dir, sizeof dir, "%s/Library/Caches/FFXI/cam", home);
+    plat_mkdir(dir);
+    snprintf(out, n, "%s/%s.txt", dir, name);
+    return 1;
+}
+
+int d3d8_cam_command(const char* t)
+{
+    char name[64];
+    float a, b;
+    if (!strcmp(t, "cam record"))
+        return g_cam.n = 0, g_cam.recording = 1, g_cam.playing = 0, g_cam.rec_at = 0,
+               rt_log("[recomp] cam: recording the camera's way (//xi cam stop to end)\n"), 1;
+    if (!strcmp(t, "cam stop"))
+    {
+        if (g_cam.recording)
+            g_cam.recording = 0, cam_smooth(), rt_log("[recomp] cam: %d places kept, %.0f seconds\n", g_cam.n, g_cam.n ? g_cam.k[g_cam.n - 1].t : 0.0f);
+        g_cam.playing = 0;
+        return 1;
+    }
+    if (!strcmp(t, "cam add"))
+    {
+        float tt = 0.0f;
+        if (g_cam.n)
+        {
+            CamKey k;
+            cam_key_of(g_dev.cur.xf[2], &k);
+            const float* pe = g_cam.k[g_cam.n - 1].e;
+            float d = sqrtf((k.e[0] - pe[0]) * (k.e[0] - pe[0]) + (k.e[1] - pe[1]) * (k.e[1] - pe[1]) + (k.e[2] - pe[2]) * (k.e[2] - pe[2]));
+            tt = g_cam.k[g_cam.n - 1].t + (d / 4.0f > 1.0f ? d / 4.0f : 1.0f); /* 4 yalms a second, at pace 1 */
+        }
+        cam_add(g_dev.cur.xf[2], tt);
+        return rt_log("[recomp] cam: place %d\n", g_cam.n), 1;
+    }
+    if (!strcmp(t, "cam play") || !strcmp(t, "cam loop"))
+    {
+        if (g_cam.n < 2)
+            return rt_log("[recomp] cam: no path yet (//xi cam record, add or tour)\n"), 1;
+        g_cam.recording = 0, g_cam.playing = 1, g_cam.loop = t[4] == 'l', g_cam.time = 0.0f, g_cam.at = 0;
+        cam_at(0.0f, g_cam.view);
+        return rt_log("[recomp] cam: flying (%d places, %.0f seconds at pace %.2f)\n", g_cam.n, g_cam.k[g_cam.n - 1].t / g_cam.pace, g_cam.pace), 1;
+    }
+    if (!strcmp(t, "cam clear"))
+        return g_cam.n = 0, g_cam.playing = g_cam.recording = 0, rt_log("[recomp] cam: path cleared\n"), 1;
+    if (sscanf(t, "cam pace %f", &a) == 1)
+        return g_cam.pace = a < 0.05f ? 0.05f : a > 4.0f ? 4.0f : a, rt_log("[recomp] cam: pace %.2f\n", g_cam.pace), 1;
+    if (sscanf(t, "cam smooth %f", &a) == 1)
+        return g_cam.smooth = a < 0.0f ? 0.0f : a > 5.0f ? 5.0f : a, rt_log("[recomp] cam: smoothing over %.1f seconds\n", g_cam.smooth), 1;
+    if (!strcmp(t, "cam ui"))
+        return g_cam.hide_ui = !g_cam.hide_ui, rt_log("[recomp] cam: the interfaces %s while flying\n", g_cam.hide_ui ? "hidden" : "shown"), 1;
+    if (!strncmp(t, "cam tour", 8))
+    {
+        /* round what the camera looks at: 40 yalms ahead, at 40 yalms, 25 up (or as given) */
+        a = 40.0f, b = 25.0f;
+        sscanf(t, "cam tour %f %f", &a, &b);
+        CamKey k;
+        const float* V = g_dev.cur.xf[2];
+        cam_key_of(V, &k);
+        float f[3] = { V[2], V[6], V[10] }, gu = V[5] >= 0.0f ? 1.0f : -1.0f;
+        float x = k.e[0] + f[0] * a, z = k.e[2] + f[2] * a, y = k.e[1];
+        d3d8_cam_tour(x, y, z, a, gu * b, 90.0f);
+        return 1;
+    }
+    if (sscanf(t, "cam save %63s", name) == 1)
+    {
+        char path[1024];
+        FILE* f = cam_file(name, path, sizeof path) ? fopen(path, "w") : NULL;
+        if (!f)
+            return rt_log("[recomp] cam: could not save %s\n", name), 1;
+        fprintf(f, "mirror %d\n", g_cam.mirror);
+        for (int i = 0; i < g_cam.n; ++i)
+        {
+            const CamKey* k = &g_cam.k[i];
+            fprintf(f, "%.3f %.4f %.4f %.4f %.6f %.6f %.6f %.6f\n", k->t, k->e[0], k->e[1], k->e[2], k->q[0], k->q[1], k->q[2], k->q[3]);
+        }
+        fclose(f);
+        return rt_log("[recomp] cam: %d places saved to %s\n", g_cam.n, path), 1;
+    }
+    if (sscanf(t, "cam load %63s", name) == 1)
+    {
+        char path[1024], line[256];
+        FILE* f = cam_file(name, path, sizeof path) ? fopen(path, "r") : NULL;
+        if (!f)
+            return rt_log("[recomp] cam: no path %s\n", name), 1;
+        g_cam.n = 0, g_cam.playing = g_cam.recording = 0;
+        int m;
+        while (fgets(line, sizeof line, f) && g_cam.n < CAM_KEYS)
+        {
+            CamKey* k = &g_cam.k[g_cam.n];
+            if (sscanf(line, "mirror %d", &m) == 1)
+                g_cam.mirror = m;
+            else if (sscanf(line, "%f %f %f %f %f %f %f %f", &k->t, &k->e[0], &k->e[1], &k->e[2], &k->q[0], &k->q[1], &k->q[2], &k->q[3]) == 8)
+                g_cam.n++;
+        }
+        fclose(f);
+        return rt_log("[recomp] cam: %d places from %s\n", g_cam.n, path), 1;
+    }
+    return 0;
+}
+
+void d3d8_cam_tour(float x, float y, float z, float r, float h, float secs)
+{
+    g_cam.recording = 0;
+    cam_tour(x, y, z, r, h, secs);
+    g_cam.playing = 1, g_cam.loop = 0, g_cam.time = 0.0f, g_cam.at = 0;
+    cam_at(0.0f, g_cam.view);
+    rt_log("[recomp] cam: a tour round %.0f %.0f at %.0f yalms\n", x, z, r);
+}
+
+void d3d8_cam_settings(float* pace, float* smooth, int* hide_ui, int* places, int* recording)
+{
+    if (pace) g_cam.pace = *pace;
+    if (smooth) g_cam.smooth = *smooth;
+    if (hide_ui) g_cam.hide_ui = *hide_ui;
+    if (places) *places = g_cam.n;
+    if (recording) *recording = g_cam.recording;
+}
+
+static void draw_packet_inner(uint32_t prim, uint32_t count, uint32_t start, uint32_t indices, uint32_t index_size,
+    uint32_t up_data, uint32_t up_stride, uint32_t n);
+
 static void draw_packet(uint32_t prim, uint32_t count, uint32_t start, uint32_t indices, uint32_t index_size,
+    uint32_t up_data, uint32_t up_stride, uint32_t n)
+{
+    cam_draw_begin();
+    draw_packet_inner(prim, count, start, indices, index_size, up_data, up_stride, n);
+    cam_draw_end();
+}
+
+static void draw_packet_inner(uint32_t prim, uint32_t count, uint32_t start, uint32_t indices, uint32_t index_size,
     uint32_t up_data, uint32_t up_stride, uint32_t n)
 {
     GfxDraw* d = &g_draw;
@@ -3802,6 +4204,8 @@ static void draw_packet(uint32_t prim, uint32_t count, uint32_t start, uint32_t 
     look_wireframe(d);
     if (g_cap)
         cap_draw(d, prim, count, first, nverts, up_data, up_stride);
+    if (d->vs.rhw && g_cam.playing && g_cam.hide_ui)
+        return; /* the flight: the game's interface gone */
     if (d->vs.rhw && (g_dev.rt == g_dev.backbuffer || menu_target(obj(g_dev.rt))))
     {
         /* the game's cursor is drawn where the mouse was given to it: squeezed when that was

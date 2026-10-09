@@ -27,6 +27,10 @@ extern "C" void d3d8_set_look(int sky, const float* aurora, int world, int filte
 extern "C" void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float (*m)[16]);
 extern "C" void d3d8_set_creatures(float birds, float fish);
 extern "C" int d3d8_creatures_known(int which);
+extern "C" int d3d8_cam_command(const char* text);
+extern "C" int d3d8_cam_playing(void);
+extern "C" int d3d8_cam_hides_ui(void);
+extern "C" void d3d8_cam_settings(float* pace, float* smooth, int* hide_ui, int* places, int* recording);
 
 /* Fonts: Roboto is built in; the others are the player's own system's, loaded from where each
  * system keeps them if they are there (nothing of theirs is shipped). Kept in overlay.ini by name. */
@@ -187,6 +191,8 @@ static struct
     float fun_filter_c[4] = { 1.0f, 0.78f, 0.31f, 0.6f };
     float fun_birds = 1.0f, fun_fish = 1.0f; /* how many of the zone's birds and fish (1 as the game has them) */
     bool fun_ships = true;                    /* ships rock at the dock */
+    float cam_pace = 0.5f, cam_smooth = 1.0f; /* the cinematic camera: how fast it flies the path, smoothing (seconds) */
+    bool cam_hide = true, cam_bars = true;    /* the interfaces gone while it flies; black bars, as a film */
     float fun_ships_k = 1.0f;
     /* the windows' background and the chat's: a color and how solid (the player's) */
     float win_bg[4] = { 0.102f, 0.118f, 0.180f, 0.88f }, chat_bg[4] = { 0.094f, 0.118f, 0.188f, 0.80f }; /* the interface skin's slate */
@@ -668,6 +674,8 @@ extern "C" int overlay_event(const SDL_Event* e)
 {
     if (!g_ready)
         return 0;
+    if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == SDLK_ESCAPE && d3d8_cam_playing())
+        return d3d8_cam_command("cam stop"), 1; /* a flight ends; the game's Esc waits */
     if (e->type == SDL_EVENT_KEY_DOWN && is_toggle(e->key))
     {
         if (!e->key.repeat)
@@ -858,6 +866,10 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "fun_birds=%f", &f) == 1 && f >= 1 && f <= 50) g_set.fun_birds = f;
     else if (sscanf(line, "fun_fish=%f", &f) == 1 && f >= 1 && f <= 30) g_set.fun_fish = f;
     else if (sscanf(line, "fun_ships=%d", &v) == 1) g_set.fun_ships = v != 0;
+    else if (sscanf(line, "cam_pace=%f", &f) == 1 && f >= 0.05f && f <= 4) g_set.cam_pace = f;
+    else if (sscanf(line, "cam_smooth=%f", &f) == 1 && f >= 0 && f <= 5) g_set.cam_smooth = f;
+    else if (sscanf(line, "cam_hide=%d", &v) == 1) g_set.cam_hide = v != 0;
+    else if (sscanf(line, "cam_bars=%d", &v) == 1) g_set.cam_bars = v != 0;
     else if (sscanf(line, "fun_ships_k=%f", &f) == 1 && f >= 0 && f <= 3) g_set.fun_ships_k = f;
     else if (!strncmp(line, "fun_aurora_c=", 13) || !strncmp(line, "fun_filter_c=", 13))
     {
@@ -892,6 +904,7 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
         g_set.wx_heat, g_set.water);
     out->appendf("fun_server=%d\nfun_aurora=%d\nfun_world=%d\nfun_filter=%d\n", g_set.fun_server, g_set.fun_aurora, g_set.fun_world,
         g_set.fun_filter);
+    out->appendf("cam_pace=%g\ncam_smooth=%g\ncam_hide=%d\ncam_bars=%d\n", g_set.cam_pace, g_set.cam_smooth, g_set.cam_hide, g_set.cam_bars);
     out->appendf("fun_birds=%g\nfun_fish=%g\nfun_ships=%d\nfun_ships_k=%g\n", g_set.fun_birds, g_set.fun_fish, g_set.fun_ships,
         g_set.fun_ships_k);
     const float *fa = g_set.fun_aurora_c, *ff = g_set.fun_filter_c;
@@ -1155,6 +1168,50 @@ static void graphics_window(void)
             if (!d3d8_creatures_known(0) || !d3d8_creatures_known(1))
                 ImGui::TextDisabled("The zones' %s not found yet: a frame capture near them finds them.",
                     !d3d8_creatures_known(0) && !d3d8_creatures_known(1) ? "birds and fish are" : !d3d8_creatures_known(0) ? "birds are" : "fish are");
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Camera"))
+        {
+            int places = 0, recording = 0;
+            d3d8_cam_settings(NULL, NULL, NULL, &places, &recording);
+            ImGui::TextDisabled("A flight through the zone, in place of the game's camera.");
+            if (ImGui::Button(recording ? "Stop recording" : "Record", ImVec2(130, 0)))
+                d3d8_cam_command(recording ? "cam stop" : "cam record");
+            ImGui::SameLine();
+            if (ImGui::Button("Add this view", ImVec2(130, 0)))
+                d3d8_cam_command("cam add");
+            ImGui::TextDisabled(recording ? "Recording: walk or fly (!fly) the way; the camera's way is kept."
+                                          : "Record keeps the camera's way as you move; Add, one view at a time.");
+            ImGui::Text("%d places on the path", places);
+            ImGui::BeginDisabled(places < 2 || recording);
+            if (ImGui::Button("Play", ImVec2(84, 0)))
+                d3d8_cam_command("cam play");
+            ImGui::SameLine();
+            if (ImGui::Button("Loop", ImVec2(84, 0)))
+                d3d8_cam_command("cam loop");
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Clear", ImVec2(84, 0)))
+                d3d8_cam_command("cam clear");
+            if (ImGui::Button("Tour round what you look at", ImVec2(-1, 0)))
+                d3d8_cam_command("cam tour");
+            ImGui::SetNextItemWidth(-110);
+            dirty |= ImGui::SliderFloat("Pace", &g_set.cam_pace, 0.1f, 2.0f, "%.2f");
+            ImGui::SetNextItemWidth(-110);
+            dirty |= ImGui::SliderFloat("Smoothing", &g_set.cam_smooth, 0.0f, 4.0f, "%.1f s");
+            dirty |= ImGui::Checkbox("Hide the interfaces while flying", &g_set.cam_hide);
+            dirty |= ImGui::Checkbox("Black bars, as a film", &g_set.cam_bars);
+            static char name[48] = "zitah";
+            ImGui::SetNextItemWidth(140);
+            ImGui::InputText("##camname", name, sizeof name, ImGuiInputTextFlags_CharsNoBlank);
+            ImGui::SameLine();
+            char cmd[96];
+            if (ImGui::Button("Save"))
+                snprintf(cmd, sizeof cmd, "cam save %s", name), d3d8_cam_command(cmd);
+            ImGui::SameLine();
+            if (ImGui::Button("Load"))
+                snprintf(cmd, sizeof cmd, "cam load %s", name), d3d8_cam_command(cmd);
+            ImGui::TextDisabled("Esc ends a flight. Also //xi cam record | stop | add | play | loop | tour | save <name> | load <name>.");
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -3334,13 +3391,13 @@ extern "C" void overlay_build_frame(void)
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
     bool was[7] = { g_set.chat, g_set.party, g_set.map, g_set.status, g_set.target, g_set.equip, g_set.items };
-    if (ui_on() && g_set.plates)
+    if (ui_on() && g_set.plates && !d3d8_cam_hides_ui())
         draw_nameplates();
     else
         g_nplates = 0;
     if (!dsound_in_world())
         g_edit = false;
-    if (ui_on())
+    if (ui_on() && !d3d8_cam_hides_ui())
     {
         if (g_edit)
             edit_banner();
@@ -3387,6 +3444,19 @@ extern "C" void overlay_build_frame(void)
     d3d8_set_weather_effects(g_set.wx_rain, g_set.wx_fog, g_set.wx_heat);
     d3d8_set_water(g_set.water, g_set.water_v);
     entity_looks();
+    {
+        float pace = g_set.cam_pace, smooth = g_set.cam_smooth;
+        int hide = g_set.cam_hide;
+        d3d8_cam_settings(&pace, &smooth, &hide, NULL, NULL);
+        if (d3d8_cam_playing() && g_set.cam_bars)
+        {
+            ImVec2 d = ImGui::GetIO().DisplaySize;
+            float bar = ImMax(0.0f, (d.y - d.x / 2.39f) * 0.5f); /* 2.39:1 */
+            ImDrawList* bg = ImGui::GetBackgroundDrawList();
+            bg->AddRectFilled(ImVec2(0, 0), ImVec2(d.x, bar), IM_COL32_BLACK);
+            bg->AddRectFilled(ImVec2(0, d.y - bar), ImVec2(d.x, d.y), IM_COL32_BLACK);
+        }
+    }
     {
         /* the look: the server's event, if there is one and the player lets it; else the player's own */
         uint8_t sl[12];
