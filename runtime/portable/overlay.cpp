@@ -24,6 +24,9 @@ extern "C" int dsound_in_world(void);
 extern "C" void d3d8_set_weather_effects(int rain, int fog, int heat);
 extern "C" void d3d8_set_water(int on, const float* v);
 extern "C" void d3d8_set_look(int sky, const float* aurora, int world, int filter, const float* tint);
+extern "C" void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float (*m)[16]);
+extern "C" void d3d8_set_creatures(float birds, float fish);
+extern "C" int d3d8_creatures_known(int which);
 
 /* Fonts: Roboto is built in; the others are the player's own system's, loaded from where each
  * system keeps them if they are there (nothing of theirs is shipped). Kept in overlay.ini by name. */
@@ -182,6 +185,9 @@ static struct
     float fun_aurora_c[4] = { 0.24f, 1.0f, 0.55f, 0.8f };
     int fun_world = 0, fun_filter = 0;
     float fun_filter_c[4] = { 1.0f, 0.78f, 0.31f, 0.6f };
+    float fun_birds = 1.0f, fun_fish = 1.0f; /* how many of the zone's birds and fish (1 as the game has them) */
+    bool fun_ships = true;                    /* ships rock at the dock */
+    float fun_ships_k = 1.0f;
     /* the windows' background and the chat's: a color and how solid (the player's) */
     float win_bg[4] = { 0.102f, 0.118f, 0.180f, 0.88f }, chat_bg[4] = { 0.094f, 0.118f, 0.188f, 0.80f }; /* the interface skin's slate */
     /* the chat, as the game's log: down to a few lines when nothing has come for a while */
@@ -849,6 +855,10 @@ static void overlay_ini_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const 
     else if (sscanf(line, "fun_aurora=%d", &v) == 1) g_set.fun_aurora = v != 0;
     else if (sscanf(line, "fun_world=%d", &v) == 1 && v >= 0 && v <= 2) g_set.fun_world = v;
     else if (sscanf(line, "fun_filter=%d", &v) == 1 && v >= 0 && v <= 5) g_set.fun_filter = v;
+    else if (sscanf(line, "fun_birds=%f", &f) == 1 && f >= 1 && f <= 50) g_set.fun_birds = f;
+    else if (sscanf(line, "fun_fish=%f", &f) == 1 && f >= 1 && f <= 30) g_set.fun_fish = f;
+    else if (sscanf(line, "fun_ships=%d", &v) == 1) g_set.fun_ships = v != 0;
+    else if (sscanf(line, "fun_ships_k=%f", &f) == 1 && f >= 0 && f <= 3) g_set.fun_ships_k = f;
     else if (!strncmp(line, "fun_aurora_c=", 13) || !strncmp(line, "fun_filter_c=", 13))
     {
         float c[4];
@@ -882,6 +892,8 @@ static void overlay_ini_write(ImGuiContext*, ImGuiSettingsHandler* h, ImGuiTextB
         g_set.wx_heat, g_set.water);
     out->appendf("fun_server=%d\nfun_aurora=%d\nfun_world=%d\nfun_filter=%d\n", g_set.fun_server, g_set.fun_aurora, g_set.fun_world,
         g_set.fun_filter);
+    out->appendf("fun_birds=%g\nfun_fish=%g\nfun_ships=%d\nfun_ships_k=%g\n", g_set.fun_birds, g_set.fun_fish, g_set.fun_ships,
+        g_set.fun_ships_k);
     const float *fa = g_set.fun_aurora_c, *ff = g_set.fun_filter_c;
     out->appendf("fun_aurora_c=%.3f,%.3f,%.3f,%.3f\nfun_filter_c=%.3f,%.3f,%.3f,%.3f\n", fa[0], fa[1], fa[2], fa[3], ff[0], ff[1], ff[2],
         ff[3]);
@@ -943,6 +955,82 @@ static void edit_banner(void)
 
 /* --- Graphics: our own effects on the game's picture ---------------------------------------------------- */
 static bool g_gfx_open;
+
+/* who has been made bigger or smaller (this session: by their id), drawn so about their feet */
+static struct
+{
+    uint32_t id;
+    float scale;
+    char name[24];
+} g_sizes[8];
+
+static float* size_of(uint32_t id, bool make)
+{
+    for (auto& z : g_sizes)
+        if (z.id == id)
+            return &z.scale;
+    if (!make)
+        return NULL;
+    for (auto& z : g_sizes)
+        if (!z.id || z.scale == 1.0f)
+            return z.id = id, z.scale = 1.0f, &z.scale;
+    return NULL;
+}
+
+/* each frame: the sized and the ships (rocking at the dock: mostly down from where they float, a little
+ * roll and pitch, so the pier's walkway never has to move), as changes to their draws */
+static void entity_looks(void)
+{
+    static GameEntity ents[257];
+    int n = dsound_in_world() ? gamestate_entities(ents, 256) : 0;
+    {
+        /* the player too (not among the others): sized like anyone */
+        float x, y, z, f;
+        uint32_t me = gamestate_self_id();
+        if (n && me && gamestate_self(&x, &y, &z, &f))
+        {
+            GameEntity& e = ents[n++];
+            memset(&e, 0, sizeof e);
+            e.id = me, e.x = x, e.y = y, e.z = z;
+        }
+    }
+    float pos[16][4], m[16][16];
+    int k = 0;
+    float t = (float)ImGui::GetTime();
+    for (int i = 0; i < n && k < 16; ++i)
+    {
+        const GameEntity& e = ents[i];
+        float* sc = size_of(e.id, false);
+        float px = e.x, py = e.y, pz = e.z;
+        if (sc && *sc != 1.0f)
+        {
+            float s = *sc, reach = e.hitbox > 0.0f ? ImClamp(e.hitbox * 2.0f, 2.5f, 15.0f) : 3.0f;
+            const float mm[16] = { s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, px * (1 - s), py * (1 - s), pz * (1 - s), 1 };
+            pos[k][0] = px, pos[k][1] = py, pos[k][2] = pz, pos[k][3] = reach;
+            memcpy(m[k++], mm, sizeof mm);
+        }
+        else if (e.ship && g_set.fun_ships && g_set.fun_ships_k > 0.0f)
+        {
+            /* heights grow downward in the game's world: + is down */
+            float ph = (float)(e.id % 97) * 0.37f, A = 0.22f * g_set.fun_ships_k;
+            float wave = 0.45f + 0.4f * sinf(t * 0.9f + ph) + 0.15f * sinf(t * 1.7f + ph * 2.0f); /* -0.1 .. 1 */
+            float down = A * wave;
+            float roll = 0.010f * g_set.fun_ships_k * sinf(t * 0.7f + ph), pitch = 0.006f * g_set.fun_ships_k * sinf(t * 0.55f + ph * 1.3f);
+            float cr = cosf(roll), sr = sinf(roll), cp = cosf(pitch), sp = sinf(pitch);
+            /* R = Rx(roll) Rz(pitch), about the ship's place, then down */
+            float R[9] = { cp, sp, 0, -sp * cr, cp * cr, sr, sp * sr, -cp * sr, cr };
+            float mm[16] = { R[0], R[1], R[2], 0, R[3], R[4], R[5], 0, R[6], R[7], R[8], 0, 0, 0, 0, 1 };
+            /* translation: p - p R + (0, down, 0) */
+            mm[12] = px - (px * R[0] + py * R[3] + pz * R[6]);
+            mm[13] = py - (px * R[1] + py * R[4] + pz * R[7]) + down;
+            mm[14] = pz - (px * R[2] + py * R[5] + pz * R[8]);
+            pos[k][0] = px, pos[k][1] = py, pos[k][2] = pz, pos[k][3] = 0.0f;
+            memcpy(m[k++], mm, sizeof mm);
+        }
+    }
+    d3d8_set_entity_xforms(k, pos, m);
+    d3d8_set_creatures(g_set.fun_birds, g_set.fun_fish);
+}
 
 static void graphics_window(void)
 {
@@ -1024,7 +1112,49 @@ static void graphics_window(void)
                 dirty |= ImGui::SliderFloat("Amount", &g_set.fun_filter_c[3], 0.05f, 1.0f, "%.2f");
             }
             ImGui::Separator();
-            ImGui::TextDisabled("To come: more birds in the sky; a monster made bigger or smaller.");
+            ImGui::TextDisabled("Size: whatever you target, drawn bigger or smaller (yours alone)");
+            {
+                GameEntity te;
+                int self = 0;
+                if (gamestate_target(&te, &self) && te.id)
+                {
+                    float* sc = size_of(te.id, true);
+                    if (sc)
+                    {
+                        for (auto& z : g_sizes)
+                            if (z.id == te.id)
+                                snprintf(z.name, sizeof z.name, "%s", te.name);
+                        ImGui::SetNextItemWidth(-90);
+                        ImGui::SliderFloat(te.name[0] ? te.name : "Target", sc, 0.25f, 5.0f, "x%.2f", ImGuiSliderFlags_Logarithmic);
+                    }
+                    else
+                        ImGui::TextDisabled("Eight are sized already: reset one first.");
+                }
+                else
+                    ImGui::TextDisabled("Target something to size it.");
+                for (auto& z : g_sizes)
+                    if (z.id && z.scale != 1.0f)
+                    {
+                        ImGui::PushID((int)z.id);
+                        ImGui::BulletText("%s x%.2f", z.name[0] ? z.name : "(someone)", z.scale);
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Reset"))
+                            z.scale = 1.0f;
+                        ImGui::PopID();
+                    }
+            }
+            ImGui::Separator();
+            dirty |= ImGui::Checkbox("Ships rock at the dock", &g_set.fun_ships);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1);
+            dirty |= ImGui::SliderFloat("##shipk", &g_set.fun_ships_k, 0.2f, 3.0f, "%.1f");
+            ImGui::SetNextItemWidth(-90);
+            dirty |= ImGui::SliderFloat("Birds", &g_set.fun_birds, 1.0f, 50.0f, g_set.fun_birds >= 40.0f ? "x%.0f (insanity)" : "x%.0f");
+            ImGui::SetNextItemWidth(-90);
+            dirty |= ImGui::SliderFloat("Fish", &g_set.fun_fish, 1.0f, 30.0f, "x%.0f");
+            if (!d3d8_creatures_known(0) || !d3d8_creatures_known(1))
+                ImGui::TextDisabled("The zones' %s not found yet: a frame capture near them finds them.",
+                    !d3d8_creatures_known(0) && !d3d8_creatures_known(1) ? "birds and fish are" : !d3d8_creatures_known(0) ? "birds are" : "fish are");
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -3256,6 +3386,7 @@ extern "C" void overlay_build_frame(void)
         ImGui::MarkIniSettingsDirty(); /* a window closed with its x */
     d3d8_set_weather_effects(g_set.wx_rain, g_set.wx_fog, g_set.wx_heat);
     d3d8_set_water(g_set.water, g_set.water_v);
+    entity_looks();
     {
         /* the look: the server's event, if there is one and the player lets it; else the player's own */
         uint8_t sl[12];

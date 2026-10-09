@@ -3345,6 +3345,140 @@ void d3d8_set_look(int sky, const float* aurora, int world, int filter, const fl
     memcpy(g_look.rows, m, sizeof m);
 }
 
+/* --- draws at an entity, changed; more birds and fish ----------------------------------------------------
+ * The overlay's (d3d8_set_entity_xforms): a target made bigger or smaller, a ship rocking at the dock.
+ * A draw is the entity's when its world matrix puts it where the entity is (a model drawn at its place:
+ * ships, props), or, drawn in world space (a body: the game skins characters into world space), when
+ * its first vertex is within the entity's reach. Its world then takes the change (world space, row
+ * vectors). Not for the game's vertex shaders (their matrices are their own). */
+enum { ENT_XFORMS = 16 };
+static struct
+{
+    float pos[4]; /* x, y, z (the game's), reach (0: by the world matrix alone) */
+    float m[16];
+} g_ent_xf[ENT_XFORMS];
+static int g_ent_nxf;
+
+void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float (*m)[16])
+{
+    g_ent_nxf = n < 0 ? 0 : n > ENT_XFORMS ? ENT_XFORMS : n;
+    for (int i = 0; i < g_ent_nxf; ++i)
+        memcpy(g_ent_xf[i].pos, pos[i], sizeof g_ent_xf[i].pos), memcpy(g_ent_xf[i].m, m[i], sizeof g_ent_xf[i].m);
+}
+
+/* the draw's world, changed by m (world space): its matrices again */
+static void world_changed(GfxDraw* d, const float* m)
+{
+    const State* s = &g_dev.cur;
+    float w[16], wv[16];
+    mat_mul(w, s->xf[24], m);
+    mat_mul(wv, w, s->xf[2]);
+    mat_mul(d->u.wvp, wv, s->xf[3]);
+    memcpy(d->u.wv, wv, 64);
+    normal_matrix(d->u.wvit, wv);
+}
+
+static void look_entities(GfxDraw* d, uint32_t first, uint32_t up_data, uint32_t up_stride)
+{
+    if (!g_ent_nxf || d->vs.rhw || d->vs.prog)
+        return;
+    const float* W = g_dev.cur.xf[24];
+    int placed = fabsf(W[12]) + fabsf(W[13]) + fabsf(W[14]) > 1e-3f;
+    float v[3];
+    int have_v = 0;
+    for (int i = 0; i < g_ent_nxf; ++i)
+    {
+        const float* p = g_ent_xf[i].pos;
+        float dx, dy, dz, r;
+        if (placed)
+            dx = W[12] - p[0], dy = W[13] - p[1], dz = W[14] - p[2], r = 0.75f;
+        else
+        {
+            if (p[3] <= 0.0f)
+                continue;
+            if (!have_v)
+            {
+                uint32_t base, stride, size, st = d->vs.el[GFX_R_POSITION].stream;
+                if (up_data)
+                    base = up_data, stride = up_stride, size = 0xFFFFFFFFu;
+                else
+                {
+                    Obj* b = obj(g_dev.cur.stream[st]);
+                    if (!b || !b->mem)
+                        return;
+                    base = b->mem, stride = g_dev.cur.stride[st], size = b->size;
+                }
+                uint32_t at = first * stride + (uint32_t)d->u.offset[GFX_R_POSITION];
+                if (at + 12 > size)
+                    return;
+                v[0] = u2f(rd32(base + at)), v[1] = u2f(rd32(base + at + 4)), v[2] = u2f(rd32(base + at + 8));
+                have_v = 1;
+            }
+            dx = v[0] - p[0], dy = v[1] - p[1], dz = v[2] - p[2], r = p[3];
+        }
+        if (dx * dx + dy * dy + dz * dz < r * r)
+        {
+            world_changed(d, g_ent_xf[i].m);
+            return;
+        }
+    }
+}
+
+/* More birds and fish: the draws of the game's code that draws them (found in a frame capture; //xi fx
+ * birds|fish <its address> tries one), drawn again that many times over, each copy elsewhere around
+ * the first - birds far and high, fish near and level - drifting slowly round it. */
+static struct
+{
+    uint32_t caller;
+    float count, reach, rise;
+} g_creature[2] = { { 0, 1.0f, 36.0f, 8.0f }, { 0, 1.0f, 8.0f, 0.6f } };
+
+void d3d8_set_creatures(float birds, float fish)
+{
+    g_creature[0].count = birds < 1.0f ? 1.0f : birds;
+    g_creature[1].count = fish < 1.0f ? 1.0f : fish;
+}
+
+int d3d8_creatures_known(int which)
+{
+    return which >= 0 && which < 2 && g_creature[which].caller != 0;
+}
+
+static float hash01(uint32_t x)
+{
+    x ^= x >> 16, x *= 0x7feb352du, x ^= x >> 15, x *= 0x846ca68bu, x ^= x >> 16;
+    return (float)(x & 0xFFFFFF) / 16777216.0f;
+}
+
+static void creature_copies(GfxDraw* d)
+{
+    if (d->vs.rhw || d->vs.prog || (g_creature[0].count < 1.5f && g_creature[1].count < 1.5f) ||
+        (!g_creature[0].caller && !g_creature[1].caller))
+        return;
+    uint32_t callers[4];
+    int n = fx_callers(callers), which = -1;
+    for (int k = 0; k < 2 && which < 0; ++k)
+        for (int c = 0; c < n && which < 0; ++c)
+            if (g_creature[k].caller && callers[c] == g_creature[k].caller && g_creature[k].count >= 1.5f)
+                which = k;
+    if (which < 0)
+        return;
+    float keep[3][16];
+    memcpy(keep[0], d->u.wvp, 64), memcpy(keep[1], d->u.wv, 64), memcpy(keep[2], d->u.wvit, 64);
+    int copies = (int)g_creature[which].count - 1;
+    for (int k = 1; k <= copies && k < 200; ++k)
+    {
+        float a = hash01(k * 3u + 1u) * 6.2831853f + g_wx.t * 0.03f * (hash01(k * 7u + 5u) - 0.5f);
+        float r = g_creature[which].reach * (0.2f + 0.8f * hash01(k * 11u + 2u));
+        float m[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+        m[12] = cosf(a) * r, m[14] = sinf(a) * r;
+        m[13] = (hash01(k * 13u + 9u) - 0.5f) * g_creature[which].rise;
+        world_changed(d, m);
+        gfx_draw(d);
+    }
+    memcpy(d->u.wvp, keep[0], 64), memcpy(d->u.wv, keep[1], 64), memcpy(d->u.wvit, keep[2], 64);
+}
+
 /* the zone's own meshes in wireframe (or everything but the interface): after the effects are picked */
 static void look_wireframe(GfxDraw* d)
 {
@@ -3542,6 +3676,15 @@ int d3d8_fx_command(const char* t)
     if (sscanf(t, "fx weather %d", &m) == 1)
         return g_wx.forced = m < 0 || m > 19 ? -1 : m,
                rt_log("[recomp] fx: weather %s\n", g_wx.forced < 0 ? "as the server says" : WX_NAMES[g_wx.forced]), 1;
+    {
+        char which[8];
+        unsigned addr;
+        if (sscanf(t, "fx %7[a-z] %x", which, &addr) == 2 && (!strcmp(which, "birds") || !strcmp(which, "fish")))
+        {
+            g_creature[which[0] == 'f'].caller = addr;
+            return rt_log("[recomp] fx: the %s drawn by the game's code at %08x\n", which, addr), 1;
+        }
+    }
     if (sscanf(t, "fx mark %d", &m) == 1)
         return g_fx_mark = m, rt_log("[recomp] fx: marking effect %d's draws magenta\n", m), 1;
     return 0;
@@ -3653,6 +3796,7 @@ static void draw_packet(uint32_t prim, uint32_t count, uint32_t start, uint32_t 
     }
     if (!set_streams(d, first, nverts, up_data, up_stride))
         return;
+    look_entities(d, first, up_data, up_stride);
     scene_note(d);
     fx_classify(d);
     look_wireframe(d);
@@ -3678,6 +3822,7 @@ static void draw_packet(uint32_t prim, uint32_t count, uint32_t start, uint32_t 
     d->prim = prim, d->count = count;
     apply_targets();
     gfx_draw(d);
+    creature_copies(d);
 }
 
 /* --- resources: IDirect3DResource8, textures, buffers, surfaces ------------------------------------------ */

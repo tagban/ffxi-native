@@ -47,3 +47,11 @@ void d3d8_set_water(int on, const float* v);
  * world 1 the zone's meshes in wireframe, 2 everything; filter 1 grey, 2 sepia, 3 a color, 4 inverted,
  * 5 night vision (tint: r, g, b, amount, 0-1) */
 void d3d8_set_look(int sky, const float* aurora, int world, int filter, const float* tint);
+/* Draws at an entity, changed (the overlay's: a target bigger or smaller, a ship rocking): up to 16,
+ * each the entity's place (x, y, z as the game has it; w the reach of a body drawn in world space, 0
+ * for a model drawn at its place only) and a change in world space (4x4, row vectors) */
+void d3d8_set_entity_xforms(int n, const float (*pos)[4], const float (*m)[16]);
+/* How many of the zone's birds and fish (1: as the game has them), and whether this build knows which
+ * draws they are (0 birds, 1 fish) */
+void d3d8_set_creatures(float birds, float fish);
+int d3d8_creatures_known(int which);

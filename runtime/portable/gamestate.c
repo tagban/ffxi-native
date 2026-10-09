@@ -290,6 +290,7 @@ static void entity_update(const uint8_t* p, uint32_t size, int pc)
         uint16_t look = u16(p + 0x30), model = u16(p + 0x32);
         e->hidden = status == 2 || status == 3 || status == 6 || (flags & 0x80) || (flags & 0x800) ||
                     (look >= 2 && look <= 4) || (look == 0 && model == 0);
+        e->ship = look == 4;
     }
     uint32_t at = pc ? 0x5A : 0x34;
     if ((parts & 0x08) && size > at)
@@ -569,6 +570,8 @@ int gamestate_entities(GameEntity* out, int max)
             {
                 e->x = mem_f32(p + 0x04), e->y = mem_f32(p + 0x08), e->z = mem_f32(p + 0x0C);
                 entity_name(p, e);
+                float hb = mem_f32(p + 0x208); /* ModelHitboxSize (Ashita's entity_t) */
+                e->hitbox = hb > 0.0f && hb < 60.0f ? hb : 0.0f;
             }
         }
     return n;

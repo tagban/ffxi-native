@@ -67,6 +67,8 @@ typedef struct
     uint16_t marks;  /* MARK_*: what the game shows by a player's name */
     uint8_t gm;      /* GM level, 0 none */
     uint32_t ls;     /* their linkshell's color, 0xRRGGBB (with MARK_LS) */
+    uint8_t ship;    /* a ship, boat or airship (its look's type 4) */
+    float hitbox;    /* how big the game takes it to be (the entity's +0x208, gamestate_entities), 0 unknown */
 } GameEntity;
 
 enum
