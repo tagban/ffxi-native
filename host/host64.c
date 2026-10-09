@@ -672,6 +672,16 @@ static void menu_draw(Guest* g)
             if (g_game_windows[i].group == 1 || g_game_windows[i].group == 2)
                 drop_in_window(g_game_windows[i].group - 1, g_dropping, g_game_windows[i].name);
             static int seen[16];
+            if (g_game_windows[i].group == 2)
+            {
+                /* the target box: left where it is, only what it draws dropped - moved off the screen it
+                 * no longer took the game's Esc (letting go of the target) */
+                if (!seen[i]++)
+                    rt_log("[recomp] game window %.8s: the manager's pass seen, its draws dropped there\n", g_game_windows[i].name);
+                g_dropping = 0;
+                d3d8_drop_draws(1);
+                return;
+            }
             if (!seen[i]++)
                 rt_log("[recomp] game window %.8s: the manager's pass seen, moved off the screen there\n", g_game_windows[i].name);
             off_screen(g_dropping);
