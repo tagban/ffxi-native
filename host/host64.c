@@ -1069,15 +1069,19 @@ enum { CHOCO_BONES = 58, CHOCO_MAX = 24 };
 static const struct
 {
     int bone;
-    float axis[3]; /* the world's turn axis in the bone's rest frame */
-    int kind;      /* 0 wing, 1 elbow, 2 thigh, 3 knee */
-    float sign;
+    float axis[3];   /* the world's turn axis in the bone's rest frame: forward (the beat), side (legs) */
+    float up[3];     /* wings: the world's up, in it (the spread) */
+    int kind;        /* 0 wing, 2 thigh, 3 knee, 4 ankle */
+    float sign;      /* wings: which way rises */
+    float spread;    /* wings: swung out to the side (the right wing is drawn mirrored: measured apart) */
 } CHOCO_TURN[] = {
-    { 44, { 0.00000f, -0.57287f, -0.81965f }, 0, -1.0f }, { 48, { 0.00000f, -0.57287f, -0.81965f }, 0, 1.0f },
-    { 45, { 0.00000f, -0.57287f, -0.81965f }, 1, -1.0f }, { 49, { 0.00000f, -0.57287f, -0.81965f }, 1, 1.0f },
-    { 21, { -0.04105f, 0.0f, -0.99916f }, 2, 1.0f },        { 33, { 0.04105f, 0.0f, -0.99916f }, 2, 1.0f },
-    { 22, { -0.03076f, 0.03857f, -0.99878f }, 3, 1.0f },    { 34, { 0.03076f, -0.03857f, -0.99878f }, 3, 1.0f },
+    { 44, { 0.00000f, -0.57287f, -0.81965f }, { 0.0f, -0.81965f, 0.57287f }, 0, -1.0f, 0.75f },
+    { 48, { 0.00000f, -0.57287f, -0.81965f }, { 0.0f, -0.81965f, 0.57287f }, 0, 1.0f, -0.45f },
+    { 21, { -0.04105f, 0.0f, -0.99916f }, { 0 }, 2, 1.0f, 0 },     { 33, { 0.04105f, 0.0f, -0.99916f }, { 0 }, 2, 1.0f, 0 },
+    { 22, { -0.03076f, 0.03857f, -0.99878f }, { 0 }, 3, 1.0f, 0 }, { 34, { 0.03076f, -0.03857f, -0.99878f }, { 0 }, 3, 1.0f, 0 },
+    { 23, { -0.03076f, 0.03857f, -0.99878f }, { 0 }, 4, 1.0f, 0 }, { 35, { 0.03076f, -0.03857f, -0.99878f }, { 0 }, 4, 1.0f, 0 },
 };
+#define CHOCO_WING_SCALE 1.8f /* the wings twice the size, nearly (their default scale in each motion) */
 static struct
 {
     uint32_t at, size;       /* the chunk (its 16-byte header) in the game's memory */
@@ -1110,6 +1114,16 @@ static void choco_make_flying(uint8_t* b, uint32_t size)
         uint32_t roff[4], toff[3];
         memcpy(&idx, e, 2), memcpy(roff, e + 4, 16), memcpy(toff, e + 36, 12);
         float* key = (float*)(b + 10);
+        if (idx == 44 || idx == 48) /* the wings bigger: their default scale (no scale keys of their own) */
+        {
+            uint32_t soff[3];
+            memcpy(soff, e + 60, 12);
+            if (!soff[0] && !soff[1] && !soff[2])
+            {
+                const float sc[3] = { CHOCO_WING_SCALE, CHOCO_WING_SCALE, CHOCO_WING_SCALE };
+                memcpy(e + 72, sc, 12);
+            }
+        }
         /* the legs held still: thigh to toe, each keyed channel at its first frame's value */
         if (idx >= 20 && idx <= 43)
         {
@@ -1136,15 +1150,24 @@ static void choco_make_flying(uint8_t* b, uint32_t size)
                 float ph = 6.2831853f * (float)beats * (float)f / (float)(nf - 1), ang;
                 switch (CHOCO_TURN[r].kind)
                 {
-                case 0: ang = CHOCO_TURN[r].sign * -(1.3f * sinf(ph) + 0.15f); break;   /* the beat, a little raised */
-                case 1: ang = CHOCO_TURN[r].sign * (-0.45f * fmaxf(0.0f, cosf(ph))); break; /* folded on the upstroke */
-                case 2: ang = 0.85f; break;                                              /* thighs back */
-                default: ang = -1.0f; break;                                             /* knees folded */
+                case 0: ang = CHOCO_TURN[r].sign * -(0.3f + 0.8f * sinf(ph)); break; /* the beat, wide, a little raised */
+                case 2: ang = 1.35f; break;                                         /* thighs drawn up and back */
+                case 3: ang = -1.7f; break;                                         /* knees folded tight */
+                default: ang = 1.2f; break;                                         /* feet curled */
                 }
-                float s = sinf(ang * 0.5f), d[4] = { CHOCO_TURN[r].axis[0] * s, CHOCO_TURN[r].axis[1] * s, CHOCO_TURN[r].axis[2] * s, cosf(ang * 0.5f) };
                 float q[4], o[4];
                 for (int c = 0; c < 4; ++c)
                     q[c] = key[roff[c] + (uint32_t)f];
+                if (CHOCO_TURN[r].kind == 0)
+                {
+                    /* first swung out to the side, about the world's up */
+                    float h = CHOCO_TURN[r].spread * 0.5f, sh = sinf(h);
+                    float u[4] = { CHOCO_TURN[r].up[0] * sh, CHOCO_TURN[r].up[1] * sh, CHOCO_TURN[r].up[2] * sh, cosf(h) };
+                    float t[4];
+                    qmul4(u, q, t);
+                    memcpy(q, t, sizeof q);
+                }
+                float s = sinf(ang * 0.5f), d[4] = { CHOCO_TURN[r].axis[0] * s, CHOCO_TURN[r].axis[1] * s, CHOCO_TURN[r].axis[2] * s, cosf(ang * 0.5f) };
                 qmul4(d, q, o);
                 float l = sqrtf(o[0] * o[0] + o[1] * o[1] + o[2] * o[2] + o[3] * o[3]);
                 for (int c = 0; c < 4; ++c)
