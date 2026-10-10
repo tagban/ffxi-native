@@ -651,8 +651,18 @@ static int make_mount(const MountSpec* m, const uint8_t* src, size_t nsrc, const
         if (dc[i].type == 0x3d)
             put(out, dc[i].p, dc[i].size); /* the mount's sounds */
     for (int i = 0; i < nb; ++i)
-        if (bc[i].type == 0x45 && named(&bc[i], "info"))
-            put(out, bc[i].p, bc[i].size);
+        if (bc[i].type == 0x45 && named(&bc[i], "info") && bc[i].size >= 32)
+        {
+            /* the creature's, its last byte a mount's: every retail mount has one (0x32 to 0x96, 100 the
+             * most) where a creature has 0xFF; with 0xFF the game never loaded a chocobo after one of
+             * ours was ridden (Tagban's test, 2026-10-10) */
+            uint8_t info[256];
+            size_t n = bc[i].size < sizeof info ? bc[i].size : sizeof info;
+            memcpy(info, bc[i].p, n);
+            if (info[16 + 15] == 0xFF)
+                info[16 + 15] = 100;
+            put(out, info, n);
+        }
     uint8_t moun[16] = { 0 };
     memset(moun + 8, m->sit, RACES); /* every race sits so */
     put_chunk(out, (const uint8_t*)"moun", 0x45, moun, sizeof moun);
