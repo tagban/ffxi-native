@@ -7,7 +7,8 @@
  * The game finds a mount's model at file id 102704 + its mount id (retail's go to 39, and 64); the
  * server sends MogHouse's from 40 on (moghouse-lsb, modules/moghouse/cpp/mount.cpp):
  *   40, 41, 42  a bee, small (a Tarutaru rides it), middling and large (a Galka)
- *   43          a small airship (the sailing ship, flying)
+ *   43          a small airship (the one that flies into port, its static model made a mount's meshes)
+ *   44          a boat (the sailing ship, flying)
  * Other clients have no file there and draw nothing. */
 #pragma once
 

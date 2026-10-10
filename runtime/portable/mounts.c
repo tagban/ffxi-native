@@ -47,6 +47,9 @@ typedef struct MountSpec
     float seat[3];
     uint8_t sit;            /* how the rider sits: 6 astride, 5 standing */
     const char* motions[5][2]; /* the mount's motions, each from one of the model's */
+    uint32_t mmb;           /* else 0: a file whose static model (MMB) and textures are the mount's look, on the
+                             * creature's skeleton (its root unturned: the MMB faces forward), all on the body bone */
+    double mmb_scale;
 } MountSpec;
 
 #define BEE_MOTIONS { { "wlk0", "wlk0" }, { "dam0", "dfi0" }, { "chi0", "idl0" }, { "mvb0", "wlk0" }, { "run0", "run0" } }
@@ -57,12 +60,16 @@ typedef struct MountSpec
 static const MountSpec MOUNTS[] = {
     /* the bee (the Killer Bee), its seat on top of its thorax: small for a Tarutaru, the seat 1.25 yalms up;
      * middling, 1.6; large for a Galka, 1.95 */
-    { 40, 1572, "k_be", 30, 2.20, 1, 2.4657, NO_TURN, 2, { -0.0731f, 0.3088f, 0.0836f }, 6, BEE_MOTIONS },
-    { 41, 1572, "k_be", 30, 3.00, 1, 3.4668, NO_TURN, 2, { -0.0997f, 0.4210f, 0.1140f }, 6, BEE_MOTIONS },
-    { 42, 1572, "k_be", 30, 3.80, 1, 4.4680, NO_TURN, 2, { -0.1263f, 0.5333f, 0.1444f }, 6, BEE_MOTIONS },
-    /* the airship: the sailing ship (53079) a third of its size (3.4 yalms long), turned to sail forward, its
-     * keel 0.4 yalm off the ground, the rider standing on the stern deck (their hips 0.75 above it) */
-    { 43, 53079, "ship", 6, 0.35, 1, -0.63, QUARTER_TURN, 1, { -1.1496f, -1.0007f, 0.0092f }, 5, STILL_MOTIONS },
+    { 40, 1572, "k_be", 30, 2.20, 1, 2.4657, NO_TURN, 2, { -0.0731f, 0.3088f, 0.0836f }, 6, BEE_MOTIONS, 0, 0 },
+    { 41, 1572, "k_be", 30, 3.00, 1, 3.4668, NO_TURN, 2, { -0.0997f, 0.4210f, 0.1140f }, 6, BEE_MOTIONS, 0, 0 },
+    { 42, 1572, "k_be", 30, 3.80, 1, 4.4680, NO_TURN, 2, { -0.1263f, 0.5333f, 0.1444f }, 6, BEE_MOTIONS, 0, 0 },
+    /* the airship: the one that flies into port (31004, 63 yalms long) at 0.12 (7.6), on the sailing ship's
+     * skeleton (its hull bone bobs), its keel 0.5 yalm off the ground, the rider standing on the forward deck
+     * (2.05 yalms up; their hips 0.75 above it) */
+    { 43, 53079, "ship", 6, 0.35, 1, -1.676, NO_TURN, 1, { 1.0f, -1.124f, 0.0f }, 5, STILL_MOTIONS, 31004, 0.12 },
+    /* the boat: the sailing ship (53079) a third of its size (3.4 yalms long), turned to sail forward, its keel
+     * 0.4 yalm off the ground, the rider standing on the stern deck */
+    { 44, 53079, "ship", 6, 0.35, 1, -0.63, QUARTER_TURN, 1, { -1.1496f, -1.0007f, 0.0092f }, 5, STILL_MOTIONS, 0, 0 },
 };
 
 /* --- the made mounts' entries in the file table ------------------------------------------------------- */
@@ -263,12 +270,262 @@ static void qmul(const double* a, const double* b, double* o)
     o[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
 }
 
-/* A mount's file, from the creature's model and the donor mount's */
-static int make_mount(const MountSpec* m, const uint8_t* src, size_t nsrc, const uint8_t* donor, size_t ndonor, Buf* out)
+/* --- a static model (MMB, 0x2E, version 4, not encrypted) made skinned meshes ---------------------------
+ * The MMB: "MMB" and its version, a name, a box; at 0x40 its piece count and a box; from 0x60 the pieces, each a
+ * texture's name (16), a u32 vertex count (its low 16 bits), the vertices (36 bytes: place, normal, color,
+ * u, v), a u32 index count and the indices (a strip, joined by repeated indices), padded to 4. The meshes:
+ * all the vertices on one bone (bone table [1]), each piece its texture and its strip as triangles (a mount's
+ * mesh winds them as the MMB's strip does), as many meshes as it takes: a mesh's whole length, counted in
+ * 16-bit words, must fit 16 bits. */
+enum { MMB_VERTEX = 36, MESH_BUDGET = 120000, MAX_PIECES = 128 };
+
+typedef struct Piece
 {
-    Chunk bc[256], dc[256];
-    int nb = chunks(src, nsrc, bc, 256), nd = chunks(donor, ndonor, dc, 256);
+    const uint8_t* name;  /* the texture's, 16 */
+    const uint8_t* verts;
+    uint32_t nverts;
+    const uint8_t* idx;   /* u16 each */
+    uint32_t nidx;
+    int* where;           /* each vertex's place in the mesh being filled, or -1 */
+} Piece;
+
+static int mmb_pieces(const uint8_t* b, size_t n, Piece* out, int max)
+{
+    if (n < 0x60 || memcmp(b, "MMB", 3) || b[3] != 4)
+        return -1;
+    uint32_t count = rd32(b + 0x40);
+    size_t o = 0x60;
+    int k = 0;
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        if (o + 20 > n)
+            return -1;
+        Piece p = { 0 };
+        p.name = b + o;
+        p.nverts = rd32(b + o + 16) & 0xffff;
+        o += 20;
+        if (o + (size_t)MMB_VERTEX * p.nverts + 4 > n)
+            return -1;
+        p.verts = b + o;
+        o += (size_t)MMB_VERTEX * p.nverts;
+        p.nidx = rd32(b + o);
+        o += 4;
+        if (o + 2ull * p.nidx > n)
+            return -1;
+        p.idx = b + o;
+        o = (o + 2ull * p.nidx + 3) & ~(size_t)3;
+        int blank = 1;
+        for (int c = 0; c < 16; ++c)
+            blank &= p.name[c] == ' ';
+        if (!blank && p.nverts && k < max)
+            out[k++] = p;
+    }
+    return k;
+}
+
+typedef struct MeshOut
+{
+    const uint8_t** verts; /* the source vertices, in the mesh's order */
+    int nverts, cap;
+    struct Group { const uint8_t* name; uint16_t (*tris)[3]; int ntris, cap; } groups[256];
+    int ngroups, ntris;
+} MeshOut;
+
+static int64_t mesh_cost(const MeshOut* mo, int new_verts, int new_tris)
+{
+    int64_t nt = mo->ntris + new_tris;
+    return 28ll * (mo->nverts + new_verts) + 30 * nt + 4 * ((nt + 127) / 128 + mo->ngroups + 1) + 18ll * (mo->ngroups + 1) + 64;
+}
+
+static void mesh_reset(MeshOut* mo, Piece* ps, int np)
+{
+    for (int g = 0; g < mo->ngroups; ++g)
+        free(mo->groups[g].tris);
+    mo->nverts = mo->ngroups = mo->ntris = 0;
+    for (int i = 0; i < np; ++i)
+        for (uint32_t k = 0; k < ps[i].nverts; ++k)
+            ps[i].where[k] = -1;
+}
+
+static void mesh_add(MeshOut* mo, Piece* p, const uint16_t (*tris)[3], int n)
+{
+    if (!mo->ngroups || memcmp(mo->groups[mo->ngroups - 1].name, p->name, 16))
+    {
+        struct Group* g = &mo->groups[mo->ngroups++];
+        memset(g, 0, sizeof *g);
+        g->name = p->name;
+    }
+    struct Group* g = &mo->groups[mo->ngroups - 1];
+    for (int t = 0; t < n; ++t)
+    {
+        if (g->ntris == g->cap)
+            g->cap = g->cap ? g->cap * 2 : 256, g->tris = (uint16_t(*)[3])realloc(g->tris, sizeof *g->tris * g->cap);
+        for (int c = 0; c < 3; ++c)
+        {
+            uint16_t k = tris[t][c];
+            if (p->where[k] < 0)
+            {
+                if (mo->nverts == mo->cap)
+                    mo->cap = mo->cap ? mo->cap * 2 : 1024, mo->verts = (const uint8_t**)realloc(mo->verts, sizeof *mo->verts * mo->cap);
+                p->where[k] = mo->nverts;
+                mo->verts[mo->nverts++] = p->verts + (size_t)MMB_VERTEX * k;
+            }
+            g->tris[g->ntris][c] = (uint16_t)p->where[k];
+        }
+        ++g->ntris;
+    }
+    mo->ntris += n;
+}
+
+static void mesh_put(Buf* out, const MeshOut* mo, double s, const uint8_t* head6, int k)
+{
+    Buf body = { 0 };
+    uint8_t zero[0x34] = { 0 };
+    put(&body, zero, sizeof zero);
+    uint32_t secs[7][2];
+    /* the polygons: each group its texture, then its triangles 128 at a time (corners' u, v), then the end */
+    secs[0][0] = (uint32_t)(body.n / 2);
+    for (int g = 0; g < mo->ngroups; ++g)
+    {
+        uint16_t op = 0x8000;
+        put(&body, &op, 2), put(&body, mo->groups[g].name, 16);
+        for (int i = 0; i < mo->groups[g].ntris; i += 128)
+        {
+            uint16_t hdr[2] = { 0x0054, (uint16_t)(mo->groups[g].ntris - i < 128 ? mo->groups[g].ntris - i : 128) };
+            put(&body, hdr, 4);
+            for (int t = i; t < i + hdr[1]; ++t)
+            {
+                put(&body, mo->groups[g].tris[t], 6);
+                for (int c = 0; c < 3; ++c)
+                    put(&body, mo->verts[mo->groups[g].tris[t][c]] + 28, 8);
+            }
+        }
+    }
+    uint16_t end = 0xFFFF, one = 1, counts[2] = { (uint16_t)mo->nverts, 0 }, ref[2] = { 0x4000, 0 };
+    put(&body, &end, 2);
+    secs[0][1] = (uint32_t)(body.n / 2) - secs[0][0];
+    secs[1][0] = (uint32_t)(body.n / 2), put(&body, &one, 2), secs[1][1] = 1;      /* the bone table: [1] */
+    secs[2][0] = (uint32_t)(body.n / 2), put(&body, counts, 4), secs[2][1] = 2;    /* one-bone, two-bone vertices */
+    secs[3][0] = (uint32_t)(body.n / 2);
+    for (int i = 0; i < mo->nverts; ++i)
+        put(&body, ref, 4);
+    secs[3][1] = 2u * mo->nverts;
+    secs[4][0] = (uint32_t)(body.n / 2);
+    for (int i = 0; i < mo->nverts; ++i)
+    {
+        uint8_t v[24];
+        for (int c = 0; c < 3; ++c)
+            wrf(v + 4 * c, (float)((double)rdf(mo->verts[i] + 4 * c) * s));
+        memcpy(v + 12, mo->verts[i] + 12, 12);
+        put(&body, v, 24);
+    }
+    secs[4][1] = 12u * mo->nverts;
+    uint32_t words = (uint32_t)(body.n / 2);
+    secs[5][0] = words, secs[5][1] = 0, secs[6][0] = 0, secs[6][1] = words;
+    memcpy(body.p, head6, 6);
+    for (int i = 0; i < 7; ++i)
+    {
+        uint16_t c = (uint16_t)secs[i][1];
+        memcpy(body.p + 6 + 6 * i, &secs[i][0], 4), memcpy(body.p + 10 + 6 * i, &c, 2);
+    }
+    uint8_t name[4] = { 'a', 'i', 'r', (uint8_t)('0' + k) };
+    put_chunk(out, name, 0x2a, body.p, body.n);
+    free(body.p);
+}
+
+/* The MMB's meshes into out; the box about it (min, max) into lo, hi. 0 if it is not as expected. */
+static int mmb_meshes(const uint8_t* mmb, size_t n, double s, const uint8_t* head6, Buf* out, double lo[3], double hi[3])
+{
+    Piece ps[MAX_PIECES];
+    int np = mmb_pieces(mmb, n, ps, MAX_PIECES);
+    if (np <= 0)
+        return 0;
+    double mn[3] = { 1e30, 1e30, 1e30 }, mx[3] = { -1e30, -1e30, -1e30 };
+    for (int i = 0; i < np; ++i)
+    {
+        ps[i].where = (int*)malloc(sizeof(int) * ps[i].nverts);
+        for (uint32_t k = 0; k < ps[i].nverts; ++k)
+            for (int c = 0; c < 3; ++c)
+            {
+                double v = rdf(ps[i].verts + (size_t)MMB_VERTEX * k + 4 * c);
+                mn[c] = v < mn[c] ? v : mn[c], mx[c] = v > mx[c] ? v : mx[c];
+            }
+    }
+    for (int c = 0; c < 3; ++c)
+        lo[c] = mn[c] * s, hi[c] = mx[c] * s;
+    MeshOut mo = { 0 };
+    int k = 0, ok = 1;
+    mesh_reset(&mo, ps, np);
+    for (int i = 0; i < np && ok; ++i)
+    {
+        /* the strip's triangles, joins dropped, every other one turned */
+        uint16_t(*tris)[3] = (uint16_t(*)[3])malloc(sizeof *tris * (ps[i].nidx ? ps[i].nidx : 1));
+        int nt = 0;
+        for (uint32_t j = 0; j + 2 < ps[i].nidx; ++j)
+        {
+            uint16_t a = rd16(ps[i].idx + 2 * j), b = rd16(ps[i].idx + 2 * j + 2), c = rd16(ps[i].idx + 2 * j + 4);
+            if (a == b || b == c || a == c)
+                continue;
+            if (a >= ps[i].nverts || b >= ps[i].nverts || c >= ps[i].nverts)
+            {
+                ok = 0;
+                break;
+            }
+            tris[nt][0] = j % 2 ? b : a, tris[nt][1] = j % 2 ? a : b, tris[nt][2] = c;
+            ++nt;
+        }
+        for (int t = 0; ok && t < nt; t += 128)
+        {
+            int m = nt - t < 128 ? nt - t : 128;
+            /* the batch's vertices not yet in the mesh, each once */
+            int fresh = 0;
+            for (int q = t; q < t + m; ++q)
+                for (int c = 0; c < 3; ++c)
+                {
+                    uint16_t v = tris[q][c];
+                    if (ps[i].where[v] == -1)
+                        ps[i].where[v] = -2, ++fresh;
+                }
+            for (int q = t; q < t + m; ++q)
+                for (int c = 0; c < 3; ++c)
+                    if (ps[i].where[tris[q][c]] == -2)
+                        ps[i].where[tris[q][c]] = -1;
+            if (mo.ntris && mesh_cost(&mo, fresh, m) > MESH_BUDGET)
+            {
+                if (k >= 9)
+                {
+                    ok = 0;
+                    break;
+                }
+                mesh_put(out, &mo, s, head6, k++);
+                mesh_reset(&mo, ps, np);
+            }
+            mesh_add(&mo, &ps[i], (const uint16_t(*)[3])(tris + t), m);
+        }
+        free(tris);
+    }
+    if (ok && mo.ntris)
+        mesh_put(out, &mo, s, head6, k++);
+    mesh_reset(&mo, ps, np);
+    free(mo.verts);
+    for (int i = 0; i < np; ++i)
+        free(ps[i].where);
+    return ok;
+}
+
+/* A mount's file, from the creature's model and the donor mount's */
+static int make_mount(const MountSpec* m, const uint8_t* src, size_t nsrc, const uint8_t* donor, size_t ndonor,
+    const uint8_t* look, size_t nlook, Buf* out)
+{
+    Chunk bc[256], dc[256], lc[256];
+    int nb = chunks(src, nsrc, bc, 256), nd = chunks(donor, ndonor, dc, 256), nl = look ? chunks(look, nlook, lc, 256) : 0;
     if (nb < 4 || nd < 4 || dc[0].type != 0x01 || !named(&dc[0], "moun"))
+        return 0;
+    const Chunk* mmb = NULL;
+    for (int i = 0; i < nl; ++i)
+        if (lc[i].type == 0x2e)
+            mmb = &lc[i];
+    if (m->mmb && !mmb)
         return 0;
     const Chunk* skel = NULL;
     for (int i = 0; i < nb; ++i)
@@ -282,9 +539,9 @@ static int make_mount(const MountSpec* m, const uint8_t* src, size_t nsrc, const
     for (int i = 0; i < nd; ++i)
         if (dc[i].type == 0x07)
             put(out, dc[i].p, dc[i].size); /* its effects */
-    for (int i = 0; i < nb; ++i)
-        if (bc[i].type == 0x20)
-            put(out, bc[i].p, bc[i].size); /* the creature's textures */
+    for (int i = 0; i < (mmb ? nl : nb); ++i)
+        if ((mmb ? lc : bc)[i].type == 0x20)
+            put(out, (mmb ? lc : bc)[i].p, (mmb ? lc : bc)[i].size); /* the textures: the look's, else the creature's */
 
     /* the skeleton: bigger or smaller, moved, turned, with the seats */
     size_t sn = skel->size - 16;
@@ -306,7 +563,12 @@ static int make_mount(const MountSpec* m, const uint8_t* src, size_t nsrc, const
                 v += c == 1 ? m->lower : 0.0;
             wrf(t + 4 * c, (float)v);
         }
-        if (k == 0 && m->turn[3] != 1.0)
+        if (k == 0 && mmb)
+        {
+            static const float still[4] = { 0, 0, 0, 1 };
+            memcpy(sk + 4 + 30 * k + 2, still, 16);
+        }
+        else if (k == 0 && m->turn[3] != 1.0)
         {
             /* the root's own turn, then this one */
             uint8_t* q = sk + 4 + 30 * k + 2;
@@ -337,10 +599,32 @@ static int make_mount(const MountSpec* m, const uint8_t* src, size_t nsrc, const
     }
     for (int i = 0; i < 18; ++i) /* three boxes about it */
         scalef(sk + end + 4 + 26 * npts + 4 * i, s);
+    Buf meshes = { 0 };
+    if (mmb)
+    {
+        /* the look's meshes, on the creature's mesh's header; the first two boxes about them (heights - top,
+         * bottom - then x, z: max, min) */
+        const Chunk* first = NULL;
+        for (int i = 0; i < nb && !first; ++i)
+            if (bc[i].type == 0x2a && bc[i].size >= 16 + 6)
+                first = &bc[i];
+        double lo[3], hi[3];
+        if (!first || !mmb_meshes(mmb->p + 16, mmb->size - 16, m->mmb_scale, first->p + 16, &meshes, lo, hi))
+        {
+            free(sk), free(meshes.p);
+            return 0;
+        }
+        float box[6] = { (float)(lo[1] + m->lower), (float)(hi[1] + m->lower), (float)hi[0], (float)lo[0], (float)hi[2], (float)lo[2] };
+        for (int b = 0; b < 2; ++b)
+            memcpy(sk + end + 4 + 26 * npts + 24 * b, box, 24);
+    }
     put_chunk(out, skel->p, 0x29, sk, sn);
     free(sk);
+    if (mmb)
+        put(out, meshes.p, meshes.n);
+    free(meshes.p);
 
-    for (int i = 0; i < nb; ++i)
+    for (int i = 0; i < nb && !mmb; ++i)
         if (bc[i].type == 0x2a)
         {
             uint8_t* mesh = (uint8_t*)malloc(bc[i].size - 16);
@@ -436,10 +720,11 @@ int mounts_build(const char* guest_game, const char* out_dir)
         uint32_t file = MOUNT_FILE0 + (uint32_t)m->mount;
         if (file >= t.nvt || 2u * file + 1 >= t.nft || t.vt[file])
             continue; /* the game has its own there (a newer install): leave it */
-        size_t nsrc = 0;
+        size_t nsrc = 0, nlook = 0;
         unsigned char* src = read_dat(guest_game, &t, m->model, &nsrc);
+        unsigned char* look = m->mmb ? read_dat(guest_game, &t, m->mmb, &nlook) : NULL;
         Buf b = { 0 };
-        if (src && make_mount(m, src, nsrc, donor, ndonor, &b))
+        if (src && (!m->mmb || look) && make_mount(m, src, nsrc, donor, ndonor, look, nlook, &b))
         {
             snprintf(path, sizeof path, "%s%cROM%c%d%c%d.DAT", out_dir, plat_path_sep, plat_path_sep, folder, plat_path_sep, (int)i);
             if (write_if_changed(path, b.p, b.n))
@@ -450,7 +735,7 @@ int mounts_build(const char* guest_game, const char* out_dir)
         }
         else
             ++missing;
-        free(b.p), free(src);
+        free(b.p), free(src), free(look);
     }
     if (made)
         vfs_add_overlay(out_dir, NULL);
