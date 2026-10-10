@@ -13,9 +13,12 @@
  *      builds its character records from FFXiMain's own table.
  *   3. The lobby (TCP 54001 and 54230): every lobby command FFXiMain sends carries the session
  *      hash at +12, where xiloader's send detour puts it (ws2_set_lobby_session).
- *   4. polcore: xiloader's fake polpro leaves the retail polcore with a zero session value, and LSB's
- *      zone key is derived from exactly that (the 0xA2 key is MD5 input the client also computes),
- *      so our polcore reports 16 zero bytes. Its command line is xiloader's, carrying the view port.
+ *   4. polcore: the session value the game hashes into its zone key. With xiloader 2.2 the retail
+ *      polcore gets it from xi_profile (its status answer): MD5 of the session hash, which LSB's
+ *      lobby takes too since 2026-10-09 (LandSandBoat 01e5b447, data_session: md5 of
+ *      accounts_profile.session_hash, the hash the login reply carries). Older servers take the 16
+ *      bytes of the 0xA2 key instead (xiloader 2.1's zeros), so the 0xA2 key carries the same value:
+ *      both kinds agree with the game. Its command line is xiloader's, carrying the view port.
  *   5. ffxi00.pol.com resolves to the server (host64's --server). */
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +73,7 @@ typedef int sock_t;
 #include "uwp_bridge.h"
 #endif
 #include "polcore_config.h"
+#include "polcrypt.h"
 #include "ws2.h"
 
 /* The xiloader releases whose protocol this speaks, newest first. xi_connect refuses a loader whose
@@ -465,6 +469,7 @@ typedef struct DataConn
     uint32_t account, server;
     uint16_t port;
     uint8_t hash[16];
+    uint8_t value[16]; /* the session value: MD5 of the hash */
 } DataConn;
 
 /* the data connection's first word: 0xFE and the session hash (the server files the connection under it) */
@@ -523,8 +528,9 @@ static void data_thread(void* arg)
             memcpy(out + 12, d->hash, 16);
             break;
         case 0x02:
-        case 0x15: /* the key: xiloader's constant, what a zero session value gives */
+        case 0x15: /* the key: the session value, and xiloader's counter */
             out[0] = 0xA2;
+            memcpy(out + 1, d->value, 16);
             out[17] = 0x58, out[18] = 0xE0, out[19] = 0x5D, out[20] = 0xAD;
             break;
         default: /* 0x03 the character list, and anything else: no answer */
@@ -692,6 +698,7 @@ int lsb_login(const LsbLogin* l, char* err, size_t errn)
         return 0;
     g_data.account = (uint32_t)account, g_data.server = l->server, g_data.port = l->data_port;
     memcpy(g_data.hash, hash, 16);
+    pol_md5(hash, 16, g_data.value);
     if (!data_register(&g_data) || !plat_thread_start(data_thread, &g_data))
     {
         snprintf(err, errn, "the login data connection failed");
@@ -700,11 +707,13 @@ int lsb_login(const LsbLogin* l, char* err, size_t errn)
     }
 
     ws2_set_lobby_session(hash, l->data_port, l->view_port);
-    static const uint8_t zero[16] = { 0 };
-    polcore_set_session(zero);
+    polcore_set_session(g_data.value);
     char cmd[64];
     snprintf(cmd, sizeof cmd, " /game eAZcFcB -net 3 -port %u", l->view_port);
     polcore_set_cmdline(cmd);
-    fprintf(stderr, "[lsb] signed in to LSB as %s (account %lld)\n", l->user, account);
+    uint32_t fp = 2166136261u; /* FNV-1a of the session value: what LSB's lobby logs as "key value" */
+    for (int i = 0; i < 16; ++i)
+        fp = (fp ^ g_data.value[i]) * 16777619u;
+    fprintf(stderr, "[lsb] signed in to LSB as %s (account %lld), key value %08X\n", l->user, account, fp);
     return 1;
 }
