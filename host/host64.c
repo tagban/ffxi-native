@@ -86,6 +86,7 @@
 #include "dinput.h"
 #include "ws2.h"
 #include "plat.h"
+#include "mounts.h"
 #include "vfs.h"
 #include "build.h" /* FFXI_VERSION */
 #include <SDL3/SDL_keycode.h> /* the launcher's hotkey */
@@ -2333,6 +2334,13 @@ int main(int argc, char** argv)
     }
     if (version_dir)
         rt_log("[recomp] version: %s, %u files over the install\n", version_dir, vfs_set_version(game, version_dir));
+    if (data_dir)
+    {
+        /* MogHouse's own mounts (the bee), made from the install into <data dir>/mounts (runtime/portable/mounts.h) */
+        char dir[1100];
+        snprintf(dir, sizeof dir, "%s%cmounts", data_dir, plat_path_sep);
+        mounts_build(game, dir);
+    }
     {
         /* texture packs: --textures, else <data dir>/ui-skin and <data dir>/textures, those there are; the
          * first pack with a texture replaces it, so the interface skin (tools/ui_restyle.py) goes over

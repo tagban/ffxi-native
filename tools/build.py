@@ -73,7 +73,7 @@ PORTABLE =['runtime\\runtime.c', 'runtime\\portable\\plat_win.c', 'runtime\\port
             'runtime\\portable\\k32.c', 'runtime\\portable\\polcore.c', 'runtime\\portable\\vfs.c',
             'runtime\\portable\\kobj.c', 'runtime\\portable\\k32_io.c', 'runtime\\portable\\polcore_slots.c',
             'runtime\\portable\\reg.c', 'runtime\\portable\\ole.c', 'runtime\\portable\\polcore_files.c',
-            'runtime\\portable\\k32_misc.c', 'runtime\\portable\\polcore_polpro.c']
+            'runtime\\portable\\k32_misc.c', 'runtime\\portable\\polcore_polpro.c', 'runtime\\portable\\mounts.c']
 
 
 def msvc_env(arch='x86'):

@@ -9,6 +9,7 @@
 #include "gwin.h"
 #include "k32.h"
 #include "kobj.h"
+#include "mounts.h"
 #include "plat.h"
 #include "thunk.h"
 #include "vfs.h"
@@ -174,7 +175,11 @@ static void sh_GlobalMemoryStatus(Guest* g)
 #define FILE_ATTRIBUTE_DIRECTORY 0x10u
 #define FILE_ATTRIBUTE_ARCHIVE 0x20u
 
-static void file_close(void* f) { plat_file_close((PlatFile*)f); }
+static void file_close(void* f)
+{
+    mounts_untrack(f);
+    plat_file_close((PlatFile*)f);
+}
 
 /* FFXI_RECOMP_TRACE=1: the guest path of every file open or search that fails */
 static void trace_miss(const char* api, const char* path)
@@ -218,6 +223,7 @@ static void sh_CreateFileA(Guest* g)
         RET(INVALID_HANDLE, 7);
     }
     uint32_t h = k_new(K_FILE, f, file_close);
+    mounts_track(f, host); /* the file table: MogHouse's mounts' entries go in as it is read */
     gt_set_error((disp == 2 || disp == 4) && existed ? ERROR_ALREADY_EXISTS : 0);
     {
         /* FFXI_FILES_TRACE=1: every file the game opens, and its handle */
@@ -243,8 +249,11 @@ static void sh_ReadFile(Guest* g)
         RET(0, 5);
     }
     gt_unlock(); /* file I/O may block: other guest threads run meanwhile */
+    int64_t at = mounts_tracked(f) ? plat_file_seek(f, 0, 1) : 0;
     int64_t got = plat_file_read(f, GUEST_PTR(ARG(1)), n);
     gt_lock();
+    if (got > 0 && at >= 0)
+        mounts_patch(f, (uint64_t)at, GUEST_PTR(ARG(1)), (size_t)got);
     if (out)
         wr32(out, got > 0 ? (uint32_t)got : 0);
     if (got < 0)
@@ -881,9 +890,11 @@ static void sh_MapViewOfFile(Guest* g)
     gt_unlock();
     int64_t at = plat_file_seek(m->file, 0, 1);
     plat_file_seek(m->file, off, 0);
-    plat_file_read(m->file, GUEST_PTR(v), n);
+    int64_t got = plat_file_read(m->file, GUEST_PTR(v), n);
     plat_file_seek(m->file, at, 0);
     gt_lock();
+    if (got > 0)
+        mounts_patch(m->file, off, GUEST_PTR(v), (size_t)got);
     for (int i = 0; i < 64; ++i)
         if (!g_views[i])
         {
