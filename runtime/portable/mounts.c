@@ -6,10 +6,12 @@
  *     one for each race (Hume male, female, Elvaan male, female, Tarutaru male, female, Mithra, Galka):
  *     where the rider's hips go. The rider sits upright whatever the bone's turn: only the place counts.
  *   - a 'moun' chunk (0x45): 8 bytes (zero on most), then how each race sits, by race as above (6 astride).
- * A bee is made so from the Killer Bee's model (1572), bigger, lowered from its own hover to sit a rider at
- * a mount's height, its seat on top of its thorax; the effects, sounds and folder from the Crackclaw's
- * (102741, a beetle). The sizes and places were measured from the models' skinned idle (ffxi-scratch,
- * choco/trybee2.py: the back's top, the wings left out), and the files checked byte for byte against it. */
+ * The mounts (MOUNTS below): each a creature's model, bigger or smaller, moved to a mount's height and
+ * turned to face forward where it must be, with a seat for the rider; the effects, sounds and folder from
+ * the Crackclaw's (102741, a beetle). The sizes and places were measured from the models' skinned idle
+ * (scratch prototypes trybee2.py and ship2.py: a back's top with the wings left out, a deck's planks), and
+ * the files checked byte for byte against the prototype's. A rider astride sits on the point; one standing
+ * has their hips there, 0.75 yalm over what they stand on (as on the Levitus). */
 #include "mounts.h"
 
 #include <stdio.h>
@@ -21,18 +23,46 @@
 
 extern void rt_log(const char* fmt, ...);
 
-enum { MOUNT_FILE0 = 102704, BEE_FILE = 1572, BEE_DONOR = 102741, BEE_BONES = 30, SEATS = 48, RACES = 8 };
+/* the same files from every compiler and machine: no fused multiply-adds */
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#elif defined(__GNUC__)
+#pragma GCC optimize("fp-contract=off")
+#endif
 
-static const struct
+enum { MOUNT_FILE0 = 102704, CRACKCLAW = 102741, SEATS = 48, RACES = 8 };
+
+/* What a mount is made of, and how. */
+typedef struct MountSpec
 {
-    int mount;    /* its mount id */
-    double scale; /* times the bee's size */
-    double lower; /* down from its hover (heights count down: added to the body bone's place) */
-    float seat[3]; /* on the thorax (bone 2), in its frame */
-} BEES[] = {
-    { 40, 2.20, 2.4657, { -0.0731f, 0.3088f, 0.0836f } }, /* small: a Tarutaru's, the seat 1.25 yalms up */
-    { 41, 3.00, 3.4668, { -0.0997f, 0.4210f, 0.1140f } }, /* middling: 1.6 */
-    { 42, 3.80, 4.4680, { -0.1263f, 0.5333f, 0.1444f } }, /* large: a Galka's, 1.95 */
+    int mount;              /* its mount id */
+    uint32_t model;         /* the creature's model file */
+    const char* skeleton;   /* its skeleton's name and bones (checked: another model there is left alone) */
+    int bones;
+    double scale;           /* times its size */
+    int body;               /* the bone that holds it up, and how far down (heights count down) it is moved */
+    double lower;
+    double turn[4];         /* the whole of it turned (a quaternion; none: 0, 0, 0, 1) */
+    int seat_bone;          /* the rider's seat: on this bone, in its frame */
+    float seat[3];
+    uint8_t sit;            /* how the rider sits: 6 astride, 5 standing */
+    const char* motions[5][2]; /* the mount's motions, each from one of the model's */
+} MountSpec;
+
+#define BEE_MOTIONS { { "wlk0", "wlk0" }, { "dam0", "dfi0" }, { "chi0", "idl0" }, { "mvb0", "wlk0" }, { "run0", "run0" } }
+#define STILL_MOTIONS { { "wlk0", "idl0" }, { "dam0", "idl0" }, { "chi0", "idl0" }, { "mvb0", "idl0" }, { "run0", "idl0" } }
+#define NO_TURN { 0, 0, 0, 1 }
+#define QUARTER_TURN { 0, 0.7071067811865475, 0, 0.7071067811865476 } /* about the up axis */
+
+static const MountSpec MOUNTS[] = {
+    /* the bee (the Killer Bee), its seat on top of its thorax: small for a Tarutaru, the seat 1.25 yalms up;
+     * middling, 1.6; large for a Galka, 1.95 */
+    { 40, 1572, "k_be", 30, 2.20, 1, 2.4657, NO_TURN, 2, { -0.0731f, 0.3088f, 0.0836f }, 6, BEE_MOTIONS },
+    { 41, 1572, "k_be", 30, 3.00, 1, 3.4668, NO_TURN, 2, { -0.0997f, 0.4210f, 0.1140f }, 6, BEE_MOTIONS },
+    { 42, 1572, "k_be", 30, 3.80, 1, 4.4680, NO_TURN, 2, { -0.1263f, 0.5333f, 0.1444f }, 6, BEE_MOTIONS },
+    /* the airship: the sailing ship (53079) a third of its size (3.4 yalms long), turned to sail forward, its
+     * keel 0.4 yalm off the ground, the rider standing on the stern deck (their hips 0.75 above it) */
+    { 43, 53079, "ship", 6, 0.35, 1, -0.63, QUARTER_TURN, 1, { -1.1496f, -1.0007f, 0.0092f }, 5, STILL_MOTIONS },
 };
 
 /* --- the made mounts' entries in the file table ------------------------------------------------------- */
@@ -225,20 +255,28 @@ static void scale_anim(uint8_t* b, size_t n, double s)
     }
 }
 
-/* A bee mount's file, from the bee's and the donor's */
-static int make_bee(const uint8_t* bee, size_t nbee, const uint8_t* donor, size_t ndonor, int which, Buf* out)
+static void qmul(const double* a, const double* b, double* o)
+{
+    o[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
+    o[1] = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0];
+    o[2] = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3];
+    o[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
+}
+
+/* A mount's file, from the creature's model and the donor mount's */
+static int make_mount(const MountSpec* m, const uint8_t* src, size_t nsrc, const uint8_t* donor, size_t ndonor, Buf* out)
 {
     Chunk bc[256], dc[256];
-    int nb = chunks(bee, nbee, bc, 256), nd = chunks(donor, ndonor, dc, 256);
+    int nb = chunks(src, nsrc, bc, 256), nd = chunks(donor, ndonor, dc, 256);
     if (nb < 4 || nd < 4 || dc[0].type != 0x01 || !named(&dc[0], "moun"))
         return 0;
     const Chunk* skel = NULL;
     for (int i = 0; i < nb; ++i)
         if (bc[i].type == 0x29)
             skel = &bc[i];
-    if (!skel || !named(skel, "k_be") || skel->size < 20 || rd16(skel->p + 16 + 2) != BEE_BONES)
+    if (!skel || !named(skel, m->skeleton) || skel->size < 20 || rd16(skel->p + 16 + 2) != m->bones)
         return 0;
-    double s = BEES[which].scale;
+    double s = m->scale;
 
     put(out, dc[0].p, dc[0].size); /* the mount's folder */
     for (int i = 0; i < nd; ++i)
@@ -246,27 +284,38 @@ static int make_bee(const uint8_t* bee, size_t nbee, const uint8_t* donor, size_
             put(out, dc[i].p, dc[i].size); /* its effects */
     for (int i = 0; i < nb; ++i)
         if (bc[i].type == 0x20)
-            put(out, bc[i].p, bc[i].size); /* the bee's textures */
+            put(out, bc[i].p, bc[i].size); /* the creature's textures */
 
-    /* the skeleton: bigger, lowered, with the seats */
+    /* the skeleton: bigger or smaller, moved, turned, with the seats */
     size_t sn = skel->size - 16;
     uint8_t* sk = (uint8_t*)malloc(sn);
     memcpy(sk, skel->p + 16, sn);
-    size_t end = 4 + 30 * BEE_BONES;
+    size_t end = 4 + 30 * (size_t)m->bones;
     if (end + 4 > sn)
     {
         free(sk);
         return 0;
     }
-    for (int k = 0; k < BEE_BONES; ++k)
+    for (int k = 0; k < m->bones; ++k)
     {
         uint8_t* t = sk + 4 + 30 * k + 18;
         for (int c = 0; c < 3; ++c)
         {
             double v = (double)rdf(t + 4 * c) * s;
-            if (k == 1 && c == 1)
-                v += BEES[which].lower;
+            if (k == m->body)
+                v += c == 1 ? m->lower : 0.0;
             wrf(t + 4 * c, (float)v);
+        }
+        if (k == 0 && m->turn[3] != 1.0)
+        {
+            /* the root's own turn, then this one */
+            uint8_t* q = sk + 4 + 30 * k + 2;
+            double was[4], now[4];
+            for (int c = 0; c < 4; ++c)
+                was[c] = rdf(q + 4 * c);
+            qmul(m->turn, was, now);
+            for (int c = 0; c < 4; ++c)
+                wrf(q + 4 * c, (float)now[c]);
         }
     }
     uint16_t npts = rd16(sk + end);
@@ -281,10 +330,10 @@ static int make_bee(const uint8_t* bee, size_t nbee, const uint8_t* donor, size_
     for (int k = 0; k < RACES; ++k)
     {
         uint8_t* r = sk + end + 4 + 26 * (SEATS + k);
-        uint16_t bone = 2; /* the thorax */
+        uint16_t bone = (uint16_t)m->seat_bone;
         memcpy(r, &bone, 2);
         memset(r + 2, 0, 12);
-        memcpy(r + 14, BEES[which].seat, 12);
+        memcpy(r + 14, m->seat, 12);
     }
     for (int i = 0; i < 18; ++i) /* three boxes about it */
         scalef(sk + end + 4 + 26 * npts + 4 * i, s);
@@ -294,25 +343,24 @@ static int make_bee(const uint8_t* bee, size_t nbee, const uint8_t* donor, size_
     for (int i = 0; i < nb; ++i)
         if (bc[i].type == 0x2a)
         {
-            uint8_t* m = (uint8_t*)malloc(bc[i].size - 16);
-            memcpy(m, bc[i].p + 16, bc[i].size - 16);
-            scale_mesh(m, bc[i].size - 16, s);
-            put_chunk(out, bc[i].p, 0x2a, m, bc[i].size - 16);
-            free(m);
+            uint8_t* mesh = (uint8_t*)malloc(bc[i].size - 16);
+            memcpy(mesh, bc[i].p + 16, bc[i].size - 16);
+            scale_mesh(mesh, bc[i].size - 16, s);
+            put_chunk(out, bc[i].p, 0x2a, mesh, bc[i].size - 16);
+            free(mesh);
         }
-    static const char* const MOTIONS[][2] = { { "wlk0", "wlk0" }, { "dam0", "dfi0" }, { "chi0", "idl0" }, { "mvb0", "wlk0" }, { "run0", "run0" } };
-    for (size_t m = 0; m < sizeof MOTIONS / sizeof *MOTIONS; ++m)
+    for (int k = 0; k < 5; ++k)
     {
         const Chunk* a = NULL;
         for (int i = 0; i < nb && !a; ++i)
-            if (bc[i].type == 0x2b && named(&bc[i], MOTIONS[m][1]))
+            if (bc[i].type == 0x2b && named(&bc[i], m->motions[k][1]))
                 a = &bc[i];
         if (!a)
             return 0;
         uint8_t* body = (uint8_t*)malloc(a->size - 16);
         memcpy(body, a->p + 16, a->size - 16);
         scale_anim(body, a->size - 16, s);
-        put_chunk(out, (const uint8_t*)MOTIONS[m][0], 0x2b, body, a->size - 16);
+        put_chunk(out, (const uint8_t*)m->motions[k][0], 0x2b, body, a->size - 16);
         free(body);
     }
     for (int i = 0; i < nd; ++i)
@@ -322,7 +370,7 @@ static int make_bee(const uint8_t* bee, size_t nbee, const uint8_t* donor, size_
         if (bc[i].type == 0x45 && named(&bc[i], "info"))
             put(out, bc[i].p, bc[i].size);
     uint8_t moun[16] = { 0 };
-    memset(moun + 8, 6, RACES); /* every race astride */
+    memset(moun + 8, m->sit, RACES); /* every race sits so */
     put_chunk(out, (const uint8_t*)"moun", 0x45, moun, sizeof moun);
     put(out, dc[nd - 1].p, 16); /* the end of the folder */
     return 1;
@@ -355,13 +403,12 @@ int mounts_build(const char* guest_game, const char* out_dir)
     if (vfs_host_path(guest, g_ftable, sizeof g_ftable))
         t.ft = plat_read_file(g_ftable, &t.nft);
     int made = 0;
-    size_t nbee = 0, ndonor = 0;
-    unsigned char* bee = t.vt && t.ft ? read_dat(guest_game, &t, BEE_FILE, &nbee) : NULL;
-    unsigned char* donor = t.vt && t.ft ? read_dat(guest_game, &t, BEE_DONOR, &ndonor) : NULL;
+    size_t ndonor = 0;
+    unsigned char* donor = t.vt && t.ft ? read_dat(guest_game, &t, CRACKCLAW, &ndonor) : NULL;
 
     /* a ROM folder no file of the install's is in, from the last there could be (511) down */
     int folder = 0;
-    if (bee && donor)
+    if (donor)
     {
         static uint8_t used[512];
         memset(used, 0, sizeof used);
@@ -382,13 +429,17 @@ int mounts_build(const char* guest_game, const char* out_dir)
         plat_mkdir(path);
     }
     g_nmade = 0;
-    for (size_t i = 0; folder && i < sizeof BEES / sizeof *BEES; ++i)
+    int missing = 0;
+    for (size_t i = 0; folder && i < sizeof MOUNTS / sizeof *MOUNTS && g_nmade < 8; ++i)
     {
-        uint32_t file = MOUNT_FILE0 + (uint32_t)BEES[i].mount;
+        const MountSpec* m = &MOUNTS[i];
+        uint32_t file = MOUNT_FILE0 + (uint32_t)m->mount;
         if (file >= t.nvt || 2u * file + 1 >= t.nft || t.vt[file])
             continue; /* the game has its own there (a newer install): leave it */
+        size_t nsrc = 0;
+        unsigned char* src = read_dat(guest_game, &t, m->model, &nsrc);
         Buf b = { 0 };
-        if (make_bee(bee, nbee, donor, ndonor, (int)i, &b))
+        if (src && make_mount(m, src, nsrc, donor, ndonor, &b))
         {
             snprintf(path, sizeof path, "%s%cROM%c%d%c%d.DAT", out_dir, plat_path_sep, plat_path_sep, folder, plat_path_sep, (int)i);
             if (write_if_changed(path, b.p, b.n))
@@ -397,12 +448,15 @@ int mounts_build(const char* guest_game, const char* out_dir)
                 ++g_nmade, ++made;
             }
         }
-        free(b.p);
+        else
+            ++missing;
+        free(b.p), free(src);
     }
     if (made)
         vfs_add_overlay(out_dir, NULL);
-    rt_log("[recomp] mounts: %d made (%s)%s\n", made, out_dir,
-        !t.vt || !t.ft ? ", no file table" : !bee || !donor ? ", the bee's or donor's model missing" : !folder ? ", no free folder" : "");
-    free(t.vt), free(t.ft), free(bee), free(donor);
+    rt_log("[recomp] mounts: %d made (%s)%s%s\n", made, out_dir,
+        !t.vt || !t.ft ? ", no file table" : !donor ? ", no donor mount" : !folder ? ", no free folder" : "",
+        missing ? ", some models missing or not as expected" : "");
+    free(t.vt), free(t.ft), free(donor);
     return made;
 }
