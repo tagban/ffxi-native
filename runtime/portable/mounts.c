@@ -14,6 +14,7 @@
  * has their hips there, 0.75 yalm over what they stand on (as on the Levitus). */
 #include "mounts.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,6 +51,10 @@ typedef struct MountSpec
     uint32_t mmb;           /* else 0: a file whose static model (MMB) and textures are the mount's look, on the
                              * creature's skeleton (its root unturned: the MMB faces forward), all on the body bone */
     double mmb_scale;
+    const char* layer;      /* else NULL: a motion the game plays over the creature's others (the bee's wings,
+                             * idl1), baked into each of the mount's: its poses frame by frame, for these bones */
+    int layer_bones[2];
+    int props;              /* the MMB look's file has propellers (its prop folder): they turn, on bones of their own */
 } MountSpec;
 
 #define BEE_MOTIONS { { "wlk0", "wlk0" }, { "dam0", "dfi0" }, { "chi0", "idl0" }, { "mvb0", "wlk0" }, { "run0", "run0" } }
@@ -60,16 +65,17 @@ typedef struct MountSpec
 static const MountSpec MOUNTS[] = {
     /* the bee (the Killer Bee), its seat on top of its thorax: small for a Tarutaru, the seat 1.25 yalms up;
      * middling, 1.6; large for a Galka, 1.95 */
-    { 40, 1572, "k_be", 30, 2.20, 1, 2.4657, NO_TURN, 2, { -0.0731f, 0.3088f, 0.0836f }, 6, BEE_MOTIONS, 0, 0 },
-    { 41, 1572, "k_be", 30, 3.00, 1, 3.4668, NO_TURN, 2, { -0.0997f, 0.4210f, 0.1140f }, 6, BEE_MOTIONS, 0, 0 },
-    { 42, 1572, "k_be", 30, 3.80, 1, 4.4680, NO_TURN, 2, { -0.1263f, 0.5333f, 0.1444f }, 6, BEE_MOTIONS, 0, 0 },
+    { 40, 1572, "k_be", 30, 2.20, 1, 2.4657, NO_TURN, 2, { -0.0731f, 0.3088f, 0.0836f }, 6, BEE_MOTIONS, 0, 0, "idl1", { 14, 15 }, 0 },
+    { 41, 1572, "k_be", 30, 3.00, 1, 3.4668, NO_TURN, 2, { -0.0997f, 0.4210f, 0.1140f }, 6, BEE_MOTIONS, 0, 0, "idl1", { 14, 15 }, 0 },
+    { 42, 1572, "k_be", 30, 3.80, 1, 4.4680, NO_TURN, 2, { -0.1263f, 0.5333f, 0.1444f }, 6, BEE_MOTIONS, 0, 0, "idl1", { 14, 15 }, 0 },
     /* the airship: the one that flies into port (31004, 63 yalms long) at 0.12 (7.6), on the sailing ship's
-     * skeleton (its hull bone bobs), its keel 0.5 yalm off the ground, the rider standing on the forward deck
-     * (2.05 yalms up; their hips 0.75 above it) */
-    { 43, 53079, "ship", 6, 0.35, 1, -1.676, NO_TURN, 1, { 1.0f, -1.124f, 0.0f }, 5, STILL_MOTIONS, 31004, 0.12 },
+     * skeleton (its hull bone bobs), its keel 0.5 yalm off the ground, its six rotors turning; the rider seated
+     * on the forward deck (2.05 yalms up), clear of the top rotor (4.1): a seat's hips on the point (as the
+     * Spectral Chair's), 0.45 over the planks, chair height */
+    { 43, 53079, "ship", 6, 0.35, 1, -1.676, NO_TURN, 1, { 1.0f, -0.824f, 0.0f }, 3, STILL_MOTIONS, 31004, 0.12, NULL, { 0 }, 1 },
     /* the boat: the sailing ship (53079) a third of its size (3.4 yalms long), turned to sail forward, its keel
      * 0.4 yalm off the ground, the rider standing on the stern deck */
-    { 44, 53079, "ship", 6, 0.35, 1, -0.63, QUARTER_TURN, 1, { -1.1496f, -1.0007f, 0.0092f }, 5, STILL_MOTIONS, 0, 0 },
+    { 44, 53079, "ship", 6, 0.35, 1, -0.63, QUARTER_TURN, 1, { -1.1496f, -1.0007f, 0.0092f }, 5, STILL_MOTIONS, 0, 0, NULL, { 0 }, 0 },
 };
 
 /* --- the made mounts' entries in the file table ------------------------------------------------------- */
@@ -262,6 +268,70 @@ static void scale_anim(uint8_t* b, size_t n, double s)
     }
 }
 
+/* A layer motion's rotations of some bones (the bee's wing beat, idl1, which the game plays over the
+ * creature's other motions but not a mount's) baked into a motion body: in its frame f, the layer's frame
+ * f % (its frames - 1), each bone's four channels appended as keys (the keys are floats counted from byte
+ * 10), each frame's quaternion on the previous one's side so the game's blend takes the short way. */
+static void bake_layer(Buf* body, const uint8_t* layer, size_t nlayer, const int bones[2])
+{
+    if (body->n < 10 || nlayer < 10)
+        return;
+    uint16_t nb = rd16(body->p + 2), nf = rd16(body->p + 4), lnb = rd16(layer + 2), lnf = rd16(layer + 4);
+    int cycle = lnf > 1 ? lnf - 1 : 1;
+    static const uint8_t zero[4];
+    put(body, zero, (size_t)((4 - (body->n - 10) % 4) % 4));
+    for (int k = 0; k < nb && 10u + 84u * (k + 1) <= body->n; ++k)
+    {
+        uint16_t idx = rd16(body->p + 10 + 84 * k);
+        if (idx != bones[0] && idx != bones[1])
+            continue;
+        const uint8_t* le = NULL;
+        for (int j = 0; j < lnb && 10u + 84u * (j + 1) <= nlayer && !le; ++j)
+            if (rd16(layer + 10 + 84 * j) == idx)
+                le = layer + 10 + 84 * j;
+        if (!le)
+            continue;
+        double* q = (double*)malloc(sizeof(double) * 4 * nf);
+        for (int f = 0; f < nf; ++f)
+        {
+            int lf = f % cycle;
+            for (int c = 0; c < 4; ++c)
+            {
+                uint32_t o = rd32(le + 4 + 4 * c);
+                double v;
+                if (o & 0x80000000u)
+                    v = c < 3 ? 0.0 : 1.0;
+                else if (o && 10ull + 4ull * (o + lf) + 4 <= nlayer)
+                    v = rdf(layer + 10 + 4 * (o + lf));
+                else
+                    v = rdf(le + 20 + 4 * c);
+                q[4 * f + c] = v;
+            }
+            if (f > 0)
+            {
+                double dot = 0;
+                for (int c = 0; c < 4; ++c)
+                    dot += q[4 * f + c] * q[4 * (f - 1) + c];
+                if (dot < 0)
+                    for (int c = 0; c < 4; ++c)
+                        q[4 * f + c] = -q[4 * f + c];
+            }
+        }
+        for (int c = 0; c < 4; ++c)
+        {
+            uint32_t off = (uint32_t)((body->n - 10) / 4);
+            memcpy(body->p + 10 + 84 * k + 4 + 4 * c, &off, 4);
+            for (int f = 0; f < nf; ++f)
+            {
+                uint8_t v[4];
+                wrf(v, (float)q[4 * f + c]);
+                put(body, v, 4);
+            }
+        }
+        free(q);
+    }
+}
+
 static void qmul(const double* a, const double* b, double* o)
 {
     o[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
@@ -286,6 +356,7 @@ typedef struct Piece
     uint32_t nverts;
     const uint8_t* idx;   /* u16 each */
     uint32_t nidx;
+    uint32_t flags;       /* the count's high bits: 0x8000 both sides (rails, posts, fittings) */
     int* where;           /* each vertex's place in the mesh being filled, or -1 */
 } Piece;
 
@@ -303,6 +374,7 @@ static int mmb_pieces(const uint8_t* b, size_t n, Piece* out, int max)
         Piece p = { 0 };
         p.name = b + o;
         p.nverts = rd32(b + o + 16) & 0xffff;
+        p.flags = rd32(b + o + 16) >> 16;
         o += 20;
         if (o + (size_t)MMB_VERTEX * p.nverts + 4 > n)
             return -1;
@@ -459,7 +531,7 @@ static int mmb_meshes(const uint8_t* mmb, size_t n, double s, const uint8_t* hea
     for (int i = 0; i < np && ok; ++i)
     {
         /* the strip's triangles, joins dropped, every other one turned */
-        uint16_t(*tris)[3] = (uint16_t(*)[3])malloc(sizeof *tris * (ps[i].nidx ? ps[i].nidx : 1));
+        uint16_t(*tris)[3] = (uint16_t(*)[3])malloc(sizeof *tris * 2 * (ps[i].nidx ? ps[i].nidx : 1));
         int nt = 0;
         for (uint32_t j = 0; j + 2 < ps[i].nidx; ++j)
         {
@@ -474,6 +546,9 @@ static int mmb_meshes(const uint8_t* mmb, size_t n, double s, const uint8_t* hea
             tris[nt][0] = j % 2 ? b : a, tris[nt][1] = j % 2 ? a : b, tris[nt][2] = c;
             ++nt;
         }
+        if (ps[i].flags & 0x8000) /* both sides: each triangle again, turned */
+            for (int t = 0, n = nt; t < n; ++t, ++nt)
+                tris[nt][0] = tris[t][2], tris[nt][1] = tris[t][1], tris[nt][2] = tris[t][0];
         for (int t = 0; ok && t < nt; t += 128)
         {
             int m = nt - t < 128 ? nt - t : 128;
@@ -511,6 +586,232 @@ static int mmb_meshes(const uint8_t* mmb, size_t n, double s, const uint8_t* hea
     for (int i = 0; i < np; ++i)
         free(ps[i].where);
     return ok;
+}
+
+/* --- the airship's propellers -------------------------------------------------------------------------
+ * In port the airship's rotors are effects (its prop folder): three models (0x1F 'main', 'back', 'side': a
+ * header, the texture's name at 0x10, a triangle count at 6, then the triangles' corners from 0x50, 36 bytes
+ * each as an MMB's) that six generators place and turn (0x05 'mov1'-'mov6': the model's name in it, its place
+ * at 164, its turn a tick at 220). On the mount each is a bone under the hull, at its place, turning about the
+ * up axis in every motion - whole turns a loop - with its triangles, both sides, on it. */
+enum { MAX_PROPS = 8, KEEP_BONES = 2 };
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+typedef struct Prop
+{
+    char name[5];
+    const uint8_t* model; /* the 0x1F body */
+    uint32_t ntris;
+    float pos[3], spin;
+    int is_side;          /* a pod's ('side'); the top's and the tail's go in the other mesh */
+} Prop;
+
+static int props_of(const Chunk* lc, int nl, Prop* out)
+{
+    static const char* const MODELS[] = { "main", "back", "side" };
+    const Chunk* models[3] = { 0 };
+    for (int i = 0; i < nl; ++i)
+        for (int m = 0; m < 3; ++m)
+            if (lc[i].type == 0x1f && named(&lc[i], MODELS[m]) && lc[i].size >= 16 + 0x50)
+                models[m] = &lc[i];
+    int n = 0;
+    for (int i = 0; i < nl && n < MAX_PROPS; ++i)
+    {
+        if (lc[i].type != 0x05 || memcmp(lc[i].p, "mov", 3) || lc[i].size < 16 + 224)
+            continue;
+        const uint8_t* b = lc[i].p + 16;
+        size_t bn = lc[i].size - 16;
+        int which = -1;
+        for (int m = 0; m < 3 && which < 0; ++m)
+            for (size_t o = 0; o + 4 <= bn && which < 0; ++o)
+                if (!memcmp(b + o, MODELS[m], 4))
+                    which = m;
+        if (which < 0 || !models[which])
+            continue;
+        Prop* p = &out[n];
+        memcpy(p->name, lc[i].p, 4), p->name[4] = 0;
+        p->is_side = which == 2;
+        p->model = models[which]->p + 16;
+        p->ntris = rd16(p->model + 6);
+        if (0x50ull + 108ull * p->ntris > models[which]->size - 16)
+            continue;
+        for (int c = 0; c < 3; ++c)
+            p->pos[c] = rdf(b + 164 + 4 * c);
+        p->spin = rdf(b + 220);
+        ++n;
+    }
+    /* in their names' order (mov1 first) */
+    for (int i = 1; i < n; ++i)
+        for (int j = i; j > 0 && strcmp(out[j - 1].name, out[j].name) > 0; --j)
+        {
+            Prop t = out[j];
+            out[j] = out[j - 1], out[j - 1] = t;
+        }
+    return n;
+}
+
+/* A motion body of the hull's two bones (its bob), bigger by s, and the props' bones turning */
+static void props_motion(const uint8_t* src, size_t nsrc, double s, const Prop* props, int nprops, Buf* out)
+{
+    uint16_t nf = rd16(src + 4);
+    double spd = rdf(src + 6);
+    int n = KEEP_BONES + nprops;
+    uint8_t head[10];
+    memcpy(head, src, 10);
+    uint16_t nb16 = (uint16_t)n;
+    memcpy(head + 2, &nb16, 2);
+    uint8_t* entries = (uint8_t*)calloc((size_t)n, 84);
+    Buf keys = { 0 };
+    #define KEY_OFFSET() ((uint32_t)((84u * n + keys.n) / 4))
+    for (int k = 0; k < KEEP_BONES && 10u + 84u * (k + 1) <= nsrc; ++k)
+    {
+        uint8_t* e = entries + 84 * k;
+        memcpy(e, src + 10 + 84 * k, 84);
+        for (int c = 0; c < 4; ++c)
+        {
+            uint32_t o = rd32(e + 4 + 4 * c);
+            if (o && !(o & 0x80000000u) && 10ull + 4ull * (o + nf) <= nsrc)
+            {
+                uint32_t off = KEY_OFFSET();
+                put(&keys, src + 10 + 4 * o, 4u * nf);
+                memcpy(e + 4 + 4 * c, &off, 4);
+            }
+        }
+        for (int c = 0; c < 3; ++c)
+        {
+            uint32_t o = rd32(e + 36 + 4 * c);
+            if (o && !(o & 0x80000000u) && 10ull + 4ull * (o + nf) <= nsrc)
+            {
+                uint32_t off = KEY_OFFSET();
+                for (int f = 0; f < nf; ++f)
+                {
+                    uint8_t v[4];
+                    wrf(v, (float)((double)rdf(src + 10 + 4 * (o + f)) * s));
+                    put(&keys, v, 4);
+                }
+                memcpy(e + 36 + 4 * c, &off, 4);
+            }
+            else
+                scalef(e + 48 + 4 * c, s);
+        }
+    }
+    for (int j = 0; j < nprops; ++j)
+    {
+        uint8_t* e = entries + 84 * (KEEP_BONES + j);
+        uint16_t idx = (uint16_t)(KEEP_BONES + j);
+        memcpy(e, &idx, 2);
+        long turns = lround((double)props[j].spin / spd * (nf - 1) / (2 * M_PI));
+        if (turns < 1)
+            turns = 1;
+        double step = turns * 2 * M_PI / (nf - 1);
+        for (int c = 0; c < 4; ++c)
+        {
+            uint32_t off = KEY_OFFSET();
+            memcpy(e + 4 + 4 * c, &off, 4);
+            for (int f = 0; f < nf; ++f)
+            {
+                double v = c == 1 ? sin(step * f / 2) : c == 3 ? cos(step * f / 2) : 0.0;
+                uint8_t b[4];
+                wrf(b, (float)v);
+                put(&keys, b, 4);
+            }
+        }
+        static const float rdef[4] = { 0, 0, 0, 1 }, sdef[3] = { 1, 1, 1 };
+        memcpy(e + 20, rdef, 16), memcpy(e + 72, sdef, 12);
+    }
+    #undef KEY_OFFSET
+    put(out, head, 10), put(out, entries, 84u * n), put(out, keys.p, keys.n);
+    free(entries), free(keys.p);
+}
+
+/* A mesh of some props, each on its bone (the table's index j), both sides */
+static void props_mesh(Buf* out, const uint8_t* head6, const Prop* props, const int* which, int nwhich, double s, int k)
+{
+    Buf body = { 0 }, tris = { 0 };
+    uint8_t zero[0x34] = { 0 };
+    put(&body, zero, sizeof zero);
+    uint32_t secs[7][2];
+    int nv = 0;
+    for (int w = 0; w < nwhich; ++w)
+        nv += 3 * (int)props[which[w]].ntris;
+    /* the triangles: each prop's, then turned */
+    int base = 0;
+    for (int w = 0; w < nwhich; ++w)
+    {
+        int nt = (int)props[which[w]].ntris;
+        for (int pass = 0; pass < 2; ++pass)
+            for (int t = 0; t < nt; ++t)
+            {
+                uint16_t a = (uint16_t)(base + 3 * t), b = (uint16_t)(base + 3 * t + 1), c = (uint16_t)(base + 3 * t + 2);
+                uint16_t tri[3] = { pass ? c : a, b, pass ? a : c };
+                put(&tris, tri, 6);
+            }
+        base += 3 * nt;
+    }
+    const uint8_t** corner = (const uint8_t**)malloc(sizeof *corner * (nv ? nv : 1));
+    for (int w = 0, v = 0; w < nwhich; ++w)
+        for (uint32_t i = 0; i < 3 * props[which[w]].ntris; ++i)
+            corner[v++] = props[which[w]].model + 0x50 + 36 * i;
+    secs[0][0] = (uint32_t)(body.n / 2);
+    uint16_t op = 0x8000;
+    put(&body, &op, 2), put(&body, props[which[0]].model + 0x10, 16);
+    int ntris = (int)(tris.n / 6);
+    for (int i = 0; i < ntris; i += 128)
+    {
+        uint16_t hdr[2] = { 0x0054, (uint16_t)(ntris - i < 128 ? ntris - i : 128) };
+        put(&body, hdr, 4);
+        for (int t = i; t < i + hdr[1]; ++t)
+        {
+            uint16_t tri[3];
+            memcpy(tri, tris.p + 6 * t, 6);
+            put(&body, tri, 6);
+            for (int c = 0; c < 3; ++c)
+                put(&body, corner[tri[c]] + 28, 8);
+        }
+    }
+    uint16_t end = 0xFFFF;
+    put(&body, &end, 2);
+    secs[0][1] = (uint32_t)(body.n / 2) - secs[0][0];
+    secs[1][0] = (uint32_t)(body.n / 2);
+    for (int w = 0; w < nwhich; ++w)
+    {
+        uint16_t bone = (uint16_t)(KEEP_BONES + which[w]);
+        put(&body, &bone, 2);
+    }
+    secs[1][1] = (uint32_t)nwhich;
+    uint16_t counts[2] = { (uint16_t)nv, 0 };
+    secs[2][0] = (uint32_t)(body.n / 2), put(&body, counts, 4), secs[2][1] = 2;
+    secs[3][0] = (uint32_t)(body.n / 2);
+    for (int w = 0; w < nwhich; ++w)
+        for (uint32_t i = 0; i < 3 * props[which[w]].ntris; ++i)
+        {
+            uint16_t ref[2] = { (uint16_t)(0x4000 | w), 0 };
+            put(&body, ref, 4);
+        }
+    secs[3][1] = 2u * nv;
+    secs[4][0] = (uint32_t)(body.n / 2);
+    for (int v = 0; v < nv; ++v)
+    {
+        uint8_t x[24];
+        for (int c = 0; c < 3; ++c)
+            wrf(x + 4 * c, (float)((double)rdf(corner[v] + 4 * c) * s));
+        memcpy(x + 12, corner[v] + 12, 12);
+        put(&body, x, 24);
+    }
+    secs[4][1] = 12u * nv;
+    uint32_t words = (uint32_t)(body.n / 2);
+    secs[5][0] = words, secs[5][1] = 0, secs[6][0] = 0, secs[6][1] = words;
+    memcpy(body.p, head6, 6);
+    for (int i = 0; i < 7; ++i)
+    {
+        uint16_t c = (uint16_t)secs[i][1];
+        memcpy(body.p + 6 + 6 * i, &secs[i][0], 4), memcpy(body.p + 10 + 6 * i, &c, 2);
+    }
+    uint8_t name[4] = { 'p', 'r', 'p', (uint8_t)('0' + k) };
+    put_chunk(out, name, 0x2a, body.p, body.n);
+    free(body.p), free(tris.p), free(corner);
 }
 
 /* A mount's file, from the creature's model and the donor mount's */
@@ -580,6 +881,30 @@ static int make_mount(const MountSpec* m, const uint8_t* src, size_t nsrc, const
                 wrf(q + 4 * c, (float)now[c]);
         }
     }
+    Prop props[MAX_PROPS];
+    int nprops = m->props && mmb ? props_of(lc, nl, props) : 0;
+    if (nprops)
+    {
+        /* the hull's two bones, then a bone for each prop (under the hull, at its place); the rest as it was */
+        size_t keep = 4 + 30 * KEEP_BONES, rest = 4 + 30 * (size_t)m->bones;
+        size_t sn2 = keep + 30 * (size_t)nprops + (sn - rest);
+        uint8_t* sk2 = (uint8_t*)malloc(sn2);
+        memcpy(sk2, sk, keep);
+        for (int j = 0; j < nprops; ++j)
+        {
+            uint8_t* r = sk2 + keep + 30 * j;
+            float rec[7] = { 0, 0, 0, 1 };
+            for (int c = 0; c < 3; ++c)
+                rec[4 + c] = (float)((double)props[j].pos[c] * m->mmb_scale);
+            r[0] = 1, r[1] = 0;
+            memcpy(r + 2, rec, 28);
+        }
+        memcpy(sk2 + keep + 30 * nprops, sk + rest, sn - rest);
+        uint16_t nb16 = (uint16_t)(KEEP_BONES + nprops);
+        memcpy(sk2 + 2, &nb16, 2);
+        free(sk);
+        sk = sk2, sn = sn2, end = 4 + 30 * (size_t)nb16;
+    }
     uint16_t npts = rd16(sk + end);
     if (npts < SEATS + RACES || end + 4 + 26ull * npts + 72 > sn)
     {
@@ -617,6 +942,16 @@ static int make_mount(const MountSpec* m, const uint8_t* src, size_t nsrc, const
         float box[6] = { (float)(lo[1] + m->lower), (float)(hi[1] + m->lower), (float)hi[0], (float)lo[0], (float)hi[2], (float)lo[2] };
         for (int b = 0; b < 2; ++b)
             memcpy(sk + end + 4 + 26 * npts + 24 * b, box, 24);
+        /* the props: the top's and the tail's in one mesh, the pods' in another */
+        int groups[2][MAX_PROPS], ng[2] = { 0, 0 };
+        for (int j = 0; j < nprops; ++j)
+        {
+            int g = props[j].is_side ? 1 : 0;
+            groups[g][ng[g]++] = j;
+        }
+        for (int g = 0; g < 2; ++g)
+            if (ng[g])
+                props_mesh(&meshes, first->p + 16, props, groups[g], ng[g], m->mmb_scale, g);
     }
     put_chunk(out, skel->p, 0x29, sk, sn);
     free(sk);
@@ -641,11 +976,23 @@ static int make_mount(const MountSpec* m, const uint8_t* src, size_t nsrc, const
                 a = &bc[i];
         if (!a)
             return 0;
-        uint8_t* body = (uint8_t*)malloc(a->size - 16);
-        memcpy(body, a->p + 16, a->size - 16);
-        scale_anim(body, a->size - 16, s);
-        put_chunk(out, (const uint8_t*)m->motions[k][0], 0x2b, body, a->size - 16);
-        free(body);
+        Buf body = { 0 };
+        if (nprops)
+            props_motion(a->p + 16, a->size - 16, s, props, nprops, &body);
+        else
+        {
+            put(&body, a->p + 16, a->size - 16);
+            scale_anim(body.p, body.n, s);
+        }
+        if (m->layer)
+            for (int i = 0; i < nb; ++i)
+                if (bc[i].type == 0x2b && named(&bc[i], m->layer))
+                {
+                    bake_layer(&body, bc[i].p + 16, bc[i].size - 16, m->layer_bones);
+                    break;
+                }
+        put_chunk(out, (const uint8_t*)m->motions[k][0], 0x2b, body.p, body.n);
+        free(body.p);
     }
     for (int i = 0; i < nd; ++i)
         if (dc[i].type == 0x3d)
