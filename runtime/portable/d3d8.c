@@ -1244,7 +1244,7 @@ static uint32_t new_texture(int kind, uint32_t w, uint32_t h, uint32_t levels, u
  * header has the new texture's size. Water by kind (sea, water) or name (umi, mizu, suimen, riv,
  * taki, funsui ...): drawn as water whatever code draws it (Kazham's sea is the zone's own mesh). Each
  * name new this session goes to the log once (to find more). */
-enum { MTAG_NONE, MTAG_WATER, MTAG_BIRD, MTAG_OTHER };
+enum { MTAG_NONE, MTAG_WATER, MTAG_BIRD, MTAG_OTHER, MTAG_CLOUD };
 
 static int mtag_name_at(uint32_t base, uint32_t w, uint32_t h, char name[17])
 {
@@ -3989,13 +3989,19 @@ static void fx_classify(GfxDraw* d)
     int textured = d->fs.st[0].tex == 1;
     /* water by its texture's name (material tags), whatever code draws it */
     static const FxRule WATER_BY_NAME = { 0, -1, 0, 0, GFX_FX_POOL, 1, "water (by its texture's name)" };
-    const Obj* t0 = textured ? obj(g_dev.cur.tex[0]) : NULL;
+    Obj* t0 = textured ? obj(g_dev.cur.tex[0]) : NULL;
     const FxRule* tagged = t0 && t0->mtag == MTAG_WATER ? &WATER_BY_NAME : NULL;
+    /* a cloud dome's image (the clouds rule saw it first): its other passes are the game's own - in hazy
+     * weather it draws each dome again, fogged, which the water rule would take (waves across the sky,
+     * Valkurm Dunes, 2026-10-10) */
+    int cloud = t0 && t0->mtag == MTAG_CLOUD;
     uint32_t callers[4];
     int ncallers = -1; /* walked once, for the first rule the draw's state matches */
     for (size_t i = 0; i < (tagged ? 1 : sizeof g_fx_rules / sizeof *g_fx_rules); ++i)
     {
         const FxRule* r = tagged ? tagged : &g_fx_rules[i];
+        if (cloud && r->fx != GFX_FX_CLOUDS)
+            continue;
         if (!tagged && ((r->fog >= 0 && !d->fs.fog != !r->fog) || (r->dst && d->pipe.dst != r->dst) ||
                            (r->aop && d->fs.st[0].aop != r->aop) || (!textured && !r->notex) || (textured && r->notex == 2)))
             continue;
@@ -4014,6 +4020,8 @@ static void fx_classify(GfxDraw* d)
         }
         if (i < 8 && !tagged)
             ++g_fx_hit[i];
+        if (r->fx == GFX_FX_CLOUDS && t0)
+            t0->mtag = MTAG_CLOUD;
         if (g_fx_mark == r->fx)
             d->fs.fx = GFX_FX_MARK;
         else if (g_fx_on)
